@@ -1,5 +1,7 @@
 # auth-go
 
+[![govulncheck](https://github.com/aauth-dev/auth-go/actions/workflows/govulncheck.yml/badge.svg)](https://github.com/aauth-dev/auth-go/actions/workflows/govulncheck.yml)
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/aauth-dev/auth-go.svg)](https://pkg.go.dev/github.com/aauth-dev/auth-go)
 [![Go Report Card](https://goreportcard.com/badge/github.com/aauth-dev/auth-go)](https://goreportcard.com/report/github.com/aauth-dev/auth-go)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
