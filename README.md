@@ -143,6 +143,8 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Signature-Key header parsed as an RFC 9651 dictionary; scheme `jwt` (others answered `unsupported_scheme`) | ✅ |
 | Error model: signature-key-09 `Signature-Error` codes, 401 on every signature failure, `Accept-Signature-Scheme` / `Accept-Signature-Alg`, RFC 9457 problem bodies | ✅ |
 | Signature-Key scheme `jwks_uri` for server-signed requests (PS→AS, revocation; §11.3.2): `ServerSigner`, `VerifyServerRequest` | ✅ |
+| Token revocation, caller side (§11.12): `{jti, exp}` signed under `jwks_uri` (`RevocationClient`), 202 polling under the same identity, `unsupported_iss` / `rate_limited` errors, downstream outcomes (`revocation_unsupported` / `revocation_unavailable`), endpoint discovery; `ParseRevocationRequest` for recipients | ✅ |
+| Revocation recipients and cascade (records, downstream fan-out) | ⬜ |
 | Signature-Key scheme `jkt-jwt` (AP key refresh); two-key AP minting | ⬜ |
 | Signature-Key scheme `hwk` (not used by AAuth, §11.3.2) | ⛔ |
 | Signature-Key scheme `x509` | ⛔ |

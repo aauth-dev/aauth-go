@@ -58,9 +58,16 @@ func (e *ProblemError) Error() string {
 	return msg
 }
 
-// Is matches [ErrInteractionUnavailable] for code interaction_unavailable.
+// Is matches [ErrInteractionUnavailable] for code interaction_unavailable
+// and [ErrRevocationUnsupported] for unsupported_iss.
 func (e *ProblemError) Is(target error) bool {
-	return target == ErrInteractionUnavailable && e.Code == ErrCodeInteractionUnavailable
+	switch target {
+	case ErrInteractionUnavailable:
+		return e.Code == ErrCodeInteractionUnavailable
+	case ErrRevocationUnsupported:
+		return e.Code == ErrCodeUnsupportedIss
+	}
+	return false
 }
 
 // endpointError builds the error for a failed response from a PS endpoint

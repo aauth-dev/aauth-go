@@ -18,12 +18,19 @@
 //     [IssuePersonToken] (PS side) and [VerifyAndExtractPerson] (resource
 //     side).
 //   - Resource access — a protected API decides what an agent may do. See
-//     [Transport] (the agent-side client that turns 401 challenges into token
-//     exchanges automatically), [PSClient.RequestAuthToken] (three-party
-//     PS-asserted access), and [IssueResourceToken] / [VerifyAndExtractAuth]
-//     (the resource side).
-//   - Governance — optional missions, permission requests, and audit. See
-//     [PSClient.RequestPermission] and [PSClient.Audit].
+//     [Transport] (the agent-side client that turns challenges into person
+//     and auth token requests automatically), [PSClient.PersonToken] and
+//     [PSClient.RequestAuthToken] (three-party PS-asserted access), and
+//     [IssueResourceToken] / [VerifyAndExtractAuth] (the resource side).
+//   - Delegation — call chaining through intermediaries ([RouteDownstream],
+//     [ChainRouter.Transport]) and parent-mediated sub-agents with their own
+//     keys ([Agent.NewSubAgent]).
+//   - Governance — optional missions, permission requests, audit, and the
+//     relay channel to the person. See [PSClient.ProposeMission],
+//     [PSClient.RequestPermission], [PSClient.Audit], and
+//     [PSClient.RequestInteraction].
+//   - Revocation — servers revoke the tokens they issued at the holder's
+//     revocation endpoint ([RevocationClient], draft -11 §11.12).
 //
 // # Deployment shapes
 //
