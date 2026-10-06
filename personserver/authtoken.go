@@ -25,6 +25,8 @@ type authTokenJob struct {
 	upstream  *upstreamInfo
 	as        string // the resource's access server (four-party), else ""
 	caps      []string
+	// agentToken is the raw agent token, passed to the AS (§9.1.1).
+	agentToken string
 }
 
 func (j *authTokenJob) request() *TokenRequest {
@@ -65,6 +67,7 @@ func (s *Server) serveAuthToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	job.agentToken = c.token
 	d, err := s.cfg.Decider.Decide(ctx, job.request())
 	if err != nil {
 		s.serverError(w, r, "decide auth token", err)
@@ -270,6 +273,7 @@ func (s *Server) completeAuthToken(ctx context.Context, p *Pending, snap snapsho
 	if err != nil {
 		return s.failure(err)
 	}
+	job.agentToken = snap.AgentToken
 	return s.issueAuthToken(ctx, job, g)
 }
 

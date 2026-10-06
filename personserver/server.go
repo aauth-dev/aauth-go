@@ -98,6 +98,12 @@ type Config struct {
 	// log; AuditSink, when set, also receives them.
 	Audit     bool
 	AuditSink func(ctx context.Context, agent AgentRef, r aauth.AuditRequest)
+	// Federator enables four-party access (§9.1): resource tokens
+	// addressed to an access server are federated through it. Without
+	// one, such resource tokens are refused. ClaimsProvider answers the
+	// identity claims an access server requires (§9.2).
+	Federator      Federator
+	ClaimsProvider ClaimsProvider
 	// InteractionURL is the PS's user-facing interaction page (https, no
 	// query or fragment), sent as the url of requirement=interaction. The
 	// page reads ?code= and calls [Server.ConsumeCode]. Required for

@@ -45,7 +45,7 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request, c *caller, bod
 		s.serverError(w, r, "defer "+string(p.Kind), err)
 		return
 	}
-	s.respond(w, r, p)
+	s.respondStep(w, r, p, false)
 }
 
 // denialResult renders a Denied decision for a request of kind k.

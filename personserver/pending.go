@@ -216,6 +216,9 @@ func (s *Server) newPending(ctx context.Context, p *Pending, c *caller, body []b
 	p.Agent, p.AgentJTI = c.ref, c.claims.ID
 	p.CreatedAt, p.ReceivedAt, p.ExpiresAt = now, c.at, now.Add(s.pendingTTL())
 	p.RetryAfter = d.RetryAfter
+	if p.RetryAfter == 0 && d.Requirement != aauth.RequirementClarification {
+		p.RetryAfter = 1 // a person is deciding; do not poll in a tight loop
+	}
 	if err := s.applyRequirement(p, d); err != nil {
 		return err
 	}
@@ -321,7 +324,11 @@ func pollError(code, detail string) *Result {
 // advance brings an open pending request up to date before it is
 // answered: expiry, revocation of a token it depends on, a relay deadline,
 // and a poll of the access server it waits on.
-func (s *Server) advance(ctx context.Context, p *Pending) *Pending {
+func (s *Server) advance(ctx context.Context, p *Pending) *Pending { return s.step(ctx, p, true) }
+
+// step is advance; federate=false skips polling the access server, for
+// the request that just received the AS's answer.
+func (s *Server) step(ctx context.Context, p *Pending, federate bool) *Pending {
 	if !p.Open() {
 		return p
 	}
@@ -341,7 +348,7 @@ func (s *Server) advance(ctx context.Context, p *Pending) *Pending {
 			res = pollError(aauth.PollErrRevoked, detail)
 		}
 	}
-	if res == nil && p.Federation != nil && p.Question == nil {
+	if res == nil && federate && p.Federation != nil && p.Question == nil {
 		return s.pollFederation(ctx, p)
 	}
 	if res == nil {
@@ -398,9 +405,18 @@ func (s *Server) preferWait(r *http.Request) time.Duration {
 // resolved, else a 202 — after holding the request up to its Prefer: wait
 // for a resolution.
 func (s *Server) respond(w http.ResponseWriter, r *http.Request, p *Pending) {
+	s.respondStep(w, r, p, true)
+}
+
+// respondStep is respond; fresh pending requests skip the immediate
+// access-server poll (federate=false).
+func (s *Server) respondStep(w http.ResponseWriter, r *http.Request, p *Pending, federate bool) {
 	ctx := r.Context()
-	p = s.advance(ctx, p)
-	if wait := s.preferWait(r); p.Open() && p.Question == nil && wait > 0 {
+	p = s.step(ctx, p, federate)
+	// A new requirement=interaction is answered at once, so the agent can
+	// direct the person; later polls may be held.
+	fresh := !federate && p.Requirement == aauth.RequirementInteraction
+	if wait := s.preferWait(r); wait > 0 && !needsAgent(p) && !fresh {
 		p = s.waitFor(ctx, p.ID, wait, p)
 	}
 	switch {
@@ -411,6 +427,18 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, p *Pending) {
 	default:
 		s.writeAccepted(w, p)
 	}
+}
+
+// needsAgent reports whether p should be answered at once rather than
+// held for Prefer: wait: it is resolved, or it asks the agent a question.
+func needsAgent(p *Pending) bool {
+	return !p.Open() || p.Question != nil
+}
+
+// signal is what the agent acts on in a 202: a change means the held
+// request should be answered so the agent sees it.
+func signal(p *Pending) string {
+	return p.Requirement + "|" + p.InteractionURL + "|" + p.Code + "|" + string(p.State)
 }
 
 // waitFor holds until pending id is resolved, needs the agent, or d
@@ -435,8 +463,9 @@ func (s *Server) waitFor(ctx context.Context, id string, d time.Duration, last *
 		if err != nil {
 			return last
 		}
+		was := signal(last)
 		last = s.advance(ctx, p)
-		if !last.Open() || last.Question != nil {
+		if needsAgent(last) || signal(last) != was {
 			return last
 		}
 	}
@@ -543,12 +572,6 @@ func (s *Server) serveClarification(w http.ResponseWriter, r *http.Request, c *c
 		return
 	}
 	ctx := r.Context()
-	if p.QuestionFromAS {
-		if err := s.forwardClarification(ctx, p, post); err != nil {
-			writeError(w, err)
-			return
-		}
-	}
 	var update *updatedRequest
 	if post.Action == aauth.ActionUpdatedRequest {
 		if p.Kind != KindAuthToken {
@@ -556,6 +579,13 @@ func (s *Server) serveClarification(w http.ResponseWriter, r *http.Request, c *c
 			return
 		}
 		if update, err = s.verifyUpdatedRequest(ctx, c, p, post); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	if p.QuestionFromAS {
+		// The access server asked: relay the same body to it (§7.5.2.2).
+		if err := s.forwardClarification(ctx, p, post); err != nil {
 			writeError(w, err)
 			return
 		}

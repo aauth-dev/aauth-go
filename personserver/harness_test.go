@@ -29,7 +29,9 @@ type world struct {
 	agent    *aauth.Agent
 	resKey   *aauth.Agent // the resource's signing identity
 	resURL   string
-	scope    string // what the resource requests
+	scope    string       // what the resource requests
+	audience string       // the resource token's aud; empty means the PS
+	asKey    *aauth.Agent // the test access server's key, when federating
 	resource http.Handler
 
 	mu      sync.Mutex
@@ -186,13 +188,17 @@ func (w *world) psClient(agent *aauth.Agent) *aauth.PSClient {
 func (w *world) transport(agent *aauth.Agent, ps *aauth.PSClient) *aauth.Transport {
 	tr := aauth.NewTransport(agent, ps)
 	tr.ResourceVerify = aauth.TokenVerifyOptions{Resolver: aauth.StaticResolver{w.resURL: w.resKey.JWKS()}, InsecureSkipIdentifierCheck: true}
-	tr.AuthVerify = aauth.TokenVerifyOptions{Resolver: aauth.StaticResolver{w.psURL: w.ps.JWKS()}, InsecureSkipIdentifierCheck: true}
+	tr.AuthVerify = w.psOpts()
 	return tr
 }
 
 // psOpts verify tokens the PS issued.
 func (w *world) psOpts() aauth.TokenVerifyOptions {
-	return aauth.TokenVerifyOptions{Resolver: aauth.StaticResolver{w.psURL: w.ps.JWKS()}, InsecureSkipIdentifierCheck: true}
+	r := aauth.StaticResolver{w.psURL: w.ps.JWKS()}
+	if w.asKey != nil {
+		r[testAS] = w.asKey.JWKS()
+	}
+	return aauth.TokenVerifyOptions{Resolver: r, InsecureSkipIdentifierCheck: true}
 }
 
 // serveResource is a resource that serves on an auth token, challenges a
@@ -219,7 +225,7 @@ func (w *world) serveResource() http.Handler {
 				aauth.WriteSignatureFailure(rw, err)
 				return
 			}
-			rt, err := aauth.IssueResourceToken(aauth.ResourceTokenParams{Resource: w.resURL, Scope: w.scope}, person, w.resKey.Key, w.resKey.JWK().Kid)
+			rt, err := aauth.IssueResourceToken(aauth.ResourceTokenParams{Resource: w.resURL, Scope: w.scope, Audience: w.audience}, person, w.resKey.Key, w.resKey.JWK().Kid)
 			if err != nil {
 				http.Error(rw, err.Error(), http.StatusInternalServerError)
 				return
