@@ -3,7 +3,6 @@ package aauth
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -133,7 +132,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 					http.Error(rw, err.Error(), http.StatusForbidden)
 					return
 				}
-				fmt.Fprintf(rw, "hello %s scope=%s", claims.Agent, claims.Scope)
+				writeBody(t, rw, "hello %s scope=%s", claims.Agent, claims.Scope)
 				return
 			}
 		}
@@ -215,7 +214,7 @@ func TestThreePartyFlow(t *testing.T) {
 	// 1. Agent calls the resource with its agent token → 401 challenge.
 	agentTok, _ := w.agent.MintToken()
 	res := callResource(t, w.agent, w.resourceURL, agentTok)
-	defer res.Body.Close()
+	defer closeBody(res.Body)
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("want 401 challenge, got %d", res.StatusCode)
 	}
@@ -245,7 +244,7 @@ func TestThreePartyFlow(t *testing.T) {
 
 	// 4. Retry the resource with the auth token → 200.
 	res2 := callResource(t, w.agent, w.resourceURL, grant.AuthToken)
-	defer res2.Body.Close()
+	defer closeBody(res2.Body)
 	body, _ := io.ReadAll(res2.Body)
 	if res2.StatusCode != http.StatusOK {
 		t.Fatalf("want 200 with auth token, got %d: %s", res2.StatusCode, body)
@@ -261,7 +260,7 @@ func TestThreePartyFlow_InteractionDeferred(t *testing.T) {
 
 	agentTok, _ := w.agent.MintToken()
 	res := callResource(t, w.agent, w.resourceURL, agentTok)
-	res.Body.Close()
+	closeBody(res.Body)
 	reqmt, _ := ParseRequirement(res.Header.Get(HeaderRequirement))
 
 	var surfaced []Requirement

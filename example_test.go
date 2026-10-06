@@ -3,6 +3,7 @@ package aauth_test
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 
 	aauth "github.com/aauth-dev/auth-go"
@@ -32,7 +33,9 @@ func Example() {
 			http.Error(w, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		fmt.Fprintf(w, "authenticated %s", claims.Subject)
+		if _, err := fmt.Fprintf(w, "authenticated %s", claims.Subject); err != nil {
+			log.Printf("write response: %v", err)
+		}
 	}
 }
 
@@ -46,7 +49,16 @@ func ExampleTransport() {
 	hc := &http.Client{Transport: aauth.NewTransport(agent, ps)}
 	// This call signs itself, and if the resource answers 401 with an
 	// auth-token challenge, the transport exchanges a token and retries.
-	_, _ = hc.Get("https://files.example/files")
+	res, err := hc.Get("https://files.example/files")
+	if err != nil {
+		log.Printf("request failed: %v", err)
+		return
+	}
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			log.Printf("close body: %v", err)
+		}
+	}()
 }
 
 // ExampleAgentIdentifier_SubAgent derives a short-lived worker under an

@@ -102,7 +102,7 @@ func (c *PSClient) Audit(ctx context.Context, a AuditRequest) error {
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer closeBody(res.Body)
 	if res.StatusCode == http.StatusCreated {
 		return nil
 	}

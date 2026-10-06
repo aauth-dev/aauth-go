@@ -169,7 +169,7 @@ func FollowDeferred(ctx context.Context, hc *http.Client, reqURL *url.URL, res *
 		if res.StatusCode == http.StatusTooManyRequests {
 			// Linear backoff: increase interval by 5s (spec §12.4.3).
 			backoff += 5 * time.Second
-			res.Body.Close()
+			closeBody(res.Body)
 			res = &http.Response{StatusCode: http.StatusAccepted, Header: http.Header{}, Body: http.NoBody}
 			// Reuse the same pending URL on the next iteration.
 			res.Header.Set(HeaderLocation, pendingURL.String())
@@ -257,14 +257,14 @@ func answerClarification(ctx context.Context, hc *http.Client, pendingURL *url.U
 	if err != nil {
 		return nil, err
 	}
-	res.Body.Close() // the answer is acknowledged; state advances via polling
+	closeBody(res.Body) // the answer is acknowledged; state advances via polling
 	return nil, nil
 }
 
 // readPending validates a 202 response and extracts the same-origin pending
 // URL, Retry-After (−1 when absent), and the parsed pending body.
 func readPending(reqURL *url.URL, res *http.Response) (*url.URL, time.Duration, PendingStatus, error) {
-	defer res.Body.Close()
+	defer closeBody(res.Body)
 	var ps PendingStatus
 	loc := res.Header.Get(HeaderLocation)
 	if loc == "" {

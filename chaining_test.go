@@ -136,7 +136,7 @@ func TestCallChainingEndToEnd(t *testing.T) {
 
 	// 3. booking calls payments with the downstream token.
 	res := callResource(t, booking, paymentsURL, grant.AuthToken)
-	res.Body.Close()
+	closeBody(res.Body)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("payments status %d", res.StatusCode)
 	}

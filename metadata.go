@@ -53,7 +53,7 @@ func FetchMetadata(ctx context.Context, hc *http.Client, base, doc string, dst a
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer closeBody(res.Body)
 	if res.StatusCode != http.StatusOK {
 		return fmt.Errorf("aauth: metadata %s: status %d", u, res.StatusCode)
 	}
@@ -99,7 +99,7 @@ func (r JWKSResolver) resolve(ctx context.Context, iss, dwk, kid string) (JWK, e
 	if err != nil {
 		return JWK{}, err
 	}
-	defer res.Body.Close()
+	defer closeBody(res.Body)
 	if res.StatusCode != http.StatusOK {
 		return JWK{}, fmt.Errorf("aauth: jwks %s: status %d", md.JWKSURI, res.StatusCode)
 	}

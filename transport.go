@@ -105,8 +105,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if perr != nil {
 		return res, nil // plain 401, not an AAuth challenge — caller's problem
 	}
-	io.Copy(io.Discard, res.Body)
-	res.Body.Close()
+	drainBody(res.Body)
 
 	var cred string
 	switch reqmt.Requirement {
@@ -201,7 +200,7 @@ func (t *Transport) bufferBody(req *http.Request) ([]byte, error) {
 		max = 4 << 20
 	}
 	b, err := io.ReadAll(io.LimitReader(req.Body, max+1))
-	req.Body.Close()
+	closeBody(req.Body)
 	if err != nil {
 		return nil, err
 	}

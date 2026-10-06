@@ -1,5 +1,7 @@
 # auth-go
 
+[![test](https://github.com/aauth-dev/auth-go/actions/workflows/test.yml/badge.svg)](https://github.com/aauth-dev/auth-go/actions/workflows/test.yml)
+[![lint](https://github.com/aauth-dev/auth-go/actions/workflows/lint.yml/badge.svg)](https://github.com/aauth-dev/auth-go/actions/workflows/lint.yml)
 [![govulncheck](https://github.com/aauth-dev/auth-go/actions/workflows/govulncheck.yml/badge.svg)](https://github.com/aauth-dev/auth-go/actions/workflows/govulncheck.yml)
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/aauth-dev/auth-go.svg)](https://pkg.go.dev/github.com/aauth-dev/auth-go)

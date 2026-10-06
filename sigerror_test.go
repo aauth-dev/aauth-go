@@ -37,7 +37,7 @@ func TestWriteSignatureError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	WriteSignatureError(rec, 400, SignatureError{Code: SigErrInvalidSignature}, "signature base mismatch")
 	res := rec.Result()
-	defer res.Body.Close()
+	defer closeBody(res.Body)
 
 	se, err := SignatureErrorFromResponse(res)
 	if err != nil || se == nil || se.Code != SigErrInvalidSignature {

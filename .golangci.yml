@@ -1,0 +1,14 @@
+version: "2"
+
+# Conservative configuration: golangci-lint's standard linter set
+# (errcheck, govet, ineffassign, staticcheck, unused) plus a few low-noise
+# additions, and gofmt formatting.
+linters:
+  default: standard
+  enable:
+    - misspell
+    - unconvert
+
+formatters:
+  enable:
+    - gofmt

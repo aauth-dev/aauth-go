@@ -256,7 +256,7 @@ func (c *PSClient) ExchangeToken(ctx context.Context, treq TokenRequest) (*Token
 	if err != nil {
 		return nil, err
 	}
-	defer final.Body.Close()
+	defer closeBody(final.Body)
 	if final.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(final.Body, 4096))
 		return nil, fmt.Errorf("aauth: token endpoint status %d: %s", final.StatusCode, b)

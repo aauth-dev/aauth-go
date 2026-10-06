@@ -104,9 +104,12 @@ func TestClarificationCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// Cancellation ends in a non-granted terminal response.
-	if _, err := c.RequestPermission(ctx, PermissionRequest{Action: "X"}); err == nil {
-		// A DELETE→200 body isn't a PermissionResponse; RequestPermission
-		// surfaces it as a decode/parse path. Either way the DELETE happened.
+	// A DELETE→200 body isn't a PermissionResponse; RequestPermission may
+	// surface it as a decode/parse error or as a non-granted response.
+	// Either outcome is acceptable here: what matters is that the DELETE
+	// happened, which is asserted below.
+	if res, err := c.RequestPermission(ctx, PermissionRequest{Action: "X"}); err == nil && res.Granted() {
+		t.Fatal("cancelled request reported as granted")
 	}
 	if !deleted.Load() {
 		t.Fatal("cancel did not DELETE the pending URL")

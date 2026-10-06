@@ -32,7 +32,10 @@
 // This is, to our knowledge, the first Go implementation of the protocol.
 package aauth
 
-import "errors"
+import (
+	"errors"
+	"io"
+)
 
 // JWT typ header values (draft -09 §5.2.2, §6, §7).
 const (
@@ -94,3 +97,19 @@ var (
 	// unrecognized action member (draft -09 §7.3.2).
 	ErrUnknownAction = errors.New("aauth: missing or unrecognized action")
 )
+
+// closeBody closes an HTTP message body that has been consumed or is no
+// longer needed. On the read side a Close error carries nothing the caller
+// can act on (the bytes it needed were already read, or are being
+// discarded), so it is deliberately not propagated.
+func closeBody(c io.Closer) {
+	_ = c.Close() // see doc comment: read-side close errors are not actionable
+}
+
+// drainBody reads the remainder of a response body and closes it so the
+// underlying connection can be reused. Errors are not actionable for the
+// same reason as in closeBody: the content is being discarded.
+func drainBody(rc io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, rc) // content intentionally discarded
+	closeBody(rc)
+}

@@ -310,3 +310,11 @@ func TestJWKSResolverDiscovery(t *testing.T) {
 		t.Fatalf("sub = %q", claims.Subject)
 	}
 }
+
+// writeBody writes a test response body, failing the test on a write error.
+func writeBody(t testing.TB, w io.Writer, format string, args ...any) {
+	t.Helper()
+	if _, err := fmt.Fprintf(w, format, args...); err != nil {
+		t.Error(err)
+	}
+}

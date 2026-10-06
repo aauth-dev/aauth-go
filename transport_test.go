@@ -36,7 +36,7 @@ func newTwoPartyResource(t *testing.T) *twoPartyResource {
 			// First contact: issue an opaque token, agent-token requirement met.
 			r.issued.Add(1)
 			rw.Header().Set("AAuth-Access", fmt.Sprintf("opaque-%d", r.issued.Load()))
-			fmt.Fprint(rw, "welcome")
+			writeBody(t, rw, "welcome")
 		case strings.HasPrefix(auth, "AAuth opaque-"):
 			r.sawAccess = append(r.sawAccess, strings.TrimPrefix(auth, "AAuth "))
 			if !r.rolled.Load() {
@@ -44,7 +44,7 @@ func newTwoPartyResource(t *testing.T) *twoPartyResource {
 				r.rolled.Store(true)
 				rw.Header().Set("AAuth-Access", "opaque-rolled")
 			}
-			fmt.Fprint(rw, "data")
+			writeBody(t, rw, "data")
 		default:
 			http.Error(rw, "bad authorization", http.StatusBadRequest)
 		}
@@ -65,7 +65,7 @@ func TestTransportTwoParty_AccessTokenLifecycle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer closeBody(resp.Body)
 		b, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status %d: %s", resp.StatusCode, b)
@@ -100,7 +100,7 @@ func TestTransportRejectsUnboundAccessToken(t *testing.T) {
 			http.Error(rw, err.Error(), http.StatusForbidden)
 			return
 		}
-		fmt.Fprint(rw, "ok")
+		writeBody(t, rw, "ok")
 	}))
 	defer srv.Close()
 
@@ -117,7 +117,7 @@ func TestTransportRejectsUnboundAccessToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("unbound access token accepted: %d", resp.StatusCode)
 	}
@@ -140,7 +140,7 @@ func TestTransportThreeParty_AutoExchangeAndCache(t *testing.T) {
 			t.Fatal(err)
 		}
 		b, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		closeBody(resp.Body)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("call %d: status %d: %s", i, resp.StatusCode, b)
 		}
@@ -183,7 +183,7 @@ func TestTransportAgentTokenRequirement(t *testing.T) {
 			http.Error(rw, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		fmt.Fprintf(rw, "id:%s", claims.Subject)
+		writeBody(t, rw, "id:%s", claims.Subject)
 	}))
 	defer srv.Close()
 
@@ -192,7 +192,7 @@ func TestTransportAgentTokenRequirement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || string(b) != "id:"+agent.ID.String() {
 		t.Fatalf("status %d body %q", resp.StatusCode, b)
@@ -212,7 +212,7 @@ func TestTransportBuffersAndResendsBody(t *testing.T) {
 			}
 			b, _ := io.ReadAll(req.Body) // after verification — the digest check restores the body
 			bodySeen <- string(b)
-			fmt.Fprintf(rw, "stored for %s", claims.Agent)
+			writeBody(t, rw, "stored for %s", claims.Agent)
 			return
 		}
 		agentClaims, err := VerifyAndExtractAgent(req.Context(), req, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
@@ -239,7 +239,7 @@ func TestTransportBuffersAndResendsBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status %d: %s", resp.StatusCode, b)
@@ -261,7 +261,7 @@ func TestTransportPlain401PassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("want plain 401 passthrough, got %d", resp.StatusCode)
 	}
@@ -270,7 +270,10 @@ func TestTransportPlain401PassesThrough(t *testing.T) {
 func TestTransportAuthChallengeWithoutPS(t *testing.T) {
 	w := newThreePartyWorld(t)
 	hc := &http.Client{Transport: NewTransport(w.agent, nil)} // no PS configured
-	_, err := hc.Get(w.resourceURL + "/files")
+	resp, err := hc.Get(w.resourceURL + "/files")
+	if err == nil {
+		closeBody(resp.Body)
+	}
 	if err == nil || !strings.Contains(err.Error(), "Transport.PS is not configured") {
 		t.Fatalf("err = %v", err)
 	}
