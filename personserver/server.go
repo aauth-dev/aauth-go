@@ -104,6 +104,14 @@ type Config struct {
 	// identity claims an access server requires (§9.2).
 	Federator      Federator
 	ClaimsProvider ClaimsProvider
+	// CollocatedAS, for PS-AS collapse on one origin (§4.3, §9.3.3),
+	// reports whether the access server sharing this PS's issuer governs
+	// resource. Resource tokens addressed to the shared issuer are then
+	// federated through Federator (typically accessserver.Server.Local)
+	// instead of handled three-party, and the agent receives the AS's auth
+	// token (dwk aauth-access.json). Roles that share an origin share an
+	// identifier, so aud alone cannot tell them apart.
+	CollocatedAS func(resource string) bool
 	// InteractionURL is the PS's user-facing interaction page (https, no
 	// query or fragment), sent as the url of requirement=interaction. The
 	// page reads ?code= and calls [Server.ConsumeCode]. Required for

@@ -115,15 +115,21 @@ func (s *Server) prepareAuthToken(ctx context.Context, agent *aauth.AgentClaims,
 	}
 	// The resource token's aud decides the mode (§7.2): this PS
 	// (three-party), or the resource's access server (four-party).
-	aud, err := resourceTokenAudience(j.req.ResourceToken)
+	aud, resource, err := resourceTokenAudience(j.req.ResourceToken)
 	if err != nil {
 		return nil, err
 	}
-	if aud != s.cfg.Issuer {
+	switch {
+	case aud != s.cfg.Issuer:
 		if !s.federates() {
 			return nil, &aauth.TokenError{Code: aauth.TokenErrInvalidResourceToken,
 				Err: fmt.Errorf("the resource token is addressed to %q; this PS does not federate", aud)}
 		}
+		j.as = aud
+	case s.federates() && s.cfg.CollocatedAS != nil && s.cfg.CollocatedAS(resource):
+		// PS-AS collapse on a shared identifier (§4.3, §9.3.3): the
+		// resource chose the access server that shares this origin, so
+		// the token request goes to it, and the auth token is the AS's.
 		j.as = aud
 	}
 	var presented aauth.PresentedToken
@@ -335,17 +341,17 @@ func (s *Server) verifyUpdatedRequest(ctx context.Context, c *caller, p *Pending
 	return &updatedRequest{snap: raw, scope: rc.Scope, rc: rc, hints: next.TokenRequestHints}, nil
 }
 
-// resourceTokenAudience reads a resource token's aud before verification,
-// to choose the verification audience (the PS or the AS).
-func resourceTokenAudience(token string) (string, error) {
+// resourceTokenAudience reads a resource token's aud and iss before
+// verification, to choose the verification audience (the PS or the AS).
+func resourceTokenAudience(token string) (aud, resource string, err error) {
 	var rc aauth.ResourceClaims
 	if _, _, err := jwt.NewParser().ParseUnverified(token, &rc); err != nil {
-		return "", &aauth.TokenError{Code: aauth.TokenErrInvalidResourceToken, Err: err}
+		return "", "", &aauth.TokenError{Code: aauth.TokenErrInvalidResourceToken, Err: err}
 	}
 	if len(rc.Audience) != 1 || rc.Audience[0] == "" {
-		return "", &aauth.TokenError{Code: aauth.TokenErrInvalidResourceToken, Err: errors.New("aud must name one party")}
+		return "", "", &aauth.TokenError{Code: aauth.TokenErrInvalidResourceToken, Err: errors.New("aud must name one party")}
 	}
-	return rc.Audience[0], nil
+	return rc.Audience[0], rc.Issuer, nil
 }
 
 // tokenID returns a verified person or auth token's (iss, jti).
