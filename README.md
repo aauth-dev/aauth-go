@@ -120,7 +120,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 |---|---|---|
 | **Agent** | ✅ | identity, token minting, PS client (person and auth tokens, permission, audit), and a protocol-aware `http.RoundTripper` (`Transport`): auto-signing; `agent-token`, `person-token`, and `auth-token` requirements (401, and 202 deferred delivery, §6.5.1); challenge and auth-token response verification; per-resource caches with the top-down 5-minute refresh margin (§7.9.1); `clock_skew` wait-and-retry once; revoked/expired cached tokens dropped; `AAuth-Access` lifecycle |
 | **Resource** | ✅ | agent + auth-token authentication, resource-token issuing, 401 challenges, `AAuth-Access` two-party flow |
-| **Person Server** | 🟡 | `personserver` package: person token and auth token endpoints (§7.1, §7.2) as an `http.Handler` over caller-supplied `Store` and `Decider`; directed `sub` (keyed HMAC per resource), agent↔person binding, server-side pending requests (`Prefer: wait`, clarification rounds, cancel, interaction codes), sub-agent and call-chaining requests, metadata + JWKS; governance endpoints pending |
+| **Person Server** | 🟡 | `personserver` package: person token and auth token endpoints (§7.1, §7.2) as an `http.Handler` over caller-supplied `Store` and `Decider`; directed `sub` (keyed HMAC per resource), agent↔person binding, server-side pending requests (`Prefer: wait`, clarification rounds, cancel, interaction codes), sub-agent and call-chaining requests, metadata + JWKS; mission, permission, audit, and interaction endpoints over `MissionApprover` / `PermissionDecider` / `InteractionRelay`; revocation recipient and cascade; four-party federation pending |
 | **Access Server** | ⬜ | four-party federation not yet implemented |
 
 ### Layer 1 — Identity
@@ -144,7 +144,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Error model: signature-key-09 `Signature-Error` codes, 401 on every signature failure, `Accept-Signature-Scheme` / `Accept-Signature-Alg`, RFC 9457 problem bodies | ✅ |
 | Signature-Key scheme `jwks_uri` for server-signed requests (PS→AS, revocation; §11.3.2): `ServerSigner`, `VerifyServerRequest` | ✅ |
 | Token revocation, caller side (§11.12): `{jti, exp}` signed under `jwks_uri` (`RevocationClient`), 202 polling under the same identity, `unsupported_iss` / `rate_limited` errors, downstream outcomes (`revocation_unsupported` / `revocation_unavailable`), endpoint discovery; `ParseRevocationRequest` for recipients | ✅ |
-| Revocation recipients and cascade (records, downstream fan-out) | ⬜ |
+| Revocation recipients and cascade (records, downstream fan-out) | 🟡 PS: `personserver` revocation endpoint (agent provider and resource callers, `unsupported_iss`), cascade by agent identity and through call chains, `RevokePersonToken` / `RevokeAuthToken` / `RevokeBinding` / `TerminateMission` with per-recipient outcomes |
 | Signature-Key scheme `jkt-jwt` (AP key refresh); two-key AP minting | ⬜ |
 | Signature-Key scheme `hwk` (not used by AAuth, §11.3.2) | ⛔ |
 | Signature-Key scheme `x509` | ⛔ |
@@ -179,7 +179,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Interaction chaining (§10.1.2) | ✅ |
 | Interaction codes (Crockford base32) | ✅ |
 | Mission lifecycle, agent side (§8.1–§8.5, §8.7): proposal (with `resources`), approval `{s256, mission, capabilities, person_tokens}` verified over the exact blob bytes (`MissionS256`, `NewMissionApproval`), approval person tokens cached, update and completion at `{mission_endpoint}/{mission_s256}`, typed errors | ✅ |
-| Mission lifecycle, PS side (persistence, log, review) | ⬜ |
+| Mission lifecycle, PS side (§8): `personserver` mission endpoint storing the exact blob bytes (s256 per PS), approval person tokens, log with verifiable update digests, completion review, two states with termination reasons, `mission_not_found` with no existence/ownership oracle | ✅ |
 
 ## Design notes
 

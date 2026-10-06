@@ -88,6 +88,16 @@ type Config struct {
 	Store Store
 	// Decider decides person and auth token requests. Required.
 	Decider Decider
+	// MissionApprover enables the mission endpoint (§8).
+	MissionApprover MissionApprover
+	// PermissionDecider enables the permission endpoint (§7.7).
+	PermissionDecider PermissionDecider
+	// InteractionRelay enables the interaction endpoint (§7.6).
+	InteractionRelay InteractionRelay
+	// Audit enables the audit endpoint (§7.8). Records go to the mission
+	// log; AuditSink, when set, also receives them.
+	Audit     bool
+	AuditSink func(ctx context.Context, agent AgentRef, r aauth.AuditRequest)
 	// InteractionURL is the PS's user-facing interaction page (https, no
 	// query or fragment), sent as the url of requirement=interaction. The
 	// page reads ?code= and calls [Server.ConsumeCode]. Required for
@@ -111,6 +121,16 @@ type Config struct {
 	// token keys; nil discovers them through HTTPClient. Tokens this PS
 	// issued are always verified against its own keys.
 	TokenResolver aauth.KeyResolver
+	// ServerResolver resolves the keys of servers signing under the
+	// jwks_uri scheme (revocations); nil discovers them through HTTPClient.
+	ServerResolver aauth.KeyResolver
+	// AcceptRevocation, when set, decides whether a verified agent
+	// provider or resource may revoke at this PS; refused callers get
+	// unsupported_iss (§11.12.3). Nil accepts every verified caller.
+	AcceptRevocation func(ctx context.Context, caller aauth.ServerCaller) bool
+	// Revoker delivers the PS's own revocations downstream; nil uses an
+	// HTTPRevoker signing as the PS.
+	Revoker Revoker
 	// HTTPClient makes outbound requests (discovery, revocation); nil uses
 	// http.DefaultClient. Deployments SHOULD apply egress admission.
 	HTTPClient *http.Client

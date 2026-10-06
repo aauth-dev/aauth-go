@@ -132,17 +132,33 @@ func (s *Server) preparePersonToken(ctx context.Context, agent *aauth.AgentClaim
 
 // issuePersonToken issues the person token for an allowed request.
 func (s *Server) issuePersonToken(ctx context.Context, j *personTokenJob, g Grant) (*Result, error) {
-	person, err := s.resolvePerson(ctx, j.agent, j.person, g.Person, j.upstream != nil)
+	now := s.now()
+	tok, claims, err := s.mintPersonToken(ctx, j, g, now)
+	if errors.Is(err, aauth.ErrExpired) {
+		return pollError(aauth.PollErrExpired, err.Error()), nil
+	}
 	if err != nil {
 		return nil, err
 	}
+	return jsonResult(http.StatusOK, aauth.PersonTokenResponse{
+		PersonToken: tok, ExpiresIn: int64(claims.ExpiresAt.Sub(now) / time.Second),
+	})
+}
+
+// mintPersonToken settles the person, derives the directed identifier,
+// issues the person token, and records it.
+func (s *Server) mintPersonToken(ctx context.Context, j *personTokenJob, g Grant, now time.Time) (string, *aauth.PersonClaims, error) {
+	person, err := s.resolvePerson(ctx, j.agent, j.person, g.Person, j.upstream != nil)
+	if err != nil {
+		return "", nil, err
+	}
 	sub := s.subjects.derive(person, j.req.Resource)
 	if err := s.cfg.Store.RecordSubject(ctx, j.req.Resource, sub, person); err != nil {
-		return nil, storeErr("record subject", err)
+		return "", nil, storeErr("record subject", err)
 	}
 	p := aauth.PersonTokenParams{
 		Issuer: s.cfg.Issuer, Resource: j.req.Resource, Subject: sub, Agent: j.agent, Subagent: j.subagent,
-		Tenant: g.Tenant, TTL: firstPositive(g.TTL, s.cfg.PersonTokenTTL), Now: s.now(),
+		Tenant: g.Tenant, TTL: firstPositive(g.TTL, s.cfg.PersonTokenTTL), Now: now,
 		InsecureSkipIdentifierCheck: s.cfg.InsecureSkipIdentifierCheck,
 	}
 	if j.mission != nil {
@@ -152,11 +168,8 @@ func (s *Server) issuePersonToken(ctx context.Context, j *personTokenJob, g Gran
 		p.UpstreamExpiresAt = j.upstream.exp
 	}
 	tok, claims, err := aauth.IssuePersonToken(p, s.cfg.Key, s.kid)
-	if errors.Is(err, aauth.ErrExpired) {
-		return pollError(aauth.PollErrExpired, err.Error()), nil
-	}
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	rec := PersonTokenRecord{
 		JTI: claims.ID, Resource: j.req.Resource, Exp: claims.ExpiresAt.Time,
@@ -167,14 +180,12 @@ func (s *Server) issuePersonToken(ctx context.Context, j *personTokenJob, g Gran
 		rec.UpstreamIssuer, rec.UpstreamJTI = j.upstream.issuer, j.upstream.jti
 	}
 	if err := s.cfg.Store.RecordPersonToken(ctx, rec); err != nil {
-		return nil, storeErr("record person token", err)
+		return "", nil, storeErr("record person token", err)
 	}
 	s.missionLog(ctx, claims.MissionS256, LogTokenRequest, agentRef(j.agent), map[string]any{
 		"type": "person_token", "resource": j.req.Resource, "justification": j.req.Justification, "jti": claims.ID,
 	})
-	return jsonResult(http.StatusOK, aauth.PersonTokenResponse{
-		PersonToken: tok, ExpiresIn: int64(claims.ExpiresAt.Sub(p.Now) / time.Second),
-	})
+	return tok, claims, nil
 }
 
 // completePersonToken finishes an approved deferred person token request.

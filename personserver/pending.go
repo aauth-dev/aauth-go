@@ -332,7 +332,9 @@ func (s *Server) advance(ctx context.Context, p *Pending) *Pending {
 		res = pollError(aauth.PollErrExpired, "the request timed out")
 	case p.Question != nil && p.Question.Timeout > 0 && !now.Before(p.QuestionAt.Add(time.Duration(p.Question.Timeout)*time.Second)):
 		res = pollError(aauth.PollErrExpired, "the clarification was not answered in time")
-	case !p.RelayDeadline.IsZero() && !now.Before(p.RelayDeadline):
+	case !p.RelayDeadline.IsZero() && (!now.Before(p.RelayDeadline) || p.State == StateInteracting):
+		// A relay with max_wait resolves once the person has engaged or
+		// the window elapses (§7.6.2).
 		res = &Result{Status: http.StatusOK, ContentType: "application/json", Body: []byte("{}\n")}
 	default:
 		if detail := s.revokedDependency(ctx, p); detail != "" {
