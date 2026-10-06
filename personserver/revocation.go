@@ -77,6 +77,12 @@ func (s *Server) serveRevocation(w http.ResponseWriter, r *http.Request) {
 		aauth.WriteProblem(w, http.StatusForbidden, aauth.ErrCodeUnsupportedIss, "this person server does not accept revocations from "+caller.ID)
 		return
 	}
+	// Bound what one issuer can send (§11.12.3); Retry-After is REQUIRED.
+	if ok, wait := s.allow(ctx, "revoke:"+caller.ID); !ok {
+		w.Header().Set(aauth.HeaderRetryAfter, retrySeconds(wait))
+		aauth.WriteProblem(w, http.StatusTooManyRequests, aauth.ErrCodeRateLimited, "")
+		return
+	}
 	req, err := aauth.ParseRevocationRequest(r)
 	if err != nil {
 		writeError(w, err)

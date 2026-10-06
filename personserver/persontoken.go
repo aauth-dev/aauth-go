@@ -57,6 +57,9 @@ func (s *Server) servePersonToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, err := s.preparePersonToken(ctx, c.claims, body, c.at)
+	if err == nil {
+		err = s.limitResources(ctx, job)
+	}
 	if err != nil {
 		writeError(w, err)
 		return
@@ -143,6 +146,31 @@ func (s *Server) issuePersonToken(ctx context.Context, j *personTokenJob, g Gran
 	return jsonResult(http.StatusOK, aauth.PersonTokenResponse{
 		PersonToken: tok, ExpiresIn: int64(claims.ExpiresAt.Sub(now) / time.Second),
 	})
+}
+
+// limitResources applies Config.Limiter to a request for a resource the
+// agent has not been issued a person token for (§7.1: a PS SHOULD
+// rate-limit the distinct resources one agent asks for, since each obliges
+// it to derive and retain a directed sub). The key is
+// "resources:<agent iss> <agent sub>".
+func (s *Server) limitResources(ctx context.Context, j *personTokenJob) error {
+	if s.cfg.Limiter == nil {
+		return nil
+	}
+	if j.person != "" {
+		_, err := s.cfg.Store.SubjectPerson(ctx, j.req.Resource, s.subjects.derive(j.person, j.req.Resource))
+		if err == nil {
+			return nil // a resource this person already has an identifier at
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return storeErr("load subject", err)
+		}
+	}
+	if ok, wait := s.allow(ctx, "resources:"+j.agent.Issuer+" "+j.agent.Subject); !ok {
+		return &aauth.ProblemError{Status: http.StatusTooManyRequests, Code: aauth.ErrCodeRateLimited,
+			Detail: "too many distinct resources requested", RetryAfter: wait}
+	}
+	return nil
 }
 
 // mintPersonToken settles the person, derives the directed identifier,

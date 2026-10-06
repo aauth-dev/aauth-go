@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -163,6 +164,13 @@ type Config struct {
 	// (at most one hour; default one hour).
 	PersonTokenTTL time.Duration
 	AuthTokenTTL   time.Duration
+	// Limiter, when set, rate-limits the actions the protocol defines a
+	// refusal for: interaction code attempts per client ("code:"), polls
+	// per pending request ("poll:", answered slow_down), revocations per
+	// issuer ("revoke:", answered rate_limited), and new resources per
+	// agent at the person token endpoint ("resources:"). See the
+	// ratelimit package for an in-memory implementation.
+	Limiter aauth.Limiter
 	// Notify, when set, is called after a pending request is created or
 	// changes (a clarification answer, an updated request, a resolution),
 	// so the hosting application can update its approval UI.
@@ -396,4 +404,25 @@ func (w *waiters) notify(id string) {
 		default:
 		}
 	}
+}
+
+// allow consults Config.Limiter; no limiter allows everything.
+func (s *Server) allow(ctx context.Context, key string) (bool, time.Duration) {
+	if s.cfg.Limiter == nil {
+		return true, 0
+	}
+	return s.cfg.Limiter.Allow(ctx, key)
+}
+
+// RateLimitError is a refusal by Config.Limiter, with how long to wait.
+type RateLimitError struct{ RetryAfter time.Duration }
+
+// Error implements error.
+func (e *RateLimitError) Error() string {
+	return "personserver: rate limited; retry after " + e.RetryAfter.String()
+}
+
+// retrySeconds renders a Retry-After value, rounding up to whole seconds.
+func retrySeconds(d time.Duration) string {
+	return strconv.Itoa(int(max((d+time.Second-1)/time.Second, 1)))
 }

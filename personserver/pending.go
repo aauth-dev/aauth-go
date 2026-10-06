@@ -526,6 +526,13 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		// Polling faster than allowed is slow_down (§11.9.4); the agent
+		// adds five seconds to its interval.
+		if ok, wait := s.allow(r.Context(), "poll:"+p.ID); !ok {
+			w.Header().Set(aauth.HeaderRetryAfter, retrySeconds(wait))
+			aauth.WriteProblem(w, http.StatusTooManyRequests, aauth.PollErrSlowDown, "")
+			return
+		}
 		s.respond(w, r, p)
 	case http.MethodPost:
 		s.serveClarification(w, r, c, p)
@@ -630,15 +637,27 @@ func (s *Server) PendingRequest(ctx context.Context, id string) (*Pending, error
 	return s.advance(ctx, p), nil
 }
 
-// ConsumeCode is called by the interaction page when the person arrives
+// ConsumeCode is ConsumeCodeFor with no client key: attempts are limited
+// as one pool.
+func (s *Server) ConsumeCode(ctx context.Context, code string) (*Pending, error) {
+	return s.ConsumeCodeFor(ctx, code, "")
+}
+
+// ConsumeCodeFor is called by the interaction page when the person arrives
 // with ?code= (draft -11 §11.6.3.1). It canonicalizes the code (case,
 // hyphens, Crockford aliases), finds the pending request, consumes the code
 // (single use), and marks the request interacting. An unknown, malformed,
 // or already consumed code is ErrInvalidCode; an expired request is
-// ErrResolved. The code only correlates the browser with the request: the
-// page MUST authenticate the person before acting on their decision
-// (§13.13), and SHOULD rate-limit attempts.
-func (s *Server) ConsumeCode(ctx context.Context, code string) (*Pending, error) {
+// ErrResolved. client identifies who is entering codes (the page's
+// session, or its address): with Config.Limiter set, attempts are limited
+// per client — key "code:<client>" — and a limited attempt is
+// *RateLimitError, checked before the code is looked up. The code only
+// correlates the browser with the request: the page MUST authenticate the
+// person before acting on their decision (§13.13).
+func (s *Server) ConsumeCodeFor(ctx context.Context, code, client string) (*Pending, error) {
+	if ok, wait := s.allow(ctx, "code:"+client); !ok {
+		return nil, &RateLimitError{RetryAfter: wait}
+	}
 	canon, err := interactioncode.Canonicalize(code)
 	if err != nil {
 		return nil, ErrInvalidCode
