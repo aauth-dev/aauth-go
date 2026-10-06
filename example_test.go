@@ -63,7 +63,7 @@ func ExampleTransport() {
 }
 
 // ExampleAgentIdentifier_SubAgent derives a short-lived worker under an
-// orchestrating agent (draft -09 §10.2).
+// orchestrating agent (draft -11 §10.2).
 func ExampleAgentIdentifier_SubAgent() {
 	parent, _ := aauth.ParseAgentIdentifier("aauth:orchestrator@example.com")
 	worker, _ := parent.SubAgent("search-1")
@@ -93,4 +93,64 @@ func ExampleNewAgent_es256() {
 	}
 	fmt.Println(agent.JWK().Alg)
 	// Output: ES256
+}
+
+// Example_resource is a resource using PS authorization (three-party): it
+// answers an agent token with requirement=person-token, a verified person
+// token with a resource token challenge (requirement=auth-token), and
+// serves a request presenting a verified auth token.
+func Example_resource() {
+	const self = "https://files.example" // the resource's server identifier
+	key, err := aauth.GenerateKey(aauth.AlgEd25519)
+	if err != nil {
+		log.Fatal(err)
+	}
+	jwk, err := aauth.NewJWK(key.Public())
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Person and auth token keys are discovered from each issuer's JWKS.
+	// Supply an http.Client that applies egress admission (no private
+	// addresses, bounded timeouts): token issuers are attacker-chosen URLs.
+	verify := aauth.TokenVerifyOptions{Resolver: aauth.NewJWKSResolver(http.DefaultClient)}
+
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		tok, err := aauth.ParseSignatureKey(r)
+		if err != nil {
+			aauth.WriteSignatureFailure(w, err)
+			return
+		}
+		typ, err := aauth.TokenType(tok)
+		if err != nil {
+			aauth.WriteSignatureFailure(w, err)
+			return
+		}
+		switch typ {
+		case aauth.TypAuth:
+			claims, err := aauth.VerifyAndExtractAuth(r.Context(), r, self, aauth.AuthTokenVerifyOptions{TokenVerifyOptions: verify})
+			if err != nil {
+				aauth.WriteSignatureFailure(w, err)
+				return
+			}
+			if _, err := fmt.Fprintf(w, "hello %s (%s)", claims.Subject, claims.Scope); err != nil {
+				log.Printf("write response: %v", err)
+			}
+		case aauth.TypPerson:
+			person, err := aauth.VerifyAndExtractPerson(r.Context(), r, self, verify)
+			if err != nil {
+				aauth.WriteSignatureFailure(w, err)
+				return
+			}
+			// The resource token's aud defaults to the person's PS.
+			rt, err := aauth.IssueResourceToken(aauth.ResourceTokenParams{Resource: self, Scope: "files:read"}, person, key, jwk.Kid)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			aauth.ChallengeAuthToken(w, rt)
+		default:
+			aauth.ChallengePersonToken(w)
+		}
+	}
+	http.HandleFunc("/files", handler)
 }
