@@ -57,9 +57,10 @@ type AuthTokenResponse struct {
 // presented to the resource, at the PS's auth token endpoint (draft -11
 // §7.2) and returns the granted auth token, following deferred (202)
 // responses — including user interaction and clarification — until
-// resolution. Errors from the PS are [*TokenError]s (§11.9.3). Check the
-// granted token with [VerifyAuthTokenResponse] before presenting it
-// (§9.4.4); [Transport] does.
+// resolution. Errors from the PS are [*TokenError]s (§11.9.3), or a
+// [*MissionStatusError] when the request's mission is no longer active
+// (§8.8). Check the granted token with [VerifyAuthTokenResponse] before
+// presenting it (§9.4.4); [Transport] does.
 //
 // The endpoint is [PSClient.AuthTokenEndpoint] (from
 // PersonServerMetadata.AuthTokenEndpoint when discovered), else

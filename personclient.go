@@ -94,7 +94,8 @@ var ErrUnexpectedToken = errors.New("aauth: unexpected token in response")
 // not verified: the agent trusts its PS, and the resource verifies it.
 //
 // The endpoint is [PSClient.PersonTokenEndpoint], else BaseURL+"/person".
-// Errors from the PS are [*TokenError]s.
+// Errors from the PS are [*TokenError]s, or a [*MissionStatusError] when
+// req.MissionS256 names a mission that is no longer active (§8.8).
 func (c *PSClient) RequestPersonToken(ctx context.Context, req PersonTokenRequest) (*PersonTokenResponse, error) {
 	if err := c.requireAgent(); err != nil {
 		return nil, err

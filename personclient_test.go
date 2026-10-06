@@ -290,3 +290,45 @@ func TestPersonTokenForSubAgent(t *testing.T) {
 		t.Fatal("malformed subagent_token accepted")
 	}
 }
+
+// A mission status error (§8.8) from a token endpoint — directly or as the
+// terminal response of a deferred request — is a *MissionStatusError, not a
+// token endpoint error.
+func TestTokenEndpointsMissionTerminated(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /person", func(rw http.ResponseWriter, _ *http.Request) {
+		WriteMissionTerminated(rw, TerminationRevoked)
+	})
+	mux.HandleFunc("POST /token", func(rw http.ResponseWriter, _ *http.Request) {
+		rw.Header().Set(HeaderLocation, "/pending/1")
+		rw.Header().Set(HeaderRetryAfter, "0")
+		rw.WriteHeader(http.StatusAccepted)
+	})
+	mux.HandleFunc("GET /pending/1", func(rw http.ResponseWriter, _ *http.Request) {
+		WriteMissionTerminated(rw, TerminationExpired)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := NewPSClient(srv.URL, testAgent(t))
+	ctx := context.Background()
+	const s256 = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+
+	_, err := c.RequestPersonToken(ctx, PersonTokenRequest{Resource: testResource, MissionS256: s256})
+	var mse *MissionStatusError
+	if !errors.As(err, &mse) || mse.Code != MissionErrTerminated || mse.TerminationReason != TerminationRevoked {
+		t.Errorf("person token endpoint: err = %v, want mission_terminated (revoked)", err)
+	}
+	var te *TokenError
+	if errors.As(err, &te) {
+		t.Errorf("person token endpoint: mission status error reported as token error %q", te.Code)
+	}
+
+	_, err = c.RequestAuthToken(ctx, AuthTokenRequest{ResourceToken: "rt", PresentedToken: "pt"})
+	mse = nil
+	if !errors.As(err, &mse) || mse.Code != MissionErrTerminated || mse.TerminationReason != TerminationExpired {
+		t.Errorf("auth token endpoint: err = %v, want mission_terminated (expired)", err)
+	}
+	if errors.As(err, &te) {
+		t.Errorf("auth token endpoint: mission status error reported as token error %q", te.Code)
+	}
+}

@@ -165,8 +165,13 @@ func tokenErrorFrom(body []byte) *TokenError {
 }
 
 // tokenEndpointError builds the error returned to a client for a failed
-// token endpoint response: a [*TokenError] when the body names one.
+// token endpoint response: a [*MissionStatusError] when the request named
+// a mission that is no longer active (draft -11 §8.8), else a
+// [*TokenError] when the body names one.
 func tokenEndpointError(endpoint string, status int, body []byte) error {
+	if mse := missionStatusErrorFrom(status, body); mse != nil {
+		return mse
+	}
 	if te := tokenErrorFrom(body); te != nil {
 		return te
 	}

@@ -71,7 +71,8 @@ func TestPersonTokenUnderMission(t *testing.T) {
 	}
 	res := w.signed(w.agent, "", http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL, MissionS256: m.S256})
 	_, err = w.psClient(w.agent).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: w.resURL, MissionS256: m.S256})
-	if res.StatusCode != http.StatusForbidden || tokenCode(err) != aauth.MissionErrTerminated {
+	var mse *aauth.MissionStatusError
+	if res.StatusCode != http.StatusForbidden || !errors.As(err, &mse) || mse.TerminationReason != aauth.TerminationRevoked {
 		t.Fatalf("terminated: %d %v", res.StatusCode, err)
 	}
 	_ = res.Body.Close()
