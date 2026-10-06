@@ -121,7 +121,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | **Agent** | ✅ | identity, token minting, PS client (person and auth tokens, permission, audit), and a protocol-aware `http.RoundTripper` (`Transport`): auto-signing; `agent-token`, `person-token`, and `auth-token` requirements (401, and 202 deferred delivery, §6.5.1); challenge and auth-token response verification; per-resource caches with the top-down 5-minute refresh margin (§7.9.1); `clock_skew` wait-and-retry once; revoked/expired cached tokens dropped; `AAuth-Access` lifecycle |
 | **Resource** | ✅ | agent + auth-token authentication, resource-token issuing, 401 challenges, `AAuth-Access` two-party flow |
 | **Person Server** | 🟡 | `personserver` package: person token and auth token endpoints (§7.1, §7.2) as an `http.Handler` over caller-supplied `Store` and `Decider`; directed `sub` (keyed HMAC per resource), agent↔person binding, server-side pending requests (`Prefer: wait`, clarification rounds, cancel, interaction codes), sub-agent and call-chaining requests, metadata + JWKS; mission, permission, audit, and interaction endpoints over `MissionApprover` / `PermissionDecider` / `InteractionRelay`; revocation recipient and cascade; four-party federation through a `Federator` (claims answered by a `ClaimsProvider`, interaction / approval / clarification passed through, §9.1.3 delivery checks, `as_unreachable`) |
-| **Access Server** | ⬜ | four-party federation not yet implemented |
+| **Access Server** | ✅ | `accessserver` package: AS token endpoint (§9.1) over a caller `Authorizer` (allow / deny / `claims` / interaction / approval / clarification 202s), presented-token re-verification, `aa-auth+jwt` with `dwk` `aauth-access.json`, pending URLs for the PS, revocation endpoint with cascade to resources; `Client` (PS→AS over HTTP, `jwks_uri`-signed) and `Server.Local` (in-process PS-AS collapse, §9.3.3) |
 
 ### Layer 1 — Identity
 
@@ -144,7 +144,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Error model: signature-key-09 `Signature-Error` codes, 401 on every signature failure, `Accept-Signature-Scheme` / `Accept-Signature-Alg`, RFC 9457 problem bodies | ✅ |
 | Signature-Key scheme `jwks_uri` for server-signed requests (PS→AS, revocation; §11.3.2): `ServerSigner`, `VerifyServerRequest` | ✅ |
 | Token revocation, caller side (§11.12): `{jti, exp}` signed under `jwks_uri` (`RevocationClient`), 202 polling under the same identity, `unsupported_iss` / `rate_limited` errors, downstream outcomes (`revocation_unsupported` / `revocation_unavailable`), endpoint discovery; `ParseRevocationRequest` for recipients | ✅ |
-| Revocation recipients and cascade (records, downstream fan-out) | 🟡 PS: `personserver` revocation endpoint (agent provider and resource callers, `unsupported_iss`), cascade by agent identity and through call chains, `RevokePersonToken` / `RevokeAuthToken` / `RevokeBinding` / `TerminateMission` with per-recipient outcomes |
+| Revocation recipients and cascade (records, downstream fan-out) | 🟡 AS: revocation endpoint (PS and resource callers) revoking the auth tokens issued against a person token, with `downstream` outcomes; PS: `personserver` revocation endpoint (agent provider and resource callers, `unsupported_iss`), cascade by agent identity and through call chains, `RevokePersonToken` / `RevokeAuthToken` / `RevokeBinding` / `TerminateMission` with per-recipient outcomes |
 | Signature-Key scheme `jkt-jwt` (AP key refresh); two-key AP minting | ⬜ |
 | Signature-Key scheme `hwk` (not used by AAuth, §11.3.2) | ⛔ |
 | Signature-Key scheme `x509` | ⛔ |
@@ -162,7 +162,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Auth tokens (`aa-auth+jwt`, §9.4): draft -11 claim set (`ps`, `sub`, `scope`, `account`, `mission_s256`, `tenant`; no `agent`/`act`/`mission`); `IssueAuthToken` with exp bounds (1h, agent / presented / upstream / mission); resource verification incl. cnf request binding and an `(iss, sub)` record-check hook; agent-side response verification (§9.4.4); upstream token verification (§9.4.5) | ✅ |
 | `AAuth-Requirement` as an RFC 9651 dictionary (§11.6): `agent-token`, `person-token`, `auth-token`, `interaction`, `approval`, `clarification`, `claims`; challenge and approval-pending helpers | ✅ |
 | Resource metadata `access_mode` values (§11.2.4): `agent-token`, `person-token`, `session-token`, `auth-token` | ✅ |
-| Federated (four-party; Access Server) | ⬜ |
+| Federated (four-party; Access Server): PS federation with delivery checks and `as_unreachable`, AS token endpoint, PS-AS collapse | ✅ |
 | Rich Resource Requests (R3) | ⛔ |
 
 ### Layer 3 — Governance
