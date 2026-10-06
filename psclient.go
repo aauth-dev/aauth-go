@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
+	"time"
 )
 
 // PSClient calls a Person Server on behalf of an agent (draft -11 §7).
@@ -50,9 +52,16 @@ type PSClient struct {
 	// arrives during a deferred request. Nil leaves clarifications
 	// unanswered (the request eventually times out server-side).
 	OnClarification func(Clarification) (ClarificationReply, error)
+	// RefreshMargin is how long before its exp a cached token is replaced
+	// rather than presented (draft -11 §7.9.1); zero means
+	// DefaultRefreshMargin.
+	RefreshMargin time.Duration
 
 	// metadata is the discovered document, when Discover has run.
 	metadata *PersonServerMetadata
+
+	mu      sync.Mutex
+	persons map[personCacheKey]cachedToken // person token cache (§7.1)
 }
 
 // NewPSClient returns a client with sane defaults.
