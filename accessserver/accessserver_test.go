@@ -774,3 +774,30 @@ func parseUnverified(tok string, dst jwt.Claims) error {
 	_, _, err := jwt.NewParser().ParseUnverified(tok, dst)
 	return err
 }
+
+func TestLimiter(t *testing.T) {
+	var blocked string
+	f := newFourParty(t, false, nil, func(c *Config) {
+		c.Limiter = aauth.LimiterFunc(func(_ context.Context, key string) (bool, time.Duration) {
+			return !strings.HasPrefix(key, blocked) || blocked == "", 2 * time.Second
+		})
+	})
+	f.setAuthz(func(*AuthorizationRequest) Decision { return DeferApproval() })
+	pt, rt := f.tokens()
+	agentTok, _ := f.agent.MintToken()
+	res := f.asRequest(http.MethodPost, "/as/token", `{"resource_token":"`+rt+`","agent_token":"`+agentTok+`","presented_token":"`+pt+`"}`)
+	loc := res.Header.Get(aauth.HeaderLocation)
+	_ = res.Body.Close()
+	blocked = "poll:"
+	res = f.asRequest(http.MethodGet, loc, "")
+	if got := errorCode(t, res); res.StatusCode != http.StatusTooManyRequests || got != aauth.PollErrSlowDown || res.Header.Get(aauth.HeaderRetryAfter) != "2" {
+		t.Fatalf("poll: %d %q", res.StatusCode, got)
+	}
+	blocked = "revoke:"
+	rc := aauth.RevocationClient{Signer: f.ps.Signer()}
+	_, err := rc.Revoke(context.Background(), f.asURL+"/as/revoke", aauth.RevocationRequest{JTI: "x", Exp: time.Now().Add(time.Minute).Unix()})
+	var pe *aauth.ProblemError
+	if !errors.As(err, &pe) || pe.Code != aauth.ErrCodeRateLimited || pe.RetryAfter != 2*time.Second {
+		t.Fatalf("revocation: %v", err)
+	}
+}

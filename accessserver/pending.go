@@ -344,6 +344,11 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
+		if ok, wait := s.allow(ctx, "poll:"+p.ID); !ok {
+			w.Header().Set(aauth.HeaderRetryAfter, retrySeconds(wait))
+			aauth.WriteProblem(w, http.StatusTooManyRequests, aauth.PollErrSlowDown, "")
+			return
+		}
 		s.respond(w, r, p, true)
 	case http.MethodPost:
 		body, err := io.ReadAll(r.Body)

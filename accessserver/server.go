@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -107,6 +108,10 @@ type Config struct {
 	PendingTTL             time.Duration
 	MaxWait                time.Duration
 	MaxClarificationRounds int
+	// Limiter, when set, limits polls per pending request ("poll:",
+	// answered slow_down) and revocations per issuer ("revoke:", answered
+	// rate_limited with Retry-After).
+	Limiter aauth.Limiter
 	// Notify is called after a pending request is created or changes.
 	Notify func(ctx context.Context, p *Pending)
 	// Logger receives operational errors; nil discards them.
@@ -301,4 +306,16 @@ func (w *waiters) notify(id string) {
 		default:
 		}
 	}
+}
+
+func (s *Server) allow(ctx context.Context, key string) (bool, time.Duration) {
+	if s.cfg.Limiter == nil {
+		return true, 0
+	}
+	return s.cfg.Limiter.Allow(ctx, key)
+}
+
+// retrySeconds renders a Retry-After value, rounding up to whole seconds.
+func retrySeconds(d time.Duration) string {
+	return strconv.Itoa(int(max((d+time.Second-1)/time.Second, 1)))
 }
