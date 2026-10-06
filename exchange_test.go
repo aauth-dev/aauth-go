@@ -234,7 +234,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 			WriteSignatureFailure(rw, err)
 			return
 		}
-		var treq TokenRequest
+		var treq AuthTokenRequest
 		if err := json.NewDecoder(r.Body).Decode(&treq); err != nil {
 			WriteTokenError(rw, &TokenError{Code: TokenErrInvalidRequest, Err: err})
 			return
@@ -276,7 +276,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 			return
 		}
 		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(TokenResponse{AuthToken: tok, ExpiresIn: 3600})
+		_ = json.NewEncoder(rw).Encode(AuthTokenResponse{AuthToken: tok, ExpiresIn: 3600})
 	})
 	psMux.HandleFunc("GET /pending/tok1", func(rw http.ResponseWriter, r *http.Request) {
 		if int(w.polls.Add(1)) < w.interactionPolls {
@@ -334,7 +334,7 @@ func (w *threePartyWorld) writeAuthToken(t *testing.T, rw http.ResponseWriter, a
 		return
 	}
 	rw.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(rw).Encode(TokenResponse{AuthToken: tok, ExpiresIn: 3600})
+	_ = json.NewEncoder(rw).Encode(AuthTokenResponse{AuthToken: tok, ExpiresIn: 3600})
 }
 
 // callResource makes a signed GET to the resource with the given token.
@@ -405,10 +405,10 @@ func TestThreePartyFlow(t *testing.T) {
 	// 4. Exchange at the PS token endpoint, with the person token as
 	// presented_token (§7.2.1).
 	psc := NewPSClient(w.psURL, w.agent)
-	grant, err := psc.ExchangeToken(ctx, TokenRequest{
-		ResourceToken:  reqmt.ResourceToken,
-		PresentedToken: personTok,
-		Justification:  "user asked to list project files",
+	grant, err := psc.RequestAuthToken(ctx, AuthTokenRequest{
+		ResourceToken:     reqmt.ResourceToken,
+		PresentedToken:    personTok,
+		TokenRequestHints: TokenRequestHints{Justification: "user asked to list project files"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -440,21 +440,23 @@ func TestThreePartyFlow_PresentedTokenChecks(t *testing.T) {
 			t.Errorf("%s: err = %v, want %s", name, err, code)
 		}
 	}
-	// No presented_token.
-	_, err := psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken})
-	wantCode("missing presented_token", err, TokenErrInvalidRequest)
+	// No presented_token: refused before it is sent (§7.2.1).
+	_, err := psc.RequestAuthToken(ctx, AuthTokenRequest{ResourceToken: reqmt.ResourceToken})
+	if !errors.Is(err, ErrPresentedTokenMissing) {
+		t.Errorf("missing presented_token: err = %v", err)
+	}
 	// A different (valid) person token than the one the resource token
 	// names: presented_jti mismatch.
 	other := w.personToken(t, w.resourceURL)
-	_, err = psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: other})
+	_, err = psc.RequestAuthToken(ctx, AuthTokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: other})
 	wantCode("other person token", err, TokenErrInvalidResourceToken)
 	// A person token for another resource fails verification itself.
 	elsewhere := w.personToken(t, "https://elsewhere.example")
-	_, err = psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: elsewhere})
+	_, err = psc.RequestAuthToken(ctx, AuthTokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: elsewhere})
 	wantCode("person token for another resource", err, TokenErrInvalidPresentedToken)
 	// An agent token is neither a person nor an auth token.
 	agentTok, _ := w.agent.MintToken()
-	_, err = psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: agentTok})
+	_, err = psc.RequestAuthToken(ctx, AuthTokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: agentTok})
 	wantCode("agent token presented", err, TokenErrInvalidPresentedToken)
 	// A resource token signed by an untrusted key.
 	rogue := testAgent(t)
@@ -466,7 +468,7 @@ func TestThreePartyFlow_PresentedTokenChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = psc.ExchangeToken(ctx, TokenRequest{ResourceToken: forged, PresentedToken: personTok})
+	_, err = psc.RequestAuthToken(ctx, AuthTokenRequest{ResourceToken: forged, PresentedToken: personTok})
 	wantCode("forged resource token", err, TokenErrInvalidResourceToken)
 	// The agent-side check refuses it too (§6.7.3 step 2).
 	if _, err := VerifyResourceChallenge(ctx, forged, ResourceChallengeOptions{
@@ -488,7 +490,7 @@ func TestThreePartyFlow_InteractionDeferred(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	grant, err := psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: personTok})
+	grant, err := psc.RequestAuthToken(ctx, AuthTokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: personTok})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +507,7 @@ func TestSubAgentCannotExchange(t *testing.T) {
 	subID, _ := w.agent.ID.SubAgent("worker")
 	sub := &Agent{ID: subID, Key: w.agent.Key, TokenTTL: time.Hour}
 	psc := NewPSClient(w.psURL, sub)
-	if _, err := psc.ExchangeToken(context.Background(), TokenRequest{ResourceToken: "x"}); err != ErrSubAgentDirect {
+	if _, err := psc.RequestAuthToken(context.Background(), AuthTokenRequest{ResourceToken: "x"}); err != ErrSubAgentDirect {
 		t.Fatalf("err = %v, want ErrSubAgentDirect", err)
 	}
 }

@@ -3,6 +3,7 @@ package aauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -121,5 +122,76 @@ func TestParseClarificationPostRejectsUnknownAction(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/pending/x", strings.NewReader(body))
 	if _, err := ParseClarificationPost(req); err != ErrUnknownAction {
 		t.Fatalf("err = %v, want ErrUnknownAction", err)
+	}
+}
+
+// TestClarificationUpdatedRequest: the agent replaces its request with a
+// new resource token and the presented token it obtained it with
+// (§7.5.2.2).
+func TestClarificationUpdatedRequest(t *testing.T) {
+	agent := testAgent(t)
+	var got atomic.Pointer[ClarificationPost]
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /token", func(w http.ResponseWriter, _ *http.Request) {
+		WriteClarification(w, "/pending/u1", "Do you need write access?", 0, nil)
+	})
+	mux.HandleFunc("/pending/u1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			p, err := ParseClarificationPost(r)
+			if err != nil {
+				WriteTokenError(w, err)
+				return
+			}
+			got.Store(p)
+			return
+		}
+		if got.Load() == nil {
+			WriteClarification(w, "/pending/u1", "Do you need write access?", 0, nil)
+			return
+		}
+		writeJSON(t, w, AuthTokenResponse{AuthToken: "granted", ExpiresIn: 60})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := NewPSClient(srv.URL, agent)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// Without the presented token the reply is refused before it is sent.
+	c.OnClarification = func(Clarification) (ClarificationReply, error) {
+		return ClarificationReply{ResourceToken: "rt-2"}, nil
+	}
+	if _, err := c.RequestAuthToken(ctx, AuthTokenRequest{ResourceToken: "rt-1", PresentedToken: "pt-1"}); !errors.Is(err, ErrPresentedTokenMissing) {
+		t.Fatalf("err = %v, want ErrPresentedTokenMissing", err)
+	}
+	c.OnClarification = func(Clarification) (ClarificationReply, error) {
+		return ClarificationReply{ResourceToken: "rt-2", PresentedToken: "pt-2", Justification: "read-only is enough"}, nil
+	}
+	grant, err := c.RequestAuthToken(ctx, AuthTokenRequest{ResourceToken: "rt-1", PresentedToken: "pt-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := got.Load()
+	if grant.AuthToken != "granted" || p.Action != ActionUpdatedRequest || p.ResourceToken != "rt-2" || p.PresentedToken != "pt-2" || p.Justification != "read-only is enough" {
+		t.Fatalf("grant %+v, post %+v", grant, p)
+	}
+}
+
+func TestParseClarificationPostUpdatedRequest(t *testing.T) {
+	for body, wantErr := range map[string]bool{
+		`{"action":"updated_request","resource_token":"r","presented_token":"p"}`: false,
+		`{"action":"updated_request","resource_token":"r"}`:                       true,
+		`{"action":"updated_request","presented_token":"p"}`:                      true,
+		`{"action":"clarification_response","clarification_response":"x"}`:        false,
+		`not json`: true,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/pending/x", strings.NewReader(body))
+		_, err := ParseClarificationPost(req)
+		if (err != nil) != wantErr {
+			t.Errorf("%s: err = %v", body, err)
+		}
+		if err != nil && tokenErrorCode(err) != TokenErrInvalidRequest {
+			t.Errorf("%s: err = %v, want invalid_request", body, err)
+		}
 	}
 }

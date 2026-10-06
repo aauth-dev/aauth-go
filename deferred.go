@@ -41,24 +41,29 @@ type Clarification struct {
 	Options  []string // discrete answer choices, when the question has them
 }
 
-// Clarification response actions (§7.3.2).
+// Clarification response actions (draft -11 §7.5.2).
 const (
 	ActionClarificationResponse = "clarification_response"
 	ActionUpdatedRequest        = "updated_request"
 )
 
-// ClarificationReply is the agent's answer to a Clarification (§7.3.2):
+// ClarificationReply is the agent's answer to a Clarification (draft -11
+// §7.5.2):
 //
 //   - Text set → clarification_response (answer the question).
-//   - ResourceToken set → updated_request (replace the request; the new
-//     resource token MUST share iss, ps, sub, agent_jkt, mission_s256, and
-//     tenant with the original, draft -11 §7.5.2.2).
+//   - ResourceToken set → updated_request (replace the request). The
+//     PresentedToken the agent used at the resource to obtain the new
+//     resource token is REQUIRED with it; the PS verifies the pair as for
+//     an auth token request. The new resource token MUST share iss, ps,
+//     sub, agent_jkt, mission_s256, and tenant with the original, and its
+//     presented_jti MUST be PresentedToken's jti (§7.5.2.2).
 //   - Cancel true → DELETE the pending URL, withdrawing the request.
 type ClarificationReply struct {
-	Text          string // the answer, for a clarification_response
-	ResourceToken string // a replacement resource token, for an updated_request
-	Justification string // optional reason accompanying an updated_request
-	Cancel        bool   // withdraw the request (DELETE the pending URL)
+	Text           string // the answer, for a clarification_response
+	ResourceToken  string // a replacement resource token, for an updated_request
+	PresentedToken string // the token presented to obtain ResourceToken (REQUIRED with it)
+	Justification  string // optional (RECOMMENDED) reason accompanying an updated_request
+	Cancel         bool   // withdraw the request (DELETE the pending URL)
 }
 
 // DeferredOptions tunes DoDeferred.
@@ -228,15 +233,18 @@ func answerClarification(ctx context.Context, hc *http.Client, pendingURL *url.U
 		return res, nil
 	}
 
-	var payload map[string]any
+	var payload ClarificationPost
 	switch {
 	case reply.ResourceToken != "":
-		payload = map[string]any{"action": ActionUpdatedRequest, "resource_token": reply.ResourceToken}
-		if reply.Justification != "" {
-			payload["justification"] = reply.Justification
+		if reply.PresentedToken == "" {
+			return nil, fmt.Errorf("aauth: updated_request: %w", ErrPresentedTokenMissing)
+		}
+		payload = ClarificationPost{
+			Action: ActionUpdatedRequest, ResourceToken: reply.ResourceToken,
+			PresentedToken: reply.PresentedToken, Justification: reply.Justification,
 		}
 	default:
-		payload = map[string]any{"action": ActionClarificationResponse, ActionClarificationResponse: reply.Text}
+		payload = ClarificationPost{Action: ActionClarificationResponse, ClarificationResponse: reply.Text}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

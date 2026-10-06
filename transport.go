@@ -135,7 +135,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			return nil, fmt.Errorf("aauth: challenge from %s: %w", org, err)
 		}
-		grant, err := t.PS.ExchangeToken(req.Context(), TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: presented})
+		grant, err := t.PS.RequestAuthToken(req.Context(), AuthTokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: presented})
 		if err != nil {
 			return nil, err
 		}
@@ -265,7 +265,7 @@ func (t *Transport) credential(origin string) string {
 	return ""
 }
 
-func (t *Transport) storeAuth(origin string, grant *TokenResponse) {
+func (t *Transport) storeAuth(origin string, grant *AuthTokenResponse) {
 	leeway := t.ExpiryLeeway
 	if leeway <= 0 {
 		leeway = time.Minute

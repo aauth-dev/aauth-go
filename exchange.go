@@ -3,6 +3,7 @@ package aauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -20,44 +21,60 @@ import (
 //	agent → resource            same request, auth token in Signature-Key
 //	resource                    verifies auth token (issuer trust + cnf binding)
 
-// TokenRequest is the body of POST {token_endpoint} (draft -09 §7.1.3).
-type TokenRequest struct {
-	ResourceToken  string   `json:"resource_token"`            // the resource token to exchange (required)
-	PresentedToken string   `json:"presented_token,omitempty"` // the token the agent presented to the resource; its jti is the resource token's presented_jti (§7.2.1)
-	UpstreamToken  string   `json:"upstream_token,omitempty"`  // upstream auth token, for call chaining (§10.1.1)
-	SubagentToken  string   `json:"subagent_token,omitempty"`  // a sub-agent's token, when a parent requests for it
-	Justification  string   `json:"justification,omitempty"`   // Markdown reason shown to the user at consent
-	LoginHint      string   `json:"login_hint,omitempty"`      // hint about who to authorize
-	Tenant         string   `json:"tenant,omitempty"`          // tenant identifier
-	DomainHint     string   `json:"domain_hint,omitempty"`     // domain hint
-	Prompt         string   `json:"prompt,omitempty"`          // consent prompt behavior (none/login/consent/select_account)
-	Platform       string   `json:"platform,omitempty"`        // runtime platform identifier (agent-attested)
-	Device         string   `json:"device,omitempty"`          // human-readable device label for the user's dashboard
-	Capabilities   []string `json:"capabilities,omitempty"`    // capability values the agent can handle for this request
+// ErrPresentedTokenMissing means an auth token request, or an
+// updated_request answering a clarification, had no presented_token
+// (draft -11 §7.2.1, §7.5.2.2): the token the agent presented to the
+// resource that issued the resource token is REQUIRED.
+var ErrPresentedTokenMissing = errors.New("aauth: presented_token is required")
+
+// AuthTokenRequest is the body of POST {auth_token_endpoint} (draft -11
+// §7.2.1).
+type AuthTokenRequest struct {
+	// ResourceToken is the resource token to redeem. REQUIRED.
+	ResourceToken string `json:"resource_token"`
+	// PresentedToken is the token the agent presented to the resource that
+	// issued ResourceToken — the person token on the first challenge of a
+	// grant, the auth token on a step-up or per-call challenge — whose jti
+	// the resource token's presented_jti names. REQUIRED. Its exp bounds
+	// the auth token issued.
+	PresentedToken string `json:"presented_token"`
+	// UpstreamToken is the person or auth token the calling agent presented
+	// to the requester, in call chaining (§10.1.1).
+	UpstreamToken string `json:"upstream_token,omitempty"`
+	// SubagentToken is a sub-agent's agent token, when a parent requests
+	// on its behalf (§10.2.3).
+	SubagentToken string `json:"subagent_token,omitempty"`
+	TokenRequestHints
 }
 
-// TokenResponse is the direct-grant 200 body (draft -09 §7.1.4).
-type TokenResponse struct {
+// AuthTokenResponse is the direct-grant 200 body (draft -11 §7.2.2).
+type AuthTokenResponse struct {
 	AuthToken string `json:"auth_token"` // the issued aa-auth+jwt
 	ExpiresIn int64  `json:"expires_in"` // token lifetime in seconds
 }
 
-// ExchangeToken presents a resource token at the PS token endpoint (§7.1.3)
-// and returns the granted auth token, following deferred (202) responses —
-// including operator/user interaction waits — until resolution.
+// RequestAuthToken presents a resource token, with the token the agent
+// presented to the resource, at the PS's auth token endpoint (draft -11
+// §7.2) and returns the granted auth token, following deferred (202)
+// responses — including user interaction and clarification — until
+// resolution. Errors from the PS are [*TokenError]s (§11.9.3). Check the
+// granted token with [VerifyAuthTokenResponse] before presenting it
+// (§9.4.4); [Transport] does.
 //
 // The endpoint is [PSClient.AuthTokenEndpoint] (from
 // PersonServerMetadata.AuthTokenEndpoint when discovered), else
 // BaseURL+"/token".
-func (c *PSClient) ExchangeToken(ctx context.Context, treq TokenRequest) (*TokenResponse, error) {
+func (c *PSClient) RequestAuthToken(ctx context.Context, treq AuthTokenRequest) (*AuthTokenResponse, error) {
 	if err := c.requireAgent(); err != nil {
 		return nil, err
 	}
-	if treq.ResourceToken == "" {
-		return nil, fmt.Errorf("aauth: TokenRequest.ResourceToken is required")
-	}
-	if c.Agent.ID.IsSubAgent() {
+	switch {
+	case c.Agent.ID.IsSubAgent():
 		return nil, ErrSubAgentDirect
+	case treq.ResourceToken == "":
+		return nil, errors.New("aauth: AuthTokenRequest.ResourceToken is required")
+	case treq.PresentedToken == "":
+		return nil, ErrPresentedTokenMissing
 	}
 	final, err := c.post(ctx, c.endpoint(c.AuthTokenEndpoint, "/token"), treq, true)
 	if err != nil {
@@ -67,12 +84,12 @@ func (c *PSClient) ExchangeToken(ctx context.Context, treq TokenRequest) (*Token
 	if final.StatusCode != http.StatusOK {
 		return nil, tokenEndpointError("auth token endpoint", final.StatusCode, readErrorBody(final))
 	}
-	var tr TokenResponse
+	var tr AuthTokenResponse
 	if err := json.NewDecoder(final.Body).Decode(&tr); err != nil {
 		return nil, err
 	}
 	if tr.AuthToken == "" {
-		return nil, fmt.Errorf("aauth: token endpoint returned no auth_token")
+		return nil, fmt.Errorf("aauth: auth token endpoint returned no auth_token")
 	}
 	return &tr, nil
 }

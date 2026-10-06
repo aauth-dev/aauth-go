@@ -57,7 +57,7 @@ func TestCallChainingEndToEnd(t *testing.T) {
 			WriteSignatureFailure(rw, err)
 			return
 		}
-		var treq TokenRequest
+		var treq AuthTokenRequest
 		if err := json.NewDecoder(r.Body).Decode(&treq); err != nil {
 			WriteTokenError(rw, &TokenError{Code: TokenErrInvalidRequest, Err: err})
 			return
@@ -76,7 +76,7 @@ func TestCallChainingEndToEnd(t *testing.T) {
 		// upstream sub (§10.1.1.2).
 		tok := mustMintAuth(t, psKey, psURL, paymentsURL, "payments-sub-for-alice", caller.Cnf.JWK, "charge")
 		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(TokenResponse{AuthToken: tok, ExpiresIn: 3600})
+		_ = json.NewEncoder(rw).Encode(AuthTokenResponse{AuthToken: tok, ExpiresIn: 3600})
 	})
 	ps := httptest.NewServer(psMux)
 	t.Cleanup(ps.Close)
@@ -111,9 +111,10 @@ func TestCallChainingEndToEnd(t *testing.T) {
 		t.Fatalf("routed to %q, want %q", router.PersonServer, psURL)
 	}
 	psc := NewPSClient(router.PersonServer, booking)
-	grant, err := psc.ExchangeToken(context.Background(), TokenRequest{
-		ResourceToken: "stub-resource-token", // (payments would issue this via 401; elided)
-		UpstreamToken: router.UpstreamToken,
+	grant, err := psc.RequestAuthToken(context.Background(), AuthTokenRequest{
+		ResourceToken:  "stub-resource-token", // (payments would issue this via 401; elided)
+		PresentedToken: "stub-person-token",
+		UpstreamToken:  router.UpstreamToken,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -132,8 +133,8 @@ func TestCallChainingEndToEnd(t *testing.T) {
 	// An intermediary whose agent token iss is not the upstream aud is
 	// refused (§10.1.1.1): here, a different agent provider.
 	other := testAgent(t, WithIssuer("https://other.example"))
-	if _, err := NewPSClient(psURL, other).ExchangeToken(context.Background(), TokenRequest{
-		ResourceToken: "stub-resource-token", UpstreamToken: asstAuthForBooking,
+	if _, err := NewPSClient(psURL, other).RequestAuthToken(context.Background(), AuthTokenRequest{
+		ResourceToken: "stub-resource-token", PresentedToken: "stub-person-token", UpstreamToken: asstAuthForBooking,
 	}); tokenErrorCode(err) != TokenErrInvalidUpstreamToken {
 		t.Fatalf("foreign intermediary: err = %v", err)
 	}

@@ -19,7 +19,7 @@
 //     side).
 //   - Resource access — a protected API decides what an agent may do. See
 //     [Transport] (the agent-side client that turns 401 challenges into token
-//     exchanges automatically), [PSClient.ExchangeToken] (three-party
+//     exchanges automatically), [PSClient.RequestAuthToken] (three-party
 //     PS-asserted access), and [IssueResourceToken] / [VerifyAndExtractAuth]
 //     (the resource side).
 //   - Governance — optional missions, permission requests, and audit. See
