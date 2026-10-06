@@ -13,7 +13,7 @@ import (
 
 // Agent is a self-hosted agent: it acts as its own agent provider and
 // self-issues agent tokens signed by its published key
-// (draft-hardt-aauth-bootstrap-01 §4.3). One key serves both as the AP
+// (draft-hardt-aauth-bootstrap-02 §4.3). One key serves both as the AP
 // signing key and as the cnf.jwk HTTP-signing key.
 type Agent struct {
 	// ID is the agent identifier (the token's sub), stable across rotations.
@@ -24,7 +24,7 @@ type Agent struct {
 	Issuer string
 	// PS is the agent's Person Server URL (optional ps claim).
 	PS string
-	// TokenTTL bounds minted tokens; capped at 24h per draft -09 §5.2.2.
+	// TokenTTL bounds minted tokens; capped at 24h per draft -11 §5.3.1.
 	TokenTTL time.Duration
 
 	// Key is the agent's signing key. It signs both self-issued agent

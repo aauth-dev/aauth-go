@@ -456,7 +456,7 @@ func dedupe(in []string) []string {
 
 // VerifyAndExtractAgent is the server-side entry point: parse Signature-Key,
 // verify the agent token (via opts.Resolver), then verify the HTTP message
-// signature against the token's cnf.jwk (draft -09 §5.2.4 steps 1–5).
+// signature against the token's cnf.jwk (draft -11 §5.3.3).
 func VerifyAndExtractAgent(ctx context.Context, req *http.Request, opts VerifyAgentTokenOptions) (*AgentClaims, error) {
 	token, err := ParseSignatureKey(req)
 	if err != nil {

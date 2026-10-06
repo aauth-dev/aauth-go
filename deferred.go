@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Deferred responses (draft -09 §12.4): any AAuth endpoint MAY answer
+// Deferred responses (draft -11 §11.8): any AAuth endpoint MAY answer
 // 202 Accepted with a Location pending URL when it cannot resolve a request
 // immediately — the protocol's first-class "wait for the human" primitive.
 // The agent then polls the pending URL with signed GETs, honoring
@@ -98,7 +98,7 @@ type DeferredOptions struct {
 	OnClarification func(Clarification) (ClarificationReply, error)
 }
 
-// DoDeferred executes req and follows the §12.4 state machine until a
+// DoDeferred executes req and follows the §11.8.4 state machine until a
 // terminal (non-202) response. The caller owns closing the returned body.
 func DoDeferred(ctx context.Context, hc *http.Client, req *http.Request, opts DeferredOptions) (*http.Response, error) {
 	if hc == nil {
@@ -111,7 +111,7 @@ func DoDeferred(ctx context.Context, hc *http.Client, req *http.Request, opts De
 	return FollowDeferred(ctx, hc, req.URL, res, opts)
 }
 
-// FollowDeferred continues the §12.4 state machine from an already-received
+// FollowDeferred continues the §11.8.4 state machine from an already-received
 // response: if res is not a 202 it is returned unchanged; otherwise the
 // pending URL is polled until a terminal response arrives. reqURL is the URL
 // the original request was sent to (for same-origin Location resolution).
@@ -188,7 +188,7 @@ func FollowDeferred(ctx context.Context, hc *http.Client, reqURL *url.URL, res *
 			return nil, err
 		}
 		if res.StatusCode == http.StatusTooManyRequests {
-			// Linear backoff: increase interval by 5s (spec §12.4.3).
+			// Linear backoff: increase interval by 5s (§11.8.3).
 			backoff += 5 * time.Second
 			closeBody(res.Body)
 			res = &http.Response{StatusCode: http.StatusAccepted, Header: http.Header{}, Body: http.NoBody}
@@ -298,7 +298,7 @@ func readPending(reqURL *url.URL, res *http.Response) (*url.URL, time.Duration, 
 	if err != nil {
 		return nil, 0, ps, fmt.Errorf("aauth: 202 Location: %w", err)
 	}
-	// Location MUST be same-origin as the responding server (§12.4.2).
+	// Location MUST be same-origin as the responding server (§11.8.2).
 	if u.Scheme != reqURL.Scheme || u.Host != reqURL.Host {
 		return nil, 0, ps, fmt.Errorf("aauth: 202 Location %q not same-origin as %q", u, reqURL)
 	}
@@ -311,7 +311,7 @@ func readPending(reqURL *url.URL, res *http.Response) (*url.URL, time.Duration, 
 		retry = time.Duration(sec) * time.Second
 	}
 	// status field is informational; unrecognized statuses are pending
-	// (§12.4.2). clarification/timeout/options drive the §7.3 flow.
+	// (§11.8.2). clarification/timeout/options drive the §7.5 flow.
 	_ = json.NewDecoder(io.LimitReader(res.Body, 8192)).Decode(&ps)
 	return u, retry, ps, nil
 }

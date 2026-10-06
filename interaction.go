@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-// Interaction chaining (draft -09 §10.1.2): when a resource acting as an
+// Interaction chaining (draft -11 §10.1.2): when a resource acting as an
 // agent receives a downstream requirement=interaction it cannot satisfy
 // itself, it propagates the interaction to its own caller by returning its
 // own 202 — its own Location (for the caller to poll) and its own
