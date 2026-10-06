@@ -150,13 +150,14 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Access mode | Status |
 |---|---|
 | Identity-Based (`requirement=agent-token`) | ✅ |
-| Resource-Managed (two-party; `AAuth-Access`, signature-bound, rolling refresh) | ✅ |
+| Resource-Managed (two-party; session token in `AAuth-Access`, signature-bound, rolling refresh) | ✅ |
 | Person identity (resource verifies a person token presented in place of the agent token) | 🟡 resource and PS sides; agent-side person token request pending |
 | PS-Asserted (three-party; challenge → PS token exchange → auth token) | ✅ |
 | Person tokens (`aa-person+jwt`, §7.1): issue with lifetime bounds (1h, agent / upstream / mission expiry), sub-agent key binding, verify incl. cnf request binding and no `scope`/`account` | ✅ |
 | Resource tokens (`aa-resource+jwt`, §6.7): issued only against a verified person token (`ps`, `sub`, `presented_jti`, `mission_s256`, `tenant` copied; `agent_jkt` from its `cnf`); PS/AS verification with the presented-token cross-check (§6.7.2); agent-side challenge verification incl. JWT signature, `ps`, `sub`, `presented_jti` (§6.7.3) | ✅ |
 | Auth tokens (`aa-auth+jwt`, §9.4): draft -11 claim set (`ps`, `sub`, `scope`, `account`, `mission_s256`, `tenant`; no `agent`/`act`/`mission`); `IssueAuthToken` with exp bounds (1h, agent / presented / upstream / mission); resource verification incl. cnf request binding and an `(iss, sub)` record-check hook; agent-side response verification (§9.4.4); upstream token verification (§9.4.5) | ✅ |
-| `AAuth-Requirement` header codec | ✅ |
+| `AAuth-Requirement` as an RFC 9651 dictionary (§11.6): `agent-token`, `person-token`, `auth-token`, `interaction`, `approval`, `clarification`, `claims`; challenge and approval-pending helpers | ✅ |
+| Resource metadata `access_mode` values (§11.2.4): `agent-token`, `person-token`, `session-token`, `auth-token` | ✅ |
 | Federated (four-party; Access Server) | ⬜ |
 | Rich Resource Requests (R3) | ⛔ |
 

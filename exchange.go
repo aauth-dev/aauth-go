@@ -44,12 +44,6 @@ type TokenResponse struct {
 	ExpiresIn int64  `json:"expires_in"` // token lifetime in seconds
 }
 
-// ChallengeAuthToken builds the 401 response headers for requirement=auth-token.
-func ChallengeAuthToken(w http.ResponseWriter, resourceToken string) {
-	w.Header().Set(HeaderRequirement, Requirement{Requirement: RequirementAuthToken, ResourceToken: resourceToken}.String())
-	w.WriteHeader(http.StatusUnauthorized)
-}
-
 // ExchangeToken presents a resource token at the PS token endpoint (§7.1.3)
 // and returns the granted auth token, following deferred (202) responses —
 // including operator/user interaction waits — until resolution.

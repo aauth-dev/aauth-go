@@ -20,18 +20,22 @@ import (
 //
 //   - signs with the agent's key, presenting the freshest credential for the
 //     target origin (auth token if one is cached, else the agent token) and
-//     any cached AAuth-Access opaque token (§6.4) bound into the signature;
-//   - on 401 requirement=agent-token (§6.3), retries with the agent token;
+//     any cached session token (AAuth-Access, §6.3) bound into the
+//     signature;
+//   - on 401 requirement=agent-token (§6.1), retries with the agent token;
 //   - on 401 requirement=auth-token (§6.5), verifies the resource-token
 //     challenge against the token it presented (§6.7.3), exchanges it at the
 //     PS token endpoint with that token as presented_token — following
 //     deferred (202) waits — checks the auth token it receives (§9.4.4),
 //     caches it, and retries. Step-up
 //     re-challenges (§6.5) trigger a fresh exchange;
-//   - follows resource-managed 202 interaction waits (§6.5), surfacing
-//     requirement=interaction via OnRequirement;
-//   - honors AAuth-Access rolling refresh: a new header value on any
-//     response replaces the cached token (§6.4).
+//   - follows resource-managed 202 interaction and approval waits (§6.2,
+//     §11.6.4), surfacing the requirement via OnRequirement;
+//   - honors session token rolling refresh: a new AAuth-Access value on any
+//     response replaces the cached session token (§6.3).
+//
+// A 401 requirement=person-token (§6.4) is surfaced as an error: the
+// Transport does not yet obtain person tokens.
 //
 // Request bodies are buffered in memory so retries can re-sign and resend;
 // bound with MaxBodyBytes.
@@ -57,9 +61,9 @@ type Transport struct {
 	// (default 60s), so tokens are refreshed before servers reject them.
 	ExpiryLeeway time.Duration
 
-	mu     sync.Mutex
-	auth   map[string]cachedAuth // origin → auth token
-	access map[string]string     // origin → AAuth-Access opaque token
+	mu      sync.Mutex
+	auth    map[string]cachedAuth // origin → auth token
+	session map[string]string     // origin → session token (AAuth-Access, §6.3)
 }
 
 type cachedAuth struct {
@@ -96,7 +100,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	org := origin(req)
 
 	// First attempt with the best cached credential.
-	res, presented, err := t.send(req, body, t.credential(org), t.cachedAccess(org))
+	res, presented, err := t.send(req, body, t.credential(org), t.cachedSession(org))
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +108,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	t.observeAccess(org, res)
+	t.observeSession(org, res)
 	if res.StatusCode != http.StatusUnauthorized {
 		return res, nil
 	}
@@ -117,7 +121,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var cred string
 	switch reqmt.Requirement {
 	case RequirementAgentToken:
-		// §6.3: the resource wants our agent token specifically.
+		// §6.1: the resource wants our agent token specifically.
 		cred, err = t.Agent.MintToken()
 		if err != nil {
 			return nil, err
@@ -144,11 +148,15 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		t.storeAuth(org, grant)
 		cred = grant.AuthToken
+	case RequirementPersonToken:
+		// §6.4: an agent that cannot obtain a person token surfaces the
+		// requirement as an error (§11.6.2).
+		return nil, fmt.Errorf("aauth: resource at %s requires a person token (requirement=%s)", org, RequirementPersonToken)
 	default:
 		return nil, fmt.Errorf("aauth: unsupported requirement %q from %s", reqmt.Requirement, org)
 	}
 
-	res2, _, err := t.send(req, body, cred, t.cachedAccess(org))
+	res2, _, err := t.send(req, body, cred, t.cachedSession(org))
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +164,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	t.observeAccess(org, res2)
+	t.observeSession(org, res2)
 	return res2, nil
 }
 
@@ -179,9 +187,10 @@ func (t *Transport) challengeOptions(origin, presented string) ResourceChallenge
 	return opts
 }
 
-// send clones req, attaches credential + optional AAuth-Access, signs, and
-// sends it, returning the response and the credential it presented.
-func (t *Transport) send(req *http.Request, body []byte, credential, access string) (*http.Response, string, error) {
+// send clones req, attaches credential and the optional session token,
+// signs, and sends it, returning the response and the credential it
+// presented.
+func (t *Transport) send(req *http.Request, body []byte, credential, session string) (*http.Response, string, error) {
 	c := req.Clone(req.Context())
 	if body != nil {
 		c.Body = io.NopCloser(bytes.NewReader(body))
@@ -199,8 +208,8 @@ func (t *Transport) send(req *http.Request, body []byte, credential, access stri
 		credential = tok
 	}
 	AttachSignatureKey(c, credential)
-	if access != "" {
-		c.Header.Set("Authorization", "AAuth "+access)
+	if session != "" {
+		c.Header.Set("Authorization", "AAuth "+session)
 	}
 	if err := SignRequest(c, t.Agent.Key, ""); err != nil {
 		return nil, "", err
@@ -209,7 +218,8 @@ func (t *Transport) send(req *http.Request, body []byte, credential, access stri
 	return res, credential, err
 }
 
-// followDeferred drives resource-managed 202 waits (§6.5) with signed polls.
+// followDeferred drives resource-managed 202 waits (§6.2, §11.8) with
+// signed polls.
 func (t *Transport) followDeferred(req *http.Request, res *http.Response) (*http.Response, error) {
 	if res.StatusCode != http.StatusAccepted {
 		return res, nil
@@ -272,26 +282,27 @@ func (t *Transport) storeAuth(origin string, grant *TokenResponse) {
 	t.auth[origin] = cachedAuth{token: grant.AuthToken, expires: time.Now().Add(ttl)}
 }
 
-func (t *Transport) cachedAccess(origin string) string {
+func (t *Transport) cachedSession(origin string) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.access[origin]
+	return t.session[origin]
 }
 
-// observeAccess implements AAuth-Access rolling refresh (§6.4).
-func (t *Transport) observeAccess(origin string, res *http.Response) {
-	vals := res.Header.Values("AAuth-Access")
+// observeSession implements session token rolling refresh (§6.3): a new
+// AAuth-Access value on any response replaces the cached session token.
+func (t *Transport) observeSession(origin string, res *http.Response) {
+	vals := res.Header.Values(HeaderAAuthAccess)
 	if len(vals) != 1 {
 		return // absent, or multiple credentials (MUST reject) — ignore
 	}
 	v := strings.TrimSpace(vals[0])
 	if v == "" || strings.ContainsAny(v, " \t") || strings.ContainsFunc(v, func(r rune) bool { return r < 0x21 || r > 0x7e }) {
-		return // not a token68 — reject per §6.4
+		return // not a token68 — reject per §6.3
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.access == nil {
-		t.access = map[string]string{}
+	if t.session == nil {
+		t.session = map[string]string{}
 	}
-	t.access[origin] = v
+	t.session[origin] = v
 }

@@ -69,6 +69,10 @@ const (
 	HeaderPrefer         = "Prefer"
 	HeaderRetryAfter     = "Retry-After"
 	HeaderLocation       = "Location"
+	// HeaderAAuthAccess carries a session token from a resource to an
+	// agent (draft -11 §6.3); the agent returns it as
+	// "Authorization: AAuth <session token>", covered by its signature.
+	HeaderAAuthAccess = "AAuth-Access"
 )
 
 // DefaultSignatureLabel is the signature label used by this implementation.

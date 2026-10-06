@@ -28,8 +28,98 @@ func TestRequirementCodec(t *testing.T) {
 	if err != nil || parsed.URL != "https://ps.example/interaction" || parsed.Code != "A1B2-C3D4" {
 		t.Fatalf("parsed %+v, %v", parsed, err)
 	}
-	if _, err := ParseRequirement("resource-token=\"x\""); err == nil {
-		t.Fatal("missing requirement param accepted")
+	// Values needing escapes survive a round trip as Strings.
+	r = Requirement{Requirement: RequirementInteraction, URL: `https://ps.example/i?q="a\b"`, Code: "A1B2-C3D4"}
+	if parsed, err = ParseRequirement(r.String()); err != nil || parsed != r {
+		t.Fatalf("escaped round trip: %+v, %v", parsed, err)
+	}
+	// Unknown members and parameters are ignored.
+	if parsed, err = ParseRequirement(`requirement=approval;x=1, other=?1`); err != nil || parsed.Requirement != RequirementApproval {
+		t.Fatalf("unknown members: %+v, %v", parsed, err)
+	}
+	for _, bad := range []string{
+		"",
+		`resource-token="x"`,        // no requirement member
+		`requirement="auth-token"`,  // a String, not a Token
+		`requirement=(agent-token)`, // an inner list
+		`requirement=auth-token; resource-token=?1`, // a Boolean parameter
+		`requirement=auth-token; resource-token="unterminated`,
+	} {
+		if _, err := ParseRequirement(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestChallengeHelpers(t *testing.T) {
+	cases := []struct {
+		write func(http.ResponseWriter)
+		want  string
+	}{
+		{ChallengeAgentToken, RequirementAgentToken},
+		{ChallengePersonToken, RequirementPersonToken},
+		{func(w http.ResponseWriter) { ChallengeAuthToken(w, "eyJ.e30.sig") }, RequirementAuthToken},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		c.write(rec)
+		r, err := ParseRequirement(rec.Header().Get(HeaderRequirement))
+		if rec.Code != http.StatusUnauthorized || err != nil || r.Requirement != c.want {
+			t.Errorf("%s: status %d requirement %+v (%v)", c.want, rec.Code, r, err)
+		}
+	}
+	rec := httptest.NewRecorder()
+	WriteApprovalPending(rec, "/pending/abc", 30)
+	r, err := ParseRequirement(rec.Header().Get(HeaderRequirement))
+	if rec.Code != http.StatusAccepted || err != nil || r.Requirement != RequirementApproval ||
+		rec.Header().Get(HeaderLocation) != "/pending/abc" || rec.Header().Get(HeaderRetryAfter) != "30" {
+		t.Fatalf("approval: %d %v %+v (%v)", rec.Code, rec.Header(), r, err)
+	}
+}
+
+func TestApprovalPendingIsFollowed(t *testing.T) {
+	// requirement=approval (§11.6.4): the agent polls until terminal and
+	// surfaces the requirement; no user action is needed on its side.
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && polls.Add(1) > 1 {
+			writeBody(t, rw, "approved")
+			return
+		}
+		WriteApprovalPending(rw, "/pending/abc", 0)
+	}))
+	defer srv.Close()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/act", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	res, err := DoDeferred(context.Background(), srv.Client(), req, DeferredOptions{
+		OnRequirement: func(r Requirement) { seen = append(seen, r.Requirement) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeBody(res.Body)
+	body, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK || string(body) != "approved" || len(seen) != 1 || seen[0] != RequirementApproval {
+		t.Fatalf("status %d body %q requirements %v", res.StatusCode, body, seen)
+	}
+}
+
+func TestEffectiveAccessMode(t *testing.T) {
+	for declared, want := range map[string]string{
+		"":                     AccessModeAgentToken,
+		AccessModeAgentToken:   AccessModeAgentToken,
+		AccessModePersonToken:  AccessModePersonToken,
+		AccessModeSessionToken: AccessModeSessionToken,
+		AccessModeAuthToken:    AccessModeAuthToken,
+		"aauth-access-token":   AccessModeAgentToken, // the pre-draft-11 name is not recognized
+		"per-call":             AccessModeAgentToken, // an extension this implementation does not know
+	} {
+		if got := (ResourceMetadata{AccessMode: declared}).EffectiveAccessMode(); got != want {
+			t.Errorf("%q: got %q, want %q", declared, got, want)
+		}
 	}
 }
 
@@ -118,8 +208,7 @@ func (w *threePartyWorld) serveResource(t *testing.T, resourceURL func() string,
 				WriteSignatureFailure(rw, err)
 				return
 			}
-			rw.Header().Set(HeaderRequirement, "requirement=person-token")
-			rw.WriteHeader(http.StatusUnauthorized)
+			ChallengePersonToken(rw)
 		}
 	}
 }
@@ -290,7 +379,7 @@ func TestThreePartyFlow(t *testing.T) {
 	agentTok, _ := w.agent.MintToken()
 	res := callResource(t, w.agent, w.resourceURL, agentTok)
 	closeBody(res.Body)
-	if r, err := ParseRequirement(res.Header.Get(HeaderRequirement)); res.StatusCode != http.StatusUnauthorized || err != nil || r.Requirement != "person-token" {
+	if r, err := ParseRequirement(res.Header.Get(HeaderRequirement)); res.StatusCode != http.StatusUnauthorized || err != nil || r.Requirement != RequirementPersonToken {
 		t.Fatalf("agent token: status %d requirement %+v (%v)", res.StatusCode, r, err)
 	}
 

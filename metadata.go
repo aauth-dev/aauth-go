@@ -28,14 +28,49 @@ type PersonServerMetadata struct {
 	InteractionEndpoint string `json:"interaction_endpoint,omitempty"` // where the user completes interactions
 }
 
-// ResourceMetadata is /.well-known/aauth-resource.json. AccessMode declares
-// how the resource authorizes agents (identity, resource, ps, federated).
+// Access mode values for ResourceMetadata.AccessMode (draft -11 §11.2.4;
+// AAuth Access Mode Value registry, §15.11): the credential flow a resource
+// expects, so an agent can plan its first call. The declaration is
+// advisory: a resource MAY return any AAuth-Requirement at runtime and MAY
+// apply different modes to different endpoints.
+const (
+	// AccessModeAgentToken: the agent signs with its agent token; the
+	// resource authorizes on the agent's identity alone. The default.
+	AccessModeAgentToken = "agent-token"
+	// AccessModePersonToken: the agent signs with a person token; the
+	// resource authorizes on the person's identity alone (§4.2.3).
+	AccessModePersonToken = "person-token"
+	// AccessModeSessionToken: the agent completes the resource's own
+	// interaction flow and receives a session token via AAuth-Access
+	// (§6.2, §6.3). Earlier drafts called this mode aauth-access-token.
+	AccessModeSessionToken = "session-token"
+	// AccessModeAuthToken: the agent obtains an auth token from its PS
+	// using a resource token; the initial call MUST present a person
+	// token (§4.2.4, §4.2.5).
+	AccessModeAuthToken = "auth-token"
+)
+
+// ResourceMetadata is /.well-known/aauth-resource.json (draft -11 §11.2.4).
+// AccessMode declares the credential flow the resource expects; see the
+// AccessMode* constants and [ResourceMetadata.EffectiveAccessMode].
 type ResourceMetadata struct {
 	Issuer                        string   `json:"issuer,omitempty"`                          // the resource issuer URL
 	JWKSURI                       string   `json:"jwks_uri,omitempty"`                        // URL of the resource signing JWKS
 	AuthorizationEndpoint         string   `json:"authorization_endpoint,omitempty"`          // where agents proactively request access
-	AccessMode                    string   `json:"access_mode,omitempty"`                     // declared access mode
+	AccessMode                    string   `json:"access_mode,omitempty"`                     // declared access mode (AccessMode*)
 	AdditionalSignatureComponents []string `json:"additional_signature_components,omitempty"` // extra components the resource requires signed
+}
+
+// EffectiveAccessMode returns the declared access mode an agent plans
+// with: AccessMode when it is a value this implementation recognizes, else
+// AccessModeAgentToken — the default when none is declared, and how an
+// agent proceeds when it does not recognize the value (§11.2.4).
+func (m ResourceMetadata) EffectiveAccessMode() string {
+	switch m.AccessMode {
+	case AccessModePersonToken, AccessModeSessionToken, AccessModeAuthToken:
+		return m.AccessMode
+	}
+	return AccessModeAgentToken
 }
 
 // FetchMetadata GETs {base}/.well-known/{doc} and decodes it into dst,

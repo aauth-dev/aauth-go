@@ -11,9 +11,10 @@ import (
 	"time"
 )
 
-// twoPartyResource is a resource that manages authorization itself (§6.4):
-// it authenticates the agent, hands out an opaque AAuth-Access token, and
-// requires it (signature-bound) on subsequent calls. It can roll the token.
+// twoPartyResource is a resource that manages authorization itself (§6.2):
+// it authenticates the agent, hands out an opaque session token in
+// AAuth-Access (§6.3), and requires it (signature-bound) on subsequent
+// calls. It can roll the token.
 type twoPartyResource struct {
 	t         *testing.T
 	url       string
@@ -35,14 +36,14 @@ func newTwoPartyResource(t *testing.T) *twoPartyResource {
 		case auth == "":
 			// First contact: issue an opaque token, agent-token requirement met.
 			r.issued.Add(1)
-			rw.Header().Set("AAuth-Access", fmt.Sprintf("opaque-%d", r.issued.Load()))
+			rw.Header().Set(HeaderAAuthAccess, fmt.Sprintf("opaque-%d", r.issued.Load()))
 			writeBody(t, rw, "welcome")
 		case strings.HasPrefix(auth, "AAuth opaque-"):
 			r.sawAccess = append(r.sawAccess, strings.TrimPrefix(auth, "AAuth "))
 			if !r.rolled.Load() {
-				// Roll the token once (§6.4 rolling refresh).
+				// Roll the token once (§6.3 rolling refresh).
 				r.rolled.Store(true)
-				rw.Header().Set("AAuth-Access", "opaque-rolled")
+				rw.Header().Set(HeaderAAuthAccess, "opaque-rolled")
 			}
 			writeBody(t, rw, "data")
 		default:
@@ -291,6 +292,19 @@ func TestTransportAuthChallengeWithoutPS(t *testing.T) {
 		closeBody(resp.Body)
 	}
 	if err == nil || !strings.Contains(err.Error(), "Transport.PS is not configured") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTransportPersonTokenRequirementSurfaced(t *testing.T) {
+	// requirement=person-token is recognized and surfaced as an error.
+	w := newThreePartyWorld(t)
+	hc := &http.Client{Transport: NewTransport(w.agent, NewPSClient(w.psURL, w.agent))}
+	resp, err := hc.Get(w.resourceURL + "/files")
+	if err == nil {
+		closeBody(resp.Body)
+	}
+	if err == nil || !strings.Contains(err.Error(), "requires a person token") {
 		t.Fatalf("err = %v", err)
 	}
 }
