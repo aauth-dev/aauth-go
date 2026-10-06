@@ -521,3 +521,41 @@ func TestHWKAndBodyChecks(t *testing.T) {
 		}
 	}
 }
+
+func TestLimiter(t *testing.T) {
+	ta := newAP(t, nil)
+	var mu sync.Mutex
+	blocked := ""
+	ta.ap.cfg.Limiter = aauth.LimiterFunc(func(_ context.Context, key string) (bool, time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		return blocked == "" || !strings.HasPrefix(key, blocked), time.Second
+	})
+	set := func(p string) { mu.Lock(); blocked = p; mu.Unlock() }
+	ctx := context.Background()
+	ta.client.HTTPClient = &http.Client{Transport: session{http.DefaultTransport}}
+	durable, _ := aauth.GenerateKey(aauth.AlgEd25519)
+	tr, err := ta.client.Issue(ctx, durable, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eph, _ := aauth.GenerateKey(aauth.AlgEd25519)
+	for _, c := range []struct {
+		prefix string
+		call   func() error
+	}{
+		{"issue:", func() error { _, err := ta.client.Issue(ctx, durable, nil); return err }},
+		{"refresh:", func() error { _, err := ta.client.Refresh(ctx, durable, eph, nil); return err }},
+		{"subagent:", func() error {
+			parent, _ := aauth.NewAgent(mustID(t, ta.verify(t, tr.AgentToken).Subject), aauth.WithKey(durable),
+				aauth.WithTokenSource(func() (string, error) { return tr.AgentToken, nil }))
+			_, err := ta.client.Subagent(ctx, parent, eph.Public(), "w")
+			return err
+		}},
+	} {
+		set(c.prefix)
+		if err := c.call(); err == nil || !strings.Contains(err.Error(), "429") {
+			t.Errorf("%s: %v", c.prefix, err)
+		}
+	}
+}

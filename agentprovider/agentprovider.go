@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -148,6 +149,12 @@ type Config struct {
 	// Replay remembers naming-JWT identifiers; nil uses an in-process
 	// cache.
 	Replay ReplayCache
+	// Limiter, when set, limits issuance per presented key ("issue:"),
+	// refreshes per durable key ("refresh:"), and sub-agent requests per
+	// parent ("subagent:"), answered 429 rate_limited with Retry-After.
+	// It is checked after the request authenticates and before the
+	// Registrar is asked.
+	Limiter aauth.Limiter
 	// OnIssue is called for every token issued.
 	OnIssue func(ctx context.Context, t IssuedToken)
 	// TokenTTL is the default token lifetime (default one hour).
@@ -386,6 +393,9 @@ func (s *Server) serveIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.limit(w, r, "issue:"+key.Thumbprint()) {
+		return
+	}
 	reg, err := s.cfg.Registrar.AuthorizeIssue(r.Context(), r, &IssueRequest{Key: key, Body: body, Attestation: att})
 	s.finish(w, r, reg, err, key)
 }
@@ -405,6 +415,9 @@ func (s *Server) serveRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	if d.jti == "" {
 		aauth.WriteSignatureError(w, aauth.SignatureError{Code: aauth.SigErrInvalidJWT}, "the naming JWT needs a jti for replay protection")
+		return
+	}
+	if !s.limit(w, r, "refresh:"+JKTURN(d.durable)) {
 		return
 	}
 	fresh, err := s.replay.Remember(r.Context(), JKTURN(d.durable)+"|"+d.jti, d.exp)
@@ -468,6 +481,9 @@ func (s *Server) serveSubagent(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.JWK.Thumbprint() == parent.Cnf.JWK.Thumbprint() {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "a sub-agent holds its own key, never its parent's")
+		return
+	}
+	if !s.limit(w, r, "subagent:"+parent.Subject) {
 		return
 	}
 	g, err := s.cfg.Registrar.AuthorizeSubagent(r.Context(), &SubagentRequest{Parent: parent, Key: *body.JWK, Discriminator: body.Discriminator})
@@ -606,4 +622,17 @@ func firstPositive(ds ...time.Duration) time.Duration {
 		}
 	}
 	return 0
+}
+
+// limit consults Config.Limiter, answering 429 rate_limited when refused.
+func (s *Server) limit(w http.ResponseWriter, r *http.Request, key string) bool {
+	if s.cfg.Limiter == nil {
+		return true
+	}
+	ok, wait := s.cfg.Limiter.Allow(r.Context(), key)
+	if !ok {
+		w.Header().Set(aauth.HeaderRetryAfter, strconv.Itoa(int(max((wait+time.Second-1)/time.Second, 1))))
+		aauth.WriteProblem(w, http.StatusTooManyRequests, aauth.ErrCodeRateLimited, "")
+	}
+	return ok
 }
