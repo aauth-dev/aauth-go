@@ -1,0 +1,142 @@
+{
+  "description": "AAuth JWTs minted with a deterministic Ed25519 key (RFC 8037 Appendix A.1). Ed25519 signatures are deterministic, so the compact serialization is exact.",
+  "spec": "draft-hardt-oauth-aauth-protocol §5.3, §6.7, §9.4, §11.5",
+  "kind": "jwt",
+  "cases": [
+    {
+      "name": "agent token",
+      "typ": "aa-agent+jwt",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "EdDSA",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+      "claims": {
+        "dwk": "aauth-agent.json",
+        "ps": "https://ps.example",
+        "cnf": {
+          "jwk": {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+            "alg": "EdDSA",
+            "use": "sig"
+          }
+        },
+        "iss": "https://agent.example",
+        "sub": "aauth:assistant@agent.example",
+        "exp": 4102444800,
+        "iat": 1767225600,
+        "jti": "agent-token-1"
+      },
+      "token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImtQcktfcW14VldhWVZBOXd3QkY2SXVvM3ZWeno3VHhIQ1R3WEJ5Z3JTNGsiLCJ0eXAiOiJhYS1hZ2VudCtqd3QifQ.eyJkd2siOiJhYXV0aC1hZ2VudC5qc29uIiwicHMiOiJodHRwczovL3BzLmV4YW1wbGUiLCJjbmYiOnsiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU183VHlXUUhPZzdoY3ZQYXBpTWxyd0lhYVBjSFVSbyIsImtpZCI6ImtQcktfcW14VldhWVZBOXd3QkY2SXVvM3ZWeno3VHhIQ1R3WEJ5Z3JTNGsiLCJhbGciOiJFZERTQSIsInVzZSI6InNpZyJ9fSwiaXNzIjoiaHR0cHM6Ly9hZ2VudC5leGFtcGxlIiwic3ViIjoiYWF1dGg6YXNzaXN0YW50QGFnZW50LmV4YW1wbGUiLCJleHAiOjQxMDI0NDQ4MDAsImlhdCI6MTc2NzIyNTYwMCwianRpIjoiYWdlbnQtdG9rZW4tMSJ9.7YwkiFcQL0mJLJdhQH2gJHsWZ4YQ68pHLdflJSLG2CXnotRrmN9lSdAhJbeSW8HeOuhO7Rzt6IfbU-Xozo6RBA"
+    },
+    {
+      "name": "sub-agent token",
+      "typ": "aa-agent+jwt",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "EdDSA",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+      "claims": {
+        "dwk": "aauth-agent.json",
+        "parent_agent": "aauth:assistant@agent.example",
+        "cnf": {
+          "jwk": {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+            "alg": "EdDSA",
+            "use": "sig"
+          }
+        },
+        "iss": "https://agent.example",
+        "sub": "aauth:assistant+worker1@agent.example",
+        "exp": 4102444800,
+        "iat": 1767225600,
+        "jti": "agent-token-2"
+      },
+      "token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImtQcktfcW14VldhWVZBOXd3QkY2SXVvM3ZWeno3VHhIQ1R3WEJ5Z3JTNGsiLCJ0eXAiOiJhYS1hZ2VudCtqd3QifQ.eyJkd2siOiJhYXV0aC1hZ2VudC5qc29uIiwicGFyZW50X2FnZW50IjoiYWF1dGg6YXNzaXN0YW50QGFnZW50LmV4YW1wbGUiLCJjbmYiOnsiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU183VHlXUUhPZzdoY3ZQYXBpTWxyd0lhYVBjSFVSbyIsImtpZCI6ImtQcktfcW14VldhWVZBOXd3QkY2SXVvM3ZWeno3VHhIQ1R3WEJ5Z3JTNGsiLCJhbGciOiJFZERTQSIsInVzZSI6InNpZyJ9fSwiaXNzIjoiaHR0cHM6Ly9hZ2VudC5leGFtcGxlIiwic3ViIjoiYWF1dGg6YXNzaXN0YW50K3dvcmtlcjFAYWdlbnQuZXhhbXBsZSIsImV4cCI6NDEwMjQ0NDgwMCwiaWF0IjoxNzY3MjI1NjAwLCJqdGkiOiJhZ2VudC10b2tlbi0yIn0.KPo90ptiUFr8EMdGTsMhUXdM3VmEmAiUOMzS9jdyBSuNx88tOoWMbvklrewDEotE5phdx7NSLe1Tox9KWh3bAQ"
+    },
+    {
+      "name": "resource token",
+      "typ": "aa-resource+jwt",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "EdDSA",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+      "claims": {
+        "dwk": "aauth-resource.json",
+        "agent": "aauth:assistant@agent.example",
+        "agent_jkt": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "scope": "data.read",
+        "iss": "https://resource.example",
+        "aud": [
+          "https://ps.example"
+        ],
+        "exp": 4102444800,
+        "iat": 1767225600,
+        "jti": "resource-token-1"
+      },
+      "token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImtQcktfcW14VldhWVZBOXd3QkY2SXVvM3ZWeno3VHhIQ1R3WEJ5Z3JTNGsiLCJ0eXAiOiJhYS1yZXNvdXJjZStqd3QifQ.eyJkd2siOiJhYXV0aC1yZXNvdXJjZS5qc29uIiwiYWdlbnQiOiJhYXV0aDphc3Npc3RhbnRAYWdlbnQuZXhhbXBsZSIsImFnZW50X2prdCI6ImtQcktfcW14VldhWVZBOXd3QkY2SXVvM3ZWeno3VHhIQ1R3WEJ5Z3JTNGsiLCJzY29wZSI6ImRhdGEucmVhZCIsImlzcyI6Imh0dHBzOi8vcmVzb3VyY2UuZXhhbXBsZSIsImF1ZCI6WyJodHRwczovL3BzLmV4YW1wbGUiXSwiZXhwIjo0MTAyNDQ0ODAwLCJpYXQiOjE3NjcyMjU2MDAsImp0aSI6InJlc291cmNlLXRva2VuLTEifQ.i2KKClY2veaeS5lO2KfteP75LsclEguiTPh1JkvpgHaUfPw0EBK3Zqnryeiably3BVScwyFo8lKFf-MrIo2HDQ"
+    },
+    {
+      "name": "auth token",
+      "typ": "aa-auth+jwt",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "EdDSA",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+      "claims": {
+        "dwk": "aauth-person.json",
+        "agent": "aauth:assistant@agent.example",
+        "scope": "data.read",
+        "cnf": {
+          "jwk": {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+            "alg": "EdDSA",
+            "use": "sig"
+          }
+        },
+        "iss": "https://ps.example",
+        "sub": "user-1234",
+        "aud": [
+          "https://resource.example"
+        ],
+        "exp": 4102446600,
+        "iat": 4102443000,
+        "jti": "auth-token-1"
+      },
+      "audience": "https://resource.example",
+      "token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImtQcktfcW14VldhWVZBOXd3QkY2SXVvM3ZWeno3VHhIQ1R3WEJ5Z3JTNGsiLCJ0eXAiOiJhYS1hdXRoK2p3dCJ9.eyJkd2siOiJhYXV0aC1wZXJzb24uanNvbiIsImFnZW50IjoiYWF1dGg6YXNzaXN0YW50QGFnZW50LmV4YW1wbGUiLCJzY29wZSI6ImRhdGEucmVhZCIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiIxMXFZQVlLeENyZlZTXzdUeVdRSE9nN2hjdlBhcGlNbHJ3SWFhUGNIVVJvIiwia2lkIjoia1ByS19xbXhWV2FZVkE5d3dCRjZJdW8zdlZ6ejdUeEhDVHdYQnlnclM0ayIsImFsZyI6IkVkRFNBIiwidXNlIjoic2lnIn19LCJpc3MiOiJodHRwczovL3BzLmV4YW1wbGUiLCJzdWIiOiJ1c2VyLTEyMzQiLCJhdWQiOlsiaHR0cHM6Ly9yZXNvdXJjZS5leGFtcGxlIl0sImV4cCI6NDEwMjQ0NjYwMCwiaWF0Ijo0MTAyNDQzMDAwLCJqdGkiOiJhdXRoLXRva2VuLTEifQ.n1BoeKfXLZSAmCqZSKBoaBtj7zkWsFz0W8MVvcLDMX12ojK9phR4M8ea8iMRiQnTuqzDkpgm5HOG4Sv5miGvDg"
+    }
+  ]
+}

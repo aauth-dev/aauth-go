@@ -1,0 +1,9 @@
+{
+  "description": "Signature-Error response header values.",
+  "spec": "draft-hardt-httpbis-signature-key §5",
+  "kind": "signature-error",
+  "cases": [
+    {"header": "error=invalid_signature", "code": "invalid_signature", "canonical": true},
+    {"header": "error=unsupported_algorithm", "code": "unsupported_algorithm", "canonical": true}
+  ]
+}

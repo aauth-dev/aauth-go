@@ -185,8 +185,14 @@ missing-claim rejection), tampered-`@path` and swapped-`Signature-Key`
 rejection, the stolen-`AAuth-Access` replay guard, sub-agent rules, JWKS
 discovery, and full end-to-end flows (three-party exchange, call chaining,
 clarification dialog) against live `httptest` servers. Runnable
-`package aauth_test` examples double as public-API documentation. Golden wire
-vectors as a cross-implementation conformance suite are planned.
+`package aauth_test` examples double as public-API documentation.
+
+Wire-format golden vectors live in [`testdata/vectors`](testdata/vectors):
+language-neutral JSON files (JWK thumbprints, identifiers, header codecs,
+metadata documents, deterministic Ed25519 JWTs, RFC 9421 request signatures)
+that another implementation can run as a conformance check. After an
+intentional wire change, regenerate derived values with
+`go test -run TestVectors -update` and review the diff.
 
 ## License
 

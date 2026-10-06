@@ -1,0 +1,12 @@
+{
+  "description": "AAuth-Requirement response header values.",
+  "spec": "draft-hardt-oauth-aauth-protocol §11.6",
+  "kind": "requirement",
+  "cases": [
+    {"header": "requirement=agent-token", "parsed": {"Requirement": "agent-token"}, "canonical": true},
+    {"header": "requirement=auth-token; resource-token=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\"", "parsed": {"Requirement": "auth-token", "ResourceToken": "eyJhbGciOiJFZDI1NTE5In0.e30.c2ln"}, "canonical": true},
+    {"header": "requirement=interaction; url=\"https://ps.example/interaction\"; code=\"A1B2-C3D4\"", "parsed": {"Requirement": "interaction", "URL": "https://ps.example/interaction", "Code": "A1B2-C3D4"}, "canonical": true},
+    {"header": "requirement=interaction;url=\"https://ps.example/interaction\";code=\"A1B2-C3D4\"", "parsed": {"Requirement": "interaction", "URL": "https://ps.example/interaction", "Code": "A1B2-C3D4"}, "canonical": false},
+    {"header": "requirement=agent-token; future-param=\"x\"", "parsed": {"Requirement": "agent-token"}, "canonical": false}
+  ]
+}

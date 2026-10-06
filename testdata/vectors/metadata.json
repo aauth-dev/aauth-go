@@ -1,0 +1,10 @@
+{
+  "description": "Well-known metadata documents round-trip through their Go types.",
+  "spec": "draft-hardt-oauth-aauth-protocol §11.2",
+  "kind": "metadata",
+  "cases": [
+    {"document": "aauth-agent.json", "json": {"issuer": "https://agent.example", "jwks_uri": "https://agent.example/.well-known/jwks.json"}},
+    {"document": "aauth-person.json", "json": {"issuer": "https://ps.example", "jwks_uri": "https://ps.example/.well-known/jwks.json", "token_endpoint": "https://ps.example/token", "permission_endpoint": "https://ps.example/permission", "audit_endpoint": "https://ps.example/audit", "mission_endpoint": "https://ps.example/mission", "interaction_endpoint": "https://ps.example/interaction"}},
+    {"document": "aauth-resource.json", "json": {"issuer": "https://resource.example", "jwks_uri": "https://resource.example/.well-known/jwks.json", "authorization_endpoint": "https://resource.example/authorize", "access_mode": "auth-token", "additional_signature_components": ["content-type", "content-digest"]}}
+  ]
+}

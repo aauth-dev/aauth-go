@@ -1,0 +1,14 @@
+{
+  "description": "Agent identifier parsing (aauth:local@domain; sub-agents local+discriminator@domain).",
+  "spec": "draft-hardt-oauth-aauth-protocol §5.2",
+  "kind": "agent-identifier",
+  "cases": [
+    {"input": "aauth:assistant-v2@agent.example", "valid": true, "name": "assistant-v2", "domain": "agent.example"},
+    {"input": "aauth:planner.7f3c@vendor.example", "valid": true, "name": "planner.7f3c", "domain": "vendor.example"},
+    {"input": "aauth:planner.7f3c+search1@vendor.example", "valid": true, "name": "planner.7f3c", "discriminator": "search1", "domain": "vendor.example"},
+    {"input": "assistant@agent.example", "valid": false},
+    {"input": "aauth:@agent.example", "valid": false},
+    {"input": "aauth:assistant@", "valid": false},
+    {"input": "aauth:+worker@agent.example", "valid": false}
+  ]
+}
