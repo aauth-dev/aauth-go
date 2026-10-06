@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,18 +91,9 @@ func verifyTyped(ctx context.Context, token, wantTyp string, dst jwt.Claims, iss
 		return err
 	}
 	kid, _ := utok.Header["kid"].(string)
-	key, err := resolver.ResolveKey(ctx, iss(), dwk(), kid, cnf)
+	tok, err := parseSigned(ctx, token, dst, resolver, iss(), dwk(), kid, cnf)
 	if err != nil {
-		return err
-	}
-	tok, err := newJWTParser().ParseWithClaims(token, dst, func(*jwt.Token) (any, error) {
-		return key, nil
-	})
-	if err != nil {
-		if errors.Is(err, jwt.ErrTokenExpired) {
-			return fmt.Errorf("%w: %w", ErrExpired, err)
-		}
-		return fmt.Errorf("%w: %w", ErrInvalidToken, err)
+		return classifyJWTError(err)
 	}
 	if !tok.Valid {
 		return ErrInvalidToken

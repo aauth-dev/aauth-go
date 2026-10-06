@@ -2,7 +2,6 @@ package aauth
 
 import (
 	"context"
-	"crypto"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,78 +38,63 @@ type ResourceMetadata struct {
 	AdditionalSignatureComponents []string `json:"additional_signature_components,omitempty"` // extra components the resource requires signed
 }
 
-// FetchMetadata GETs {base}/.well-known/{doc} and decodes into dst.
+// FetchMetadata GETs {base}/.well-known/{doc} and decodes it into dst,
+// first verifying the document's issuer (draft -11 §11.2; signature-key
+// §3.6): the issuer member MUST be present ([ErrIssuerMissing]) and MUST
+// equal base by byte equality ([ErrIssuerMismatch]). This prevents a
+// document hosted at one domain from claiming the issuer of another.
 func FetchMetadata(ctx context.Context, hc *http.Client, base, doc string, dst any) error {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
 	u := strings.TrimSuffix(base, "/") + "/.well-known/" + doc
+	body, _, err := fetchJSON(ctx, hc, u)
+	if err != nil {
+		return fmt.Errorf("aauth: metadata: %w", err)
+	}
+	var head struct {
+		Issuer *string `json:"issuer"`
+	}
+	if err := json.Unmarshal(body, &head); err != nil {
+		return fmt.Errorf("aauth: metadata %s: %w", u, err)
+	}
+	switch {
+	case head.Issuer == nil || *head.Issuer == "":
+		return fmt.Errorf("%w: %s", ErrIssuerMissing, u)
+	case *head.Issuer != base:
+		return fmt.Errorf("%w: document at %s claims issuer %q", ErrIssuerMismatch, u, *head.Issuer)
+	}
+	if err := json.Unmarshal(body, dst); err != nil {
+		return fmt.Errorf("aauth: metadata %s: %w", u, err)
+	}
+	return nil
+}
+
+// maxDocumentBytes bounds metadata and JWKS response bodies.
+const maxDocumentBytes = 1 << 20
+
+// fetchJSON GETs u and returns the body (bounded by maxDocumentBytes) and
+// response headers. Non-200 statuses are errors.
+func fetchJSON(ctx context.Context, hc *http.Client, u string) ([]byte, http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
+	req.Header.Set("Accept", "application/json")
 	res, err := hc.Do(req)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	defer closeBody(res.Body)
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("aauth: metadata %s: status %d", u, res.StatusCode)
+		return nil, nil, fmt.Errorf("GET %s: status %d", u, res.StatusCode)
 	}
-	return json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(dst)
-}
-
-// JWKSResolver verifies token signatures via the signature-key draft §3.6
-// discovery chain: {iss}/.well-known/{dwk} → jwks_uri → key by kid.
-type JWKSResolver struct {
-	HTTPClient *http.Client // client for discovery fetches; nil uses http.DefaultClient
-}
-
-// ResolveKey implements KeyResolver.
-func (r JWKSResolver) ResolveKey(ctx context.Context, iss, dwk, kid string, _ *JWK) (crypto.PublicKey, error) {
-	k, err := r.resolve(ctx, iss, dwk, kid)
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxDocumentBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return k.PublicKey()
-}
-
-// resolve walks the discovery chain and returns the matching JWK.
-func (r JWKSResolver) resolve(ctx context.Context, iss, dwk, kid string) (JWK, error) {
-	if iss == "" || dwk == "" {
-		return JWK{}, fmt.Errorf("%w: iss/dwk required for JWKS discovery", ErrMissingClaim)
+	if len(body) > maxDocumentBytes {
+		return nil, nil, fmt.Errorf("GET %s: response exceeds %d bytes", u, maxDocumentBytes)
 	}
-	var md AgentProviderMetadata
-	if err := FetchMetadata(ctx, r.HTTPClient, iss, dwk, &md); err != nil {
-		return JWK{}, err
-	}
-	if md.JWKSURI == "" {
-		return JWK{}, fmt.Errorf("aauth: metadata at %s has no jwks_uri", iss)
-	}
-	hc := r.HTTPClient
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, md.JWKSURI, nil)
-	if err != nil {
-		return JWK{}, err
-	}
-	res, err := hc.Do(req)
-	if err != nil {
-		return JWK{}, err
-	}
-	defer closeBody(res.Body)
-	if res.StatusCode != http.StatusOK {
-		return JWK{}, fmt.Errorf("aauth: jwks %s: status %d", md.JWKSURI, res.StatusCode)
-	}
-	var set JWKS
-	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&set); err != nil {
-		return JWK{}, err
-	}
-	for _, k := range set.Keys {
-		if k.Kid == kid || kid == "" {
-			return k, nil
-		}
-	}
-	return JWK{}, fmt.Errorf("%w: no key %q in JWKS of %s", ErrUnknownKey, kid, iss)
+	return body, res.Header, nil
 }

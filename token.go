@@ -154,6 +154,51 @@ type KeyResolver interface {
 	ResolveKey(ctx context.Context, iss, dwk, kid string, cnf *JWK) (crypto.PublicKey, error)
 }
 
+// keyResolutionError marks errors from a KeyResolver, which parseSigned
+// returns unwrapped so they keep their own classification.
+type keyResolutionError struct{ err error }
+
+func (e keyResolutionError) Error() string { return e.err.Error() }
+func (e keyResolutionError) Unwrap() error { return e.err }
+
+// parseSigned resolves the issuer key and verifies token into dst. When the
+// signature fails and the resolver caches keys ([KeyRefresher]), it
+// refreshes the key once and retries (draft -11 §11.4), so an issuer that
+// re-keys under the same kid is picked up; the refresh is subject to the
+// resolver's fetch floor. Resolver errors are returned as
+// keyResolutionError.
+func parseSigned(ctx context.Context, token string, dst jwt.Claims, resolver KeyResolver, iss, dwk, kid string, cnf *JWK) (*jwt.Token, error) {
+	key, err := resolver.ResolveKey(ctx, iss, dwk, kid, cnf)
+	if err != nil {
+		return nil, keyResolutionError{err}
+	}
+	tok, err := newJWTParser().ParseWithClaims(token, dst, func(*jwt.Token) (any, error) { return key, nil })
+	if err != nil && errors.Is(err, jwt.ErrTokenSignatureInvalid) {
+		if rr, ok := resolver.(KeyRefresher); ok {
+			fresh, rerr := rr.RefreshKey(ctx, iss, dwk, kid, cnf)
+			if rerr != nil {
+				return nil, keyResolutionError{rerr}
+			}
+			tok, err = newJWTParser().ParseWithClaims(token, dst, func(*jwt.Token) (any, error) { return fresh, nil })
+		}
+	}
+	return tok, err
+}
+
+// classifyJWTError maps a parseSigned failure onto this package's errors:
+// resolver errors pass through, an expired token is ErrExpired, and any
+// other failure is ErrInvalidToken.
+func classifyJWTError(err error) error {
+	var kre keyResolutionError
+	switch {
+	case errors.As(err, &kre):
+		return kre.err
+	case errors.Is(err, jwt.ErrTokenExpired):
+		return fmt.Errorf("%w: %w", ErrExpired, err)
+	}
+	return fmt.Errorf("%w: %w", ErrInvalidToken, err)
+}
+
 // SelfSignedResolver trusts the embedded cnf.jwk to verify the token's own
 // signature (proof of possession is then established by the HTTP message
 // signature, which must use the same key). Suitable for local/self-hosted
@@ -223,20 +268,10 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 	}
 	kid, _ := utok.Header["kid"].(string)
 
-	key, err := opts.Resolver.ResolveKey(ctx, unverified.Issuer, unverified.DWK, kid, unverified.Cnf.JWK)
-	if err != nil {
-		return nil, err
-	}
-
 	claims := &AgentClaims{}
-	tok, err := newJWTParser().ParseWithClaims(token, claims, func(*jwt.Token) (any, error) {
-		return key, nil
-	})
+	tok, err := parseSigned(ctx, token, claims, opts.Resolver, unverified.Issuer, unverified.DWK, kid, unverified.Cnf.JWK)
 	if err != nil {
-		if errors.Is(err, jwt.ErrTokenExpired) {
-			return nil, fmt.Errorf("%w: %w", ErrExpired, err)
-		}
-		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
+		return nil, classifyJWTError(err)
 	}
 	if !tok.Valid {
 		return nil, ErrInvalidToken

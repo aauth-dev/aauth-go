@@ -131,6 +131,9 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Fully-specified algorithms: JWS and JWK `alg` is `Ed25519` or `ES256`; `EdDSA`, `none`, symmetric, absent, or kty/crv-inconsistent `alg` rejected (signature-key §3.3) | ✅ |
 | Self-hosted agents (agent as its own AP, bootstrap §4.3) | ✅ |
 | Verification (§5.2.4) — pluggable trust: JWKS discovery / pinned keys / self-signed | ✅ |
+| Metadata `issuer` verified against the fetch URL (`issuer_missing` / `issuer_mismatch`, §11.2) | ✅ |
+| JWKS cache (§11.4): cache headers, 1-minute refresh floor, unknown-`kid` and re-key refresh, 24h max age, backoff, bounded entries | ✅ |
+| Egress admission for discovery fetches (signature-key §7.3) | 🟡 bring your own `http.Client` |
 | HTTP Message Signatures profile (`@method @authority @path signature-key`; `content-digest` + `content-type` on bodies; `created` validity window with `clock_skew`; no `alg`/`keyid` parameters) | ✅ |
 | Signature-Key header parsed as an RFC 9651 dictionary; scheme `jwt` (others answered `unsupported_scheme`) | ✅ |
 | Error model: signature-key-09 `Signature-Error` codes, 401 on every signature failure, `Accept-Signature-Scheme` / `Accept-Signature-Alg`, RFC 9457 problem bodies | ✅ |
