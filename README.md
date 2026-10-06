@@ -154,7 +154,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Person identity (resource verifies a person token presented in place of the agent token) | 🟡 resource and PS sides; agent-side person token request pending |
 | PS-Asserted (three-party; challenge → PS token exchange → auth token) | ✅ |
 | Person tokens (`aa-person+jwt`, §7.1): issue with lifetime bounds (1h, agent / upstream / mission expiry), sub-agent key binding, verify incl. cnf request binding and no `scope`/`account` | ✅ |
-| Resource tokens (`aa-resource+jwt`): issue + verify (§6.7.2) + agent-side challenge verify (§6.7.3) | ✅ |
+| Resource tokens (`aa-resource+jwt`, §6.7): issued only against a verified person token (`ps`, `sub`, `presented_jti`, `mission_s256`, `tenant` copied; `agent_jkt` from its `cnf`); PS/AS verification with the presented-token cross-check (§6.7.2); agent-side challenge verification incl. JWT signature, `ps`, `sub`, `presented_jti` (§6.7.3) | ✅ |
 | Auth tokens (`aa-auth+jwt`): -09 claim set, verification incl. cnf request binding (§9.4) | ✅ |
 | `AAuth-Requirement` header codec | ✅ |
 | Federated (four-party; Access Server) | ⬜ |

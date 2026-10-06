@@ -51,7 +51,8 @@ const (
 //
 //   - Text set → clarification_response (answer the question).
 //   - ResourceToken set → updated_request (replace the request; the new
-//     resource token MUST share iss/agent/agent_jkt with the original).
+//     resource token MUST share iss, ps, sub, agent_jkt, mission_s256, and
+//     tenant with the original, draft -11 §7.5.2.2).
 //   - Cancel true → DELETE the pending URL, withdrawing the request.
 type ClarificationReply struct {
 	Text          string // the answer, for a clarification_response

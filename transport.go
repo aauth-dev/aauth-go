@@ -22,10 +22,11 @@ import (
 //     target origin (auth token if one is cached, else the agent token) and
 //     any cached AAuth-Access opaque token (§6.4) bound into the signature;
 //   - on 401 requirement=agent-token (§6.3), retries with the agent token;
-//   - on 401 requirement=auth-token (§6.6), verifies the resource-token
-//     challenge (§6.7.3), exchanges it at the PS token endpoint — following
+//   - on 401 requirement=auth-token (§6.5), verifies the resource-token
+//     challenge against the token it presented (§6.7.3), exchanges it at the
+//     PS token endpoint with that token as presented_token — following
 //     deferred (202) waits — caches the auth token, and retries. Step-up
-//     re-challenges (§6.6) trigger a fresh exchange;
+//     re-challenges (§6.5) trigger a fresh exchange;
 //   - follows resource-managed 202 interaction waits (§6.5), surfacing
 //     requirement=interaction via OnRequirement;
 //   - honors AAuth-Access rolling refresh: a new header value on any
@@ -41,6 +42,11 @@ type Transport struct {
 	PS *PSClient
 	// Base is the underlying RoundTripper (default http.DefaultTransport).
 	Base http.RoundTripper
+	// ResourceVerify verifies the signature of resource tokens in
+	// auth-token challenges (§6.7.3). A nil Resolver uses a
+	// [JWKSResolver], which discovers the resource's key at
+	// {iss}/.well-known/aauth-resource.json.
+	ResourceVerify TokenVerifyOptions
 	// OnRequirement surfaces interaction requirements (URL + code) that
 	// arrive while a request is deferred.
 	OnRequirement func(Requirement)
@@ -89,7 +95,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	org := origin(req)
 
 	// First attempt with the best cached credential.
-	res, err := t.send(req, body, t.credential(org), t.cachedAccess(org))
+	res, presented, err := t.send(req, body, t.credential(org), t.cachedAccess(org))
 	if err != nil {
 		return nil, err
 	}
@@ -120,10 +126,10 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if t.PS == nil {
 			return nil, fmt.Errorf("aauth: resource at %s requires an auth token but Transport.PS is not configured", org)
 		}
-		if _, err := VerifyResourceChallenge(reqmt.ResourceToken, org, t.Agent); err != nil {
+		if _, err := VerifyResourceChallenge(req.Context(), reqmt.ResourceToken, t.challengeOptions(org, presented)); err != nil {
 			return nil, fmt.Errorf("aauth: challenge from %s: %w", org, err)
 		}
-		grant, err := t.PS.ExchangeToken(req.Context(), TokenRequest{ResourceToken: reqmt.ResourceToken})
+		grant, err := t.PS.ExchangeToken(req.Context(), TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: presented})
 		if err != nil {
 			return nil, err
 		}
@@ -133,7 +139,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("aauth: unsupported requirement %q from %s", reqmt.Requirement, org)
 	}
 
-	res2, err := t.send(req, body, cred, t.cachedAccess(org))
+	res2, _, err := t.send(req, body, cred, t.cachedAccess(org))
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +151,28 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return res2, nil
 }
 
-// send clones req, attaches credential + optional AAuth-Access, signs, sends.
-func (t *Transport) send(req *http.Request, body []byte, credential, access string) (*http.Response, error) {
+// challengeOptions configures §6.7.3 verification of a challenge from
+// origin to a request that presented presented.
+func (t *Transport) challengeOptions(origin, presented string) ResourceChallengeOptions {
+	opts := ResourceChallengeOptions{
+		TokenVerifyOptions: t.ResourceVerify,
+		Resource:           origin,
+		Agent:              t.Agent,
+		PS:                 t.Agent.PS,
+		Presented:          presented,
+	}
+	if opts.Resolver == nil {
+		opts.Resolver = JWKSResolver{}
+	}
+	if opts.PS == "" {
+		opts.PS = t.PS.BaseURL
+	}
+	return opts
+}
+
+// send clones req, attaches credential + optional AAuth-Access, signs, and
+// sends it, returning the response and the credential it presented.
+func (t *Transport) send(req *http.Request, body []byte, credential, access string) (*http.Response, string, error) {
 	c := req.Clone(req.Context())
 	if body != nil {
 		c.Body = io.NopCloser(bytes.NewReader(body))
@@ -159,7 +185,7 @@ func (t *Transport) send(req *http.Request, body []byte, credential, access stri
 	if credential == "" {
 		tok, err := t.Agent.MintToken()
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		credential = tok
 	}
@@ -168,9 +194,10 @@ func (t *Transport) send(req *http.Request, body []byte, credential, access stri
 		c.Header.Set("Authorization", "AAuth "+access)
 	}
 	if err := SignRequest(c, t.Agent.Key, ""); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return t.base().RoundTrip(c)
+	res, err := t.base().RoundTrip(c)
+	return res, credential, err
 }
 
 // followDeferred drives resource-managed 202 waits (§6.5) with signed polls.

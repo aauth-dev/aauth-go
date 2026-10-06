@@ -70,29 +70,6 @@ func (a *ActClaim) Delegators() []string {
 	return out
 }
 
-// ResourceInteraction is the optional interaction claim in a resource token
-// (§6.7.1): the resource requires its own user-facing flow before the PS can
-// issue an auth token.
-type ResourceInteraction struct {
-	URL  string `json:"url"`  // the resource's interaction endpoint
-	Code string `json:"code"` // interaction code to present there
-}
-
-// ResourceClaims is the payload of an aa-resource+jwt (draft -09 §6.7.1) —
-// issued by a resource in the three/four-party flows. aud selects the PS or
-// AS; agent + agent_jkt bind it to the requesting agent's identity and key.
-// Lifetime SHOULD NOT exceed 5 minutes.
-type ResourceClaims struct {
-	DWK         string               `json:"dwk"`                   // well-known doc name for key discovery
-	Agent       string               `json:"agent"`                 // the requesting agent's identifier
-	AgentJKT    string               `json:"agent_jkt"`             // thumbprint of the agent's signing key
-	Scope       string               `json:"scope,omitempty"`       // requested scopes, space-separated
-	Mission     *MissionRef          `json:"mission,omitempty"`     // mission context, when present
-	Interaction *ResourceInteraction `json:"interaction,omitempty"` // resource's own interaction requirement
-	// RegisteredClaims carries iss (resource URL), aud (PS or AS), jti, iat, exp.
-	jwt.RegisteredClaims
-}
-
 // mintTyped signs claims as a JWT with the given typ and kid header. The
 // JWS alg is the fully-specified algorithm of key (draft -11 §11.5.1):
 // Ed25519 or ES256. key may be any supported crypto.Signer.
@@ -133,11 +110,6 @@ func MintAgentToken(claims AgentClaims, key crypto.Signer, kid string) (string, 
 // MintAuthToken signs an aa-auth+jwt (Person Server or Access Server side).
 func MintAuthToken(claims AuthClaims, key crypto.Signer, kid string) (string, error) {
 	return mintTyped(claims, key, TypAuth, kid)
-}
-
-// MintResourceToken signs an aa-resource+jwt (resource side).
-func MintResourceToken(claims ResourceClaims, key crypto.Signer, kid string) (string, error) {
-	return mintTyped(claims, key, TypResource, kid)
 }
 
 // KeyResolver resolves the token-signature verification key for an issuer.

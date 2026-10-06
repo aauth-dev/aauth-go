@@ -583,6 +583,11 @@ func verifyVectorToken(t *testing.T, c jwtCase) error {
 	case TypPerson:
 		_, err := VerifyPersonToken(ctx, c.Token, c.Audience, TokenVerifyOptions{Resolver: resolver, Signature: clock})
 		return err
+	case TypResource:
+		// The token alone; the cross-check with its presented token is
+		// covered by unit tests.
+		_, err := verifyResourceJWT(ctx, c.Token, TokenVerifyOptions{Resolver: resolver, Signature: clock})
+		return err
 	}
 	return nil
 }

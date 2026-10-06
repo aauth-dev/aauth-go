@@ -3,10 +3,10 @@ package aauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,9 +33,11 @@ func TestRequirementCodec(t *testing.T) {
 	}
 }
 
-// threePartyWorld wires a full PS-Asserted deployment: a PS that issues auth
-// tokens after verifying agent + resource token, and a resource that
-// challenges unknown callers and trusts the PS's key.
+// threePartyWorld wires a full PS authorization deployment (draft -11
+// §4.2.4): a PS that issues person tokens and, after verifying the agent,
+// the resource token, and the presented person token, auth tokens; and a
+// resource that challenges an agent token for a person token, a person
+// token for an auth token, and serves on the auth token.
 type threePartyWorld struct {
 	agent            *Agent
 	psAgent          *Agent // the PS's signing identity (keys only)
@@ -44,6 +46,82 @@ type threePartyWorld struct {
 	resourceURL      string
 	interactionPolls int // >0: PS defers N polls before granting
 	polls            atomic.Int32
+}
+
+// resolver pins the PS's and the resource's keys.
+func (w *threePartyWorld) resolver() StaticResolver {
+	return StaticResolver{w.psURL: w.psAgent.JWKS(), w.resourceURL: w.resourceKey.JWKS()}
+}
+
+// personToken issues the agent a person token for resource, as the PS's
+// person token endpoint would (§7.1).
+func (w *threePartyWorld) personToken(t *testing.T, resource string) string {
+	t.Helper()
+	tok, _, err := IssuePersonToken(PersonTokenParams{
+		Issuer: w.psURL, Resource: resource, Subject: "person-1", Agent: verifiedAgent(t, w.agent),
+		InsecureSkipIdentifierCheck: true,
+	}, w.psAgent.Key, w.psAgent.JWK().Kid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// serveResource is the resource side of the world, for any resource URL
+// whose key is w.resourceKey: it serves on an auth token, challenges a
+// person token for an auth token, and an agent token for a person token.
+// verified, when set, runs on each request whose person or auth token
+// verified.
+func (w *threePartyWorld) serveResource(t *testing.T, resourceURL func() string, scope string, verified func(*http.Request)) http.HandlerFunc {
+	return func(rw http.ResponseWriter, r *http.Request) {
+		tok, err := ParseSignatureKey(r)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		typ, err := TokenType(tok)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusUnauthorized)
+			return
+		}
+		switch typ {
+		case TypAuth:
+			// §9.4.2: after authorization the agent presents the auth token.
+			claims, err := VerifyAndExtractAuth(r.Context(), r, resourceURL(), localOpts(w.resolver()))
+			if err != nil {
+				WriteSignatureFailure(rw, err)
+				return
+			}
+			if verified != nil {
+				verified(r)
+			}
+			writeBody(t, rw, "hello %s scope=%s", claims.Subject, claims.Scope)
+		case TypPerson:
+			// §6.5: a verified person token, but consent is needed.
+			person, err := VerifyAndExtractPerson(r.Context(), r, resourceURL(), localOpts(w.resolver()))
+			if err != nil {
+				WriteSignatureFailure(rw, err)
+				return
+			}
+			if verified != nil {
+				verified(r)
+			}
+			rt, err := IssueResourceToken(ResourceTokenParams{Resource: resourceURL(), Scope: scope}, person, w.resourceKey.Key, w.resourceKey.JWK().Kid)
+			if err != nil {
+				http.Error(rw, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			ChallengeAuthToken(rw, rt)
+		default:
+			// §6.4: the agent is known, the person is not.
+			if _, err := VerifyAndExtractAgent(r.Context(), r, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}}); err != nil {
+				WriteSignatureFailure(rw, err)
+				return
+			}
+			rw.Header().Set(HeaderRequirement, "requirement=person-token")
+			rw.WriteHeader(http.StatusUnauthorized)
+		}
+	}
 }
 
 func newThreePartyWorld(t *testing.T) *threePartyWorld {
@@ -64,20 +142,26 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 	psMux.HandleFunc("POST /token", func(rw http.ResponseWriter, r *http.Request) {
 		agent, err := VerifyAndExtractAgent(r.Context(), r, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
 		if err != nil {
-			http.Error(rw, err.Error(), http.StatusUnauthorized)
+			WriteSignatureFailure(rw, err)
 			return
 		}
 		var treq TokenRequest
 		if err := json.NewDecoder(r.Body).Decode(&treq); err != nil {
-			http.Error(rw, err.Error(), http.StatusBadRequest)
+			WriteTokenError(rw, &TokenError{Code: TokenErrInvalidRequest, Err: err})
 			return
 		}
-		// Verify the resource token: addressed to us, bound to this agent,
-		// signed by the resource (trust pinned).
-		rc, err := VerifyResourceToken(r.Context(), treq.ResourceToken, w.psURL, agent,
-			localOpts(StaticResolver{w.resourceURL: w.resourceKey.JWKS()}))
+		// §6.7.2: the resource token is addressed to us and bound to this
+		// agent's key, and the presented person token is ours, for that
+		// resource, and the one the resource token names.
+		rc, _, err := VerifyResourceToken(r.Context(), treq.ResourceToken, ResourceTokenVerifyOptions{
+			TokenVerifyOptions: localOpts(w.resolver()),
+			Audience:           w.psURL,
+			PS:                 w.psURL,
+			AgentJKT:           agent.Cnf.JWK.Thumbprint(),
+			PresentedToken:     treq.PresentedToken,
+		})
 		if err != nil {
-			http.Error(rw, err.Error(), http.StatusForbidden)
+			WriteTokenError(rw, err)
 			return
 		}
 		if w.interactionPolls > 0 && int(w.polls.Load()) < w.interactionPolls {
@@ -112,7 +196,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 			RegisteredClaims: jwt.RegisteredClaims{Subject: w.agent.ID.String()},
 		}, &ResourceClaims{
 			Scope:            "files:read",
-			RegisteredClaims: jwt.RegisteredClaims{Issuer: w.resourceURL},
+			RegisteredClaims: jwt.RegisteredClaims{Issuer: w.resourceURL, Subject: "person-1"},
 		})
 	})
 	ps := httptest.NewServer(psMux)
@@ -121,34 +205,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 
 	// --- Resource ---
 	resMux := http.NewServeMux()
-	resMux.HandleFunc("GET /files", func(rw http.ResponseWriter, r *http.Request) {
-		// Try auth token first (§9.4.2: after authorization the agent
-		// presents the auth token, not the agent token).
-		if tok, err := ParseSignatureKey(r); err == nil {
-			if strings.Contains(headerTyp(tok), TypAuth) {
-				claims, err := VerifyAndExtractAuth(r.Context(), r, w.resourceURL,
-					localOpts(StaticResolver{w.psURL: w.psAgent.JWKS()}))
-				if err != nil {
-					http.Error(rw, err.Error(), http.StatusForbidden)
-					return
-				}
-				writeBody(t, rw, "hello %s scope=%s", claims.Agent, claims.Scope)
-				return
-			}
-		}
-		// Otherwise authenticate the agent and challenge for an auth token.
-		agent, err := VerifyAndExtractAgent(r.Context(), r, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusUnauthorized)
-			return
-		}
-		rt, err := IssueResourceToken(w.resourceURL, w.psURL, agent, "files:read", w.resourceKey.Key, w.resourceKey.JWK().Kid)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		ChallengeAuthToken(rw, rt)
-	})
+	resMux.HandleFunc("GET /files", w.serveResource(t, func() string { return w.resourceURL }, "files:read", nil))
 	res := httptest.NewServer(resMux)
 	t.Cleanup(res.Close)
 	w.resourceURL = res.URL
@@ -165,6 +222,7 @@ func (w *threePartyWorld) writeAuthToken(t *testing.T, rw http.ResponseWriter, a
 		Cnf:   Cnf{JWK: agent.Cnf.JWK},
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    w.psURL,
+			Subject:   rc.Subject,
 			Audience:  jwt.ClaimStrings{rc.Issuer},
 			ID:        jti,
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -178,15 +236,6 @@ func (w *threePartyWorld) writeAuthToken(t *testing.T, rw http.ResponseWriter, a
 	}
 	rw.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(rw).Encode(TokenResponse{AuthToken: tok, ExpiresIn: 3600})
-}
-
-func headerTyp(token string) string {
-	parts := strings.SplitN(token, ".", 2)
-	h, err := jwt.NewParser().DecodeSegment(parts[0])
-	if err != nil {
-		return ""
-	}
-	return string(h)
 }
 
 // callResource makes a signed GET to the resource with the given token.
@@ -207,13 +256,11 @@ func callResource(t *testing.T, a *Agent, url, token string) *http.Response {
 	return res
 }
 
-func TestThreePartyFlow(t *testing.T) {
-	w := newThreePartyWorld(t)
-	ctx := context.Background()
-
-	// 1. Agent calls the resource with its agent token → 401 challenge.
-	agentTok, _ := w.agent.MintToken()
-	res := callResource(t, w.agent, w.resourceURL, agentTok)
+// challengeFor presents the agent's person token to the world's resource
+// and returns the auth-token challenge (§6.5).
+func (w *threePartyWorld) challengeFor(t *testing.T, personTok string) Requirement {
+	t.Helper()
+	res := callResource(t, w.agent, w.resourceURL, personTok)
 	defer closeBody(res.Body)
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("want 401 challenge, got %d", res.StatusCode)
@@ -222,46 +269,119 @@ func TestThreePartyFlow(t *testing.T) {
 	if err != nil || reqmt.Requirement != RequirementAuthToken || reqmt.ResourceToken == "" {
 		t.Fatalf("challenge: %+v, %v", reqmt, err)
 	}
+	return reqmt
+}
 
-	// 2. Agent verifies the challenge (§6.7.3) before trusting it.
-	rc, err := VerifyResourceChallenge(reqmt.ResourceToken, w.resourceURL, w.agent)
+func TestThreePartyFlow(t *testing.T) {
+	w := newThreePartyWorld(t)
+	ctx := context.Background()
+
+	// 1. The agent token alone: the resource needs the person (§6.4).
+	agentTok, _ := w.agent.MintToken()
+	res := callResource(t, w.agent, w.resourceURL, agentTok)
+	closeBody(res.Body)
+	if r, err := ParseRequirement(res.Header.Get(HeaderRequirement)); res.StatusCode != http.StatusUnauthorized || err != nil || r.Requirement != "person-token" {
+		t.Fatalf("agent token: status %d requirement %+v (%v)", res.StatusCode, r, err)
+	}
+
+	// 2. With a person token: 401 auth-token challenge (§6.5).
+	personTok := w.personToken(t, w.resourceURL)
+	reqmt := w.challengeFor(t, personTok)
+
+	// 3. The agent verifies the challenge (§6.7.3) before trusting it.
+	rc, err := VerifyResourceChallenge(ctx, reqmt.ResourceToken, ResourceChallengeOptions{
+		TokenVerifyOptions: localOpts(w.resolver()),
+		Resource:           w.resourceURL,
+		Agent:              w.agent,
+		PS:                 w.psURL,
+		Presented:          personTok,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rc.Scope != "files:read" {
-		t.Fatalf("scope = %q", rc.Scope)
+	if rc.Scope != "files:read" || rc.PS != w.psURL || rc.Subject != "person-1" {
+		t.Fatalf("resource token claims %+v", rc)
 	}
 
-	// 3. Exchange at the PS token endpoint.
+	// 4. Exchange at the PS token endpoint, with the person token as
+	// presented_token (§7.2.1).
 	psc := NewPSClient(w.psURL, w.agent)
 	grant, err := psc.ExchangeToken(ctx, TokenRequest{
-		ResourceToken: reqmt.ResourceToken,
-		Justification: "user asked to list project files",
+		ResourceToken:  reqmt.ResourceToken,
+		PresentedToken: personTok,
+		Justification:  "user asked to list project files",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// 4. Retry the resource with the auth token → 200.
+	// 5. Retry the resource with the auth token → 200.
 	res2 := callResource(t, w.agent, w.resourceURL, grant.AuthToken)
 	defer closeBody(res2.Body)
 	body, _ := io.ReadAll(res2.Body)
 	if res2.StatusCode != http.StatusOK {
 		t.Fatalf("want 200 with auth token, got %d: %s", res2.StatusCode, body)
 	}
-	if want := "hello " + w.agent.ID.String() + " scope=files:read"; string(body) != want {
+	if want := "hello person-1 scope=files:read"; string(body) != want {
 		t.Fatalf("body = %q, want %q", body, want)
+	}
+}
+
+func TestThreePartyFlow_PresentedTokenChecks(t *testing.T) {
+	w := newThreePartyWorld(t)
+	ctx := context.Background()
+	personTok := w.personToken(t, w.resourceURL)
+	reqmt := w.challengeFor(t, personTok)
+	psc := NewPSClient(w.psURL, w.agent)
+
+	wantCode := func(name string, err error, code string) {
+		t.Helper()
+		var te *TokenError
+		if !errors.As(err, &te) || te.Code != code {
+			t.Errorf("%s: err = %v, want %s", name, err, code)
+		}
+	}
+	// No presented_token.
+	_, err := psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken})
+	wantCode("missing presented_token", err, TokenErrInvalidRequest)
+	// A different (valid) person token than the one the resource token
+	// names: presented_jti mismatch.
+	other := w.personToken(t, w.resourceURL)
+	_, err = psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: other})
+	wantCode("other person token", err, TokenErrInvalidResourceToken)
+	// A person token for another resource fails verification itself.
+	elsewhere := w.personToken(t, "https://elsewhere.example")
+	_, err = psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: elsewhere})
+	wantCode("person token for another resource", err, TokenErrInvalidPresentedToken)
+	// An agent token is neither a person nor an auth token.
+	agentTok, _ := w.agent.MintToken()
+	_, err = psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: agentTok})
+	wantCode("agent token presented", err, TokenErrInvalidPresentedToken)
+	// A resource token signed by an untrusted key.
+	rogue := testAgent(t)
+	pc, err := VerifyPersonToken(ctx, personTok, w.resourceURL, localOpts(w.resolver()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, err := IssueResourceToken(ResourceTokenParams{Resource: w.resourceURL, Scope: "files:admin"}, pc, rogue.Key, rogue.JWK().Kid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = psc.ExchangeToken(ctx, TokenRequest{ResourceToken: forged, PresentedToken: personTok})
+	wantCode("forged resource token", err, TokenErrInvalidResourceToken)
+	// The agent-side check refuses it too (§6.7.3 step 2).
+	if _, err := VerifyResourceChallenge(ctx, forged, ResourceChallengeOptions{
+		TokenVerifyOptions: localOpts(w.resolver()), Resource: w.resourceURL, Agent: w.agent, PS: w.psURL, Presented: personTok,
+	}); err == nil {
+		t.Error("agent accepted a forged challenge")
 	}
 }
 
 func TestThreePartyFlow_InteractionDeferred(t *testing.T) {
 	w := newThreePartyWorld(t)
 	w.interactionPolls = 2
-
-	agentTok, _ := w.agent.MintToken()
-	res := callResource(t, w.agent, w.resourceURL, agentTok)
-	closeBody(res.Body)
-	reqmt, _ := ParseRequirement(res.Header.Get(HeaderRequirement))
+	personTok := w.personToken(t, w.resourceURL)
+	reqmt := w.challengeFor(t, personTok)
 
 	var surfaced []Requirement
 	psc := NewPSClient(w.psURL, w.agent)
@@ -269,7 +389,7 @@ func TestThreePartyFlow_InteractionDeferred(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	grant, err := psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken})
+	grant, err := psc.ExchangeToken(ctx, TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: personTok})
 	if err != nil {
 		t.Fatal(err)
 	}

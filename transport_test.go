@@ -1,7 +1,6 @@
 package aauth
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // twoPartyResource is a resource that manages authorization itself (§6.4):
@@ -123,6 +123,17 @@ func TestTransportRejectsUnboundAccessToken(t *testing.T) {
 	}
 }
 
+// seedCredential stands in for the agent having obtained a person token for
+// origin (§7.1): the Transport presents the cached credential first.
+func seedCredential(tr *Transport, origin, token string) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if tr.auth == nil {
+		tr.auth = map[string]cachedAuth{}
+	}
+	tr.auth[origin] = cachedAuth{token: token, expires: time.Now().Add(time.Hour)}
+}
+
 func TestTransportThreeParty_AutoExchangeAndCache(t *testing.T) {
 	w := newThreePartyWorld(t)
 	var exchanges atomic.Int32
@@ -130,6 +141,8 @@ func TestTransportThreeParty_AutoExchangeAndCache(t *testing.T) {
 	psc := NewPSClient(w.psURL, w.agent)
 	tr := NewTransport(w.agent, psc)
 	tr.Base = countingTransport{inner: http.DefaultTransport, count: &exchanges, match: "/token"}
+	tr.ResourceVerify = localOpts(w.resolver())
+	seedCredential(tr, w.resourceURL, w.personToken(t, w.resourceURL))
 	hc := &http.Client{Transport: tr}
 	// The PS client must go through the same counting base for the tally.
 	psc.HTTPClient = &http.Client{Transport: tr.Base}
@@ -144,12 +157,28 @@ func TestTransportThreeParty_AutoExchangeAndCache(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("call %d: status %d: %s", i, resp.StatusCode, b)
 		}
-		if want := "hello " + w.agent.ID.String() + " scope=files:read"; string(b) != want {
+		if want := "hello person-1 scope=files:read"; string(b) != want {
 			t.Fatalf("call %d: body %q", i, b)
 		}
 	}
 	if got := exchanges.Load(); got != 1 {
 		t.Fatalf("token exchanges = %d, want 1 (cache miss only on first call)", got)
+	}
+}
+
+func TestTransportRejectsForgedChallenge(t *testing.T) {
+	// A challenge whose resource token the resource did not sign (§6.7.3).
+	w := newThreePartyWorld(t)
+	tr := NewTransport(w.agent, NewPSClient(w.psURL, w.agent))
+	rogue := testAgent(t)
+	tr.ResourceVerify = localOpts(StaticResolver{w.resourceURL: rogue.JWKS()})
+	seedCredential(tr, w.resourceURL, w.personToken(t, w.resourceURL))
+	resp, err := (&http.Client{Transport: tr}).Get(w.resourceURL + "/files")
+	if err == nil {
+		closeBody(resp.Body)
+	}
+	if err == nil || !strings.Contains(err.Error(), "challenge from") {
+		t.Fatalf("err = %v, want a rejected challenge", err)
 	}
 }
 
@@ -203,38 +232,21 @@ func TestTransportBuffersAndResendsBody(t *testing.T) {
 	// POST body must survive the 401 → exchange → retry cycle.
 	w := newThreePartyWorld(t)
 	bodySeen := make(chan string, 2)
-	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		if tok, err := ParseSignatureKey(req); err == nil && strings.Contains(headerTyp(tok), TypAuth) {
-			claims, err := VerifyAndExtractAuth(req.Context(), req, w.resourceURL, localOpts(StaticResolver{w.psURL: w.psAgent.JWKS()}))
-			if err != nil {
-				http.Error(rw, err.Error(), http.StatusForbidden)
-				return
-			}
-			b, _ := io.ReadAll(req.Body) // after verification — the digest check restores the body
-			bodySeen <- string(b)
-			writeBody(t, rw, "stored for %s", claims.Agent)
-			return
-		}
-		agentClaims, err := VerifyAndExtractAgent(req.Context(), req, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusUnauthorized)
-			return
-		}
-		b, _ := io.ReadAll(req.Body)
+	var srvURL string
+	read := func(r *http.Request) {
+		b, _ := io.ReadAll(r.Body) // after verification — the digest check restores the body
 		bodySeen <- string(b)
-		rt, err := IssueResourceToken(w.resourceURL, w.psURL, agentClaims, "files:write", w.resourceKey.Key, w.resourceKey.JWK().Kid)
-		if err != nil {
-			http.Error(rw, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		ChallengeAuthToken(rw, rt)
-	}))
+	}
+	srv := httptest.NewServer(w.serveResource(t, func() string { return srvURL }, "files:write", read))
 	defer srv.Close()
-	// Point the world's resource URL at this body-aware server for challenge
-	// verification purposes.
+	srvURL = srv.URL
+	// The world's PS trusts this resource's key under its URL.
 	w.resourceURL = srv.URL
 
-	hc := &http.Client{Transport: NewTransport(w.agent, NewPSClient(w.psURL, w.agent))}
+	tr := NewTransport(w.agent, NewPSClient(w.psURL, w.agent))
+	tr.ResourceVerify = localOpts(w.resolver())
+	seedCredential(tr, srv.URL, w.personToken(t, srv.URL))
+	hc := &http.Client{Transport: tr}
 	resp, err := hc.Post(srv.URL+"/upload", "application/json", strings.NewReader(`{"v":42}`))
 	if err != nil {
 		t.Fatal(err)
@@ -268,14 +280,17 @@ func TestTransportPlain401PassesThrough(t *testing.T) {
 }
 
 func TestTransportAuthChallengeWithoutPS(t *testing.T) {
-	w := newThreePartyWorld(t)
-	hc := &http.Client{Transport: NewTransport(w.agent, nil)} // no PS configured
-	resp, err := hc.Get(w.resourceURL + "/files")
+	agent := testAgent(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		ChallengeAuthToken(rw, "eyJ.e30.sig")
+	}))
+	defer srv.Close()
+	hc := &http.Client{Transport: NewTransport(agent, nil)} // no PS configured
+	resp, err := hc.Get(srv.URL + "/files")
 	if err == nil {
 		closeBody(resp.Body)
 	}
 	if err == nil || !strings.Contains(err.Error(), "Transport.PS is not configured") {
 		t.Fatalf("err = %v", err)
 	}
-	_ = context.Background()
 }

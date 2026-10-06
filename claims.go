@@ -105,10 +105,6 @@ func (c *AuthClaims) registered() *jwt.RegisteredClaims { return &c.RegisteredCl
 func (c *AuthClaims) wellKnown() string                 { return c.DWK }
 func (c *AuthClaims) confirmation() *JWK                { return c.Cnf.JWK }
 
-func (c *ResourceClaims) registered() *jwt.RegisteredClaims { return &c.RegisteredClaims }
-func (c *ResourceClaims) wellKnown() string                 { return c.DWK }
-func (c *ResourceClaims) confirmation() *JWK                { return nil }
-
 // jwtCheck is the common verification of one token type (draft -11
 // §11.5.2), short of the exp check: callers finish with [checkExpiry] after
 // their type-specific checks, so that a token failing only on exp is
