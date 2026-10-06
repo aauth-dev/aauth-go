@@ -463,6 +463,10 @@ func mintVector(t *testing.T, c jwtCase) string {
 		var claims ResourceClaims
 		mustDecodeStrict(t, c.Claims, &claims)
 		tok, err = MintResourceToken(claims, priv, c.Kid)
+	case TypPerson:
+		var claims PersonClaims
+		mustDecodeStrict(t, c.Claims, &claims)
+		tok, err = MintPersonToken(claims, priv, c.Kid)
 	default:
 		t.Fatalf("%s: unknown typ %q", c.Name, c.Typ)
 	}
@@ -492,7 +496,11 @@ func runJWTVectors(t *testing.T, raw json.RawMessage, update bool) any {
 		}
 		got := mintVector(t, c)
 		if update {
-			cases[i].Token = got
+			// A randomized signature is regenerated only when absent, so
+			// an update does not churn tokens whose bytes cannot match.
+			if !c.Randomized || c.Token == "" {
+				cases[i].Token = got
+			}
 			continue
 		}
 		if !c.Randomized && got != c.Token {
@@ -571,6 +579,9 @@ func verifyVectorToken(t *testing.T, c jwtCase) error {
 		return err
 	case TypAuth:
 		_, err := VerifyAuthToken(ctx, c.Token, c.Audience, TokenVerifyOptions{Resolver: resolver, Signature: clock})
+		return err
+	case TypPerson:
+		_, err := VerifyPersonToken(ctx, c.Token, c.Audience, TokenVerifyOptions{Resolver: resolver, Signature: clock})
 		return err
 	}
 	return nil

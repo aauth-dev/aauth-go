@@ -199,3 +199,52 @@ func checkAudience(kind string, aud jwt.ClaimStrings, want string) error {
 	}
 	return nil
 }
+
+// timeOf returns d's time, or the zero time for an absent claim.
+func timeOf(d *jwt.NumericDate) time.Time {
+	if d == nil {
+		return time.Time{}
+	}
+	return d.Time
+}
+
+// checkCnf applies the cnf.jwk structural checks of draft -11 §9.4.3.2
+// step 3: cnf.jwk is REQUIRED, and a JWK missing kty or the members its key
+// type requires (crv and x for OKP; crv, x, and y for EC) is structurally
+// incomplete ([ErrMissingClaim]) and rejected before key decoding. A JWK
+// that does not carry a fully-specified alg agreeing with kty/crv, or that
+// does not decode to a supported public key, is invalid key material.
+func checkCnf(j *JWK) error {
+	if j == nil {
+		return fmt.Errorf("%w: cnf.jwk", ErrMissingClaim)
+	}
+	var missing []string
+	switch j.Kty {
+	case "":
+		missing = append(missing, "kty")
+	case "OKP":
+		if j.Crv == "" {
+			missing = append(missing, "crv")
+		}
+		if j.X == "" {
+			missing = append(missing, "x")
+		}
+	case "EC":
+		if j.Crv == "" {
+			missing = append(missing, "crv")
+		}
+		if j.X == "" {
+			missing = append(missing, "x")
+		}
+		if j.Y == "" {
+			missing = append(missing, "y")
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: cnf.jwk is missing %v", ErrMissingClaim, missing)
+	}
+	if _, err := j.PublicKey(); err != nil {
+		return fmt.Errorf("cnf.jwk: %w", err)
+	}
+	return nil
+}

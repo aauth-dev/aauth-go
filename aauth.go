@@ -7,12 +7,16 @@
 //
 // # Layers
 //
-// AAuth stacks three concerns, each usable independently:
+// AAuth stacks these concerns, each usable independently:
 //
 //   - Identity — an agent proves who it is on every request. See [Agent] and
 //     [Agent.MintToken] for minting an aa-agent+jwt, [SignRequest] and
 //     [VerifyAndExtractAgent] for the RFC 9421 HTTP message-signature profile
 //     over the Signature-Key carrier (draft-hardt-httpbis-signature-key-04).
+//   - Person identity — a Person Server identifies the person an agent acts
+//     for to one resource with a person token (draft -11 §7.1). See
+//     [IssuePersonToken] (PS side) and [VerifyAndExtractPerson] (resource
+//     side).
 //   - Resource access — a protected API decides what an agent may do. See
 //     [Transport] (the agent-side client that turns 401 challenges into token
 //     exchanges automatically), [PSClient.ExchangeToken] (three-party
@@ -38,9 +42,11 @@ import (
 	"io"
 )
 
-// JWT typ header values (draft -09 §5.2.2, §6, §7).
+// JWT typ header values (draft -11 §5.3.1, §6.7.1, §7.1.2, §9.4.1). A
+// recipient MUST check typ before acting on any AAuth JWT (§11.5.1).
 const (
 	TypAgent    = "aa-agent+jwt"
+	TypPerson   = "aa-person+jwt"
 	TypResource = "aa-resource+jwt"
 	TypAuth     = "aa-auth+jwt"
 )
