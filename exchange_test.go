@@ -136,6 +136,9 @@ type threePartyWorld struct {
 	resourceURL      string
 	interactionPolls int // >0: PS defers N polls before granting
 	polls            atomic.Int32
+	authTTL          time.Duration // auth token lifetime (default one hour)
+	personRequests   atomic.Int32  // person token requests served
+	authRequests     atomic.Int32  // auth token requests served
 }
 
 // resolver pins the PS's and the resource's keys.
@@ -228,7 +231,30 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 
 	// --- Person Server ---
 	psMux := http.NewServeMux()
+	psMux.HandleFunc("POST /person", func(rw http.ResponseWriter, r *http.Request) {
+		w.personRequests.Add(1)
+		agent, err := VerifyAndExtractAgent(r.Context(), r, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
+		if err != nil {
+			WriteSignatureFailure(rw, err)
+			return
+		}
+		var preq PersonTokenRequest
+		if err := json.NewDecoder(r.Body).Decode(&preq); err != nil {
+			WriteTokenError(rw, &TokenError{Code: TokenErrInvalidRequest, Err: err})
+			return
+		}
+		tok, pc, err := IssuePersonToken(PersonTokenParams{
+			Issuer: w.psURL, Resource: preq.Resource, Subject: "person-1", Agent: agent,
+			MissionS256: preq.MissionS256, InsecureSkipIdentifierCheck: true,
+		}, w.psAgent.Key, w.psAgent.JWK().Kid)
+		if err != nil {
+			WriteTokenError(rw, err)
+			return
+		}
+		writeJSON(t, rw, PersonTokenResponse{PersonToken: tok, ExpiresIn: int64(time.Until(pc.ExpiresAt.Time).Seconds())})
+	})
 	psMux.HandleFunc("POST /token", func(rw http.ResponseWriter, r *http.Request) {
+		w.authRequests.Add(1)
 		agent, err := VerifyAndExtractAgent(r.Context(), r, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
 		if err != nil {
 			WriteSignatureFailure(rw, err)
@@ -269,14 +295,18 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 		// §9.4.1: sub, account, mission_s256, and tenant from the
 		// resource token; exp bounded by the agent and presented tokens.
 		tok, _, err := IssueAuthToken(AuthTokenParams{
-			Issuer: w.psURL, Resource: rc, Presented: presented, Agent: agent, Scope: rc.Scope,
+			Issuer: w.psURL, Resource: rc, Presented: presented, Agent: agent, Scope: rc.Scope, TTL: w.authTTL,
 		}, w.psAgent.Key, w.psAgent.JWK().Kid)
 		if err != nil {
 			WriteTokenError(rw, err)
 			return
 		}
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(AuthTokenResponse{AuthToken: tok, ExpiresIn: 3600})
+		ac, err := VerifyAuthToken(r.Context(), tok, rc.Issuer, AuthTokenVerifyOptions{TokenVerifyOptions: localOpts(w.resolver())})
+		if err != nil {
+			WriteTokenError(rw, err)
+			return
+		}
+		writeJSON(t, rw, AuthTokenResponse{AuthToken: tok, ExpiresIn: int64(time.Until(ac.ExpiresAt.Time).Seconds())})
 	})
 	psMux.HandleFunc("GET /pending/tok1", func(rw http.ResponseWriter, r *http.Request) {
 		if int(w.polls.Add(1)) < w.interactionPolls {

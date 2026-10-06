@@ -84,6 +84,13 @@ type DeferredOptions struct {
 	// seen on a 202 (e.g. requirement=interaction; url=…; code=…) so the
 	// caller can surface the interaction to the user while polling continues.
 	OnRequirement func(Requirement)
+	// HandleRequirement, when set, is invoked like OnRequirement (once per
+	// distinct AAuth-Requirement on a 202, before the next poll) for a
+	// requirement the caller satisfies itself — for example an auth-token
+	// requirement delivered as a deferred response (draft -11 §6.5.1),
+	// after which Sign presents the auth token on the polls. An error
+	// stops polling and is returned.
+	HandleRequirement func(Requirement) error
 	// OnClarification answers a requirement=clarification 202 (§7.3): given
 	// the question, it returns the agent's reply. If nil, a clarification
 	// requirement is treated as an ordinary pending state (polling continues
@@ -120,11 +127,19 @@ func FollowDeferred(ctx context.Context, hc *http.Client, reqURL *url.URL, res *
 	lastReq := ""
 
 	for res.StatusCode == http.StatusAccepted {
-		if opts.OnRequirement != nil {
-			if rh := res.Header.Get(HeaderRequirement); rh != "" && rh != lastReq {
-				lastReq = rh
-				if parsed, perr := ParseRequirement(rh); perr == nil {
+		if rh := res.Header.Get(HeaderRequirement); rh != "" && rh != lastReq {
+			lastReq = rh
+			// A requirement this agent cannot parse is not surfaced; the
+			// 202 is still followed as an ordinary pending state.
+			if parsed, perr := ParseRequirement(rh); perr == nil {
+				if opts.OnRequirement != nil {
 					opts.OnRequirement(parsed)
+				}
+				if opts.HandleRequirement != nil {
+					if err := opts.HandleRequirement(parsed); err != nil {
+						drainBody(res.Body)
+						return nil, err
+					}
 				}
 			}
 		}

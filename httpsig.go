@@ -173,6 +173,11 @@ func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
 	if req.Header.Get(HeaderSignatureKey) == "" {
 		return ErrMissingSigKey
 	}
+	if req.URL != nil && req.URL.Path == "" && req.URL.Opaque == "" {
+		// An empty path is sent, and its @path derived, as "/" (RFC 9421
+		// §2.2.6); sign what the recipient will see.
+		req.URL.Path = "/"
+	}
 	hasBody := requestHasBody(req)
 	if hasBody && req.Header.Get("Content-Digest") == "" {
 		d, err := httpsign.GenerateContentDigestHeader(&req.Body, []string{ContentDigestAlg})

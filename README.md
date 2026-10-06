@@ -118,7 +118,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 
 | Role | Status | What exists |
 |---|---|---|
-| **Agent** | ✅ | identity, token minting, permission client, and a protocol-aware `http.RoundTripper` (`Transport`): auto-signing, challenge handling, token exchange with deferred waits, per-resource token cache, `AAuth-Access` lifecycle |
+| **Agent** | ✅ | identity, token minting, PS client (person and auth tokens, permission, audit), and a protocol-aware `http.RoundTripper` (`Transport`): auto-signing; `agent-token`, `person-token`, and `auth-token` requirements (401, and 202 deferred delivery, §6.5.1); challenge and auth-token response verification; per-resource caches with the top-down 5-minute refresh margin (§7.9.1); `clock_skew` wait-and-retry once; revoked/expired cached tokens dropped; `AAuth-Access` lifecycle |
 | **Resource** | ✅ | agent + auth-token authentication, resource-token issuing, 401 challenges, `AAuth-Access` two-party flow |
 | **Person Server** | 🟡 | permission, token exchange, audit, clarification, deferred responses; mission lifecycle pending |
 | **Access Server** | ⬜ | four-party federation not yet implemented |
@@ -153,7 +153,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 |---|---|
 | Identity-Based (`requirement=agent-token`) | ✅ |
 | Resource-Managed (two-party; session token in `AAuth-Access`, signature-bound, rolling refresh) | ✅ |
-| Person identity (resource verifies a person token presented in place of the agent token) | 🟡 resource and PS sides; agent-side person token request (`PSClient.PersonToken`, §7.1: `resource`, `mission_s256`, `subagent_token`, `upstream_token`, shared optional parameters, deferred 202s, response checks, cache per key / resource / mission / upstream with the 5-minute refresh margin); `Transport` handling pending |
+| Person identity (resource verifies a person token presented in place of the agent token) | ✅ resource and PS sides; agent side: `PSClient.PersonToken` (§7.1: `resource`, `mission_s256`, `subagent_token`, `upstream_token`, shared optional parameters, deferred 202s, response checks, cache per key / resource / mission / upstream) and `Transport` answering `requirement=person-token` |
 | PS-Asserted (three-party; challenge → `PSClient.RequestAuthToken` with the REQUIRED `presented_token` → auth token, §7.2) | ✅ |
 | Person tokens (`aa-person+jwt`, §7.1): issue with lifetime bounds (1h, agent / upstream / mission expiry), sub-agent key binding, verify incl. cnf request binding and no `scope`/`account` | ✅ |
 | Resource tokens (`aa-resource+jwt`, §6.7): issued only against a verified person token (`ps`, `sub`, `presented_jti`, `mission_s256`, `tenant` copied; `agent_jkt` from its `cnf`); PS/AS verification with the presented-token cross-check (§6.7.2); agent-side challenge verification incl. JWT signature, `ps`, `sub`, `presented_jti` (§6.7.3) | ✅ |
