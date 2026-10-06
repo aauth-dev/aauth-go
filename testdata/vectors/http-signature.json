@@ -1,6 +1,6 @@
 {
-  "description": "RFC 9421 request signatures under the AAuth profile, checked in the verify direction (created and ES256 signatures vary between runs).",
-  "spec": "draft-hardt-oauth-aauth-protocol §11.3; RFC 9421",
+  "description": "RFC 9421 request signatures under the AAuth profile, checked in the verify direction (ES256 signatures are randomized). The verifier's clock is set relative to each signature's created parameter.",
+  "spec": "draft-hardt-oauth-aauth-protocol §11.3; RFC 9421; draft-hardt-httpbis-signature-key §5.4",
   "kind": "http-signature",
   "cases": [
     {
@@ -22,9 +22,10 @@
         }
       },
       "signed": {
-        "Signature": "sig=:tW2SDKWrZHD35pseGAGgWIL+fZ0rA/a0zYybB4bMokCGHzhoo2gay9prED5LVuzawXccuv54dnmCzAnYbwBGCQ==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275737;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
-      }
+        "Signature": "sig=:CM3sVqR9XUQWmhOyG14A3/mhmxb3Dc3MmemFxSqDhP29hcT+Him1BYsyVQzd+di7mvQckrJpOVw8XTQsGIbOBg==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275958"
+      },
+      "expect": "valid"
     },
     {
       "name": "POST with body covers content-digest",
@@ -48,9 +49,10 @@
       },
       "signed": {
         "Content-Digest": "sha-256=:ybC6GsvdO/cjY2Rd5x9Ud8/pb3tqRjxfwwUqf9W21uA=:",
-        "Signature": "sig=:aFlrIKHyXneK6VREoRE2F5Pa0F92jg+EHSoO439iAypUXDR9/FILHOS/QdnLjBY93XuPT9fOyUenprxSILruCw==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\");created=1791275737;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
-      }
+        "Signature": "sig=:oPHeGWaHZ27TbxAFMUwoSUlbOVav6NoZP3RLAvOMpXmhNmamenWRYrSNV1wXfgAIMsyS6Pw2fN+loiRH1RXpBA==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\" \"content-type\");created=1791275958"
+      },
+      "expect": "valid"
     },
     {
       "name": "POST with body, ES256 key",
@@ -75,9 +77,10 @@
       },
       "signed": {
         "Content-Digest": "sha-256=:ybC6GsvdO/cjY2Rd5x9Ud8/pb3tqRjxfwwUqf9W21uA=:",
-        "Signature": "sig=:8PuoypZyeqHl8c6t+iOK/QodEBndjtfPQFl3ETJ02ggyxJOwm7l9FfH0Qcio2D8Pypcyo8mLTFMS4KNCnx0Gng==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\");created=1791275737;keyid=\"oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U\""
-      }
+        "Signature": "sig=:zT1hQ931yZEeZTR2FBlPMAlwacOZOtEOolQ7/cmN4iTTnYKtnVKTFJq+fDL1ENDq2NGGD1sOc+CyIUMj08Lqwg==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\" \"content-type\");created=1791275958"
+      },
+      "expect": "valid"
     },
     {
       "name": "tampered path fails",
@@ -98,13 +101,14 @@
         }
       },
       "signed": {
-        "Signature": "sig=:tW2SDKWrZHD35pseGAGgWIL+fZ0rA/a0zYybB4bMokCGHzhoo2gay9prED5LVuzawXccuv54dnmCzAnYbwBGCQ==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275737;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
+        "Signature": "sig=:CM3sVqR9XUQWmhOyG14A3/mhmxb3Dc3MmemFxSqDhP29hcT+Him1BYsyVQzd+di7mvQckrJpOVw8XTQsGIbOBg==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275958"
       },
       "tamper": {
         "method": "",
         "url": "https://resource.example/api/admin"
-      }
+      },
+      "expect": "invalid_signature"
     },
     {
       "name": "tampered body fails",
@@ -128,14 +132,15 @@
       },
       "signed": {
         "Content-Digest": "sha-256=:ybC6GsvdO/cjY2Rd5x9Ud8/pb3tqRjxfwwUqf9W21uA=:",
-        "Signature": "sig=:aFlrIKHyXneK6VREoRE2F5Pa0F92jg+EHSoO439iAypUXDR9/FILHOS/QdnLjBY93XuPT9fOyUenprxSILruCw==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\");created=1791275737;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
+        "Signature": "sig=:oPHeGWaHZ27TbxAFMUwoSUlbOVav6NoZP3RLAvOMpXmhNmamenWRYrSNV1wXfgAIMsyS6Pw2fN+loiRH1RXpBA==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\" \"content-type\");created=1791275958"
       },
       "tamper": {
         "method": "",
         "url": "",
         "body": "{\"resource_token\":\"y\"}"
-      }
+      },
+      "expect": "invalid_signature"
     },
     {
       "name": "swapped Signature-Key fails",
@@ -156,8 +161,8 @@
         }
       },
       "signed": {
-        "Signature": "sig=:tW2SDKWrZHD35pseGAGgWIL+fZ0rA/a0zYybB4bMokCGHzhoo2gay9prED5LVuzawXccuv54dnmCzAnYbwBGCQ==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275737;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
+        "Signature": "sig=:CM3sVqR9XUQWmhOyG14A3/mhmxb3Dc3MmemFxSqDhP29hcT+Him1BYsyVQzd+di7mvQckrJpOVw8XTQsGIbOBg==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275958"
       },
       "tamper": {
         "method": "",
@@ -165,7 +170,212 @@
         "headers": {
           "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.b3RoZXI\""
         }
-      }
+      },
+      "expect": "invalid_signature"
+    },
+    {
+      "name": "created within the window verifies",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "Ed25519",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "request": {
+        "method": "GET",
+        "url": "https://resource.example/api/documents",
+        "headers": {
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
+        }
+      },
+      "signed": {
+        "Signature": "sig=:CM3sVqR9XUQWmhOyG14A3/mhmxb3Dc3MmemFxSqDhP29hcT+Him1BYsyVQzd+di7mvQckrJpOVw8XTQsGIbOBg==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275958"
+      },
+      "verify": {
+        "at_offset": 59
+      },
+      "expect": "valid"
+    },
+    {
+      "name": "created older than the window is invalid_signature",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "Ed25519",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "request": {
+        "method": "GET",
+        "url": "https://resource.example/api/documents",
+        "headers": {
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
+        }
+      },
+      "signed": {
+        "Signature": "sig=:CM3sVqR9XUQWmhOyG14A3/mhmxb3Dc3MmemFxSqDhP29hcT+Him1BYsyVQzd+di7mvQckrJpOVw8XTQsGIbOBg==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275958"
+      },
+      "verify": {
+        "at_offset": 61
+      },
+      "expect": "invalid_signature"
+    },
+    {
+      "name": "created ahead of the verifier's clock is clock_skew",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "Ed25519",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "request": {
+        "method": "GET",
+        "url": "https://resource.example/api/documents",
+        "headers": {
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
+        }
+      },
+      "signed": {
+        "Signature": "sig=:CM3sVqR9XUQWmhOyG14A3/mhmxb3Dc3MmemFxSqDhP29hcT+Him1BYsyVQzd+di7mvQckrJpOVw8XTQsGIbOBg==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275958"
+      },
+      "verify": {
+        "at_offset": -61
+      },
+      "expect": "clock_skew"
+    },
+    {
+      "name": "advertised signature_window widens the window",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "Ed25519",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "request": {
+        "method": "GET",
+        "url": "https://resource.example/api/documents",
+        "headers": {
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
+        }
+      },
+      "signed": {
+        "Signature": "sig=:CM3sVqR9XUQWmhOyG14A3/mhmxb3Dc3MmemFxSqDhP29hcT+Him1BYsyVQzd+di7mvQckrJpOVw8XTQsGIbOBg==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275958"
+      },
+      "verify": {
+        "at_offset": 200,
+        "window_seconds": 300
+      },
+      "expect": "valid"
+    },
+    {
+      "name": "PS endpoint body covers content-digest and content-type",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "Ed25519",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "request": {
+        "method": "POST",
+        "url": "https://ps.example/token",
+        "headers": {
+          "Content-Type": "application/json",
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
+        },
+        "body": "{\"resource_token\":\"x\"}"
+      },
+      "signed": {
+        "Content-Digest": "sha-256=:ybC6GsvdO/cjY2Rd5x9Ud8/pb3tqRjxfwwUqf9W21uA=:",
+        "Signature": "sig=:oPHeGWaHZ27TbxAFMUwoSUlbOVav6NoZP3RLAvOMpXmhNmamenWRYrSNV1wXfgAIMsyS6Pw2fN+loiRH1RXpBA==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\" \"content-type\");created=1791275958"
+      },
+      "verify": {
+        "require_body_coverage": true
+      },
+      "expect": "valid"
+    },
+    {
+      "name": "PS endpoint body without content-type coverage is invalid_input",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "Ed25519",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "request": {
+        "method": "POST",
+        "url": "https://ps.example/token",
+        "headers": {
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
+        },
+        "body": "{\"resource_token\":\"x\"}"
+      },
+      "signed": {
+        "Content-Digest": "sha-256=:ybC6GsvdO/cjY2Rd5x9Ud8/pb3tqRjxfwwUqf9W21uA=:",
+        "Signature": "sig=:z8jEfv8JPo699yXGiZcKFWaKe0dGcyJKVzDt3tc/blNQ1bJWttgUxDQJyvWMghcYx2nfYgcLYnghXLKBLFWzBQ==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\");created=1791275958"
+      },
+      "tamper": {
+        "method": "",
+        "url": "",
+        "headers": {
+          "Content-Type": "application/json"
+        }
+      },
+      "verify": {
+        "require_body_coverage": true
+      },
+      "expect": "invalid_input"
+    },
+    {
+      "name": "resource-required component missing is invalid_input",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "Ed25519",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "request": {
+        "method": "GET",
+        "url": "https://resource.example/api/documents",
+        "headers": {
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
+        }
+      },
+      "signed": {
+        "Signature": "sig=:CM3sVqR9XUQWmhOyG14A3/mhmxb3Dc3MmemFxSqDhP29hcT+Him1BYsyVQzd+di7mvQckrJpOVw8XTQsGIbOBg==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275958"
+      },
+      "verify": {
+        "required_components": [
+          "content-type"
+        ]
+      },
+      "expect": "invalid_input"
     }
   ]
 }

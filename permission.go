@@ -87,7 +87,7 @@ func (c *PSClient) deferredOptions() DeferredOptions {
 				return err
 			}
 			AttachSignatureKey(req, tok)
-			return SignRequest(req, c.Agent.Key, c.Agent.Thumbprint())
+			return SignRequest(req, c.Agent.Key, "")
 		},
 	}
 }
@@ -137,7 +137,7 @@ func (c *PSClient) RequestPermission(ctx context.Context, p PermissionRequest) (
 	if c.PreferWaitSeconds > 0 {
 		req.Header.Set(HeaderPrefer, fmt.Sprintf("wait=%d", c.PreferWaitSeconds))
 	}
-	if err := SignRequest(req, c.Agent.Key, c.Agent.Thumbprint()); err != nil {
+	if err := SignRequest(req, c.Agent.Key, ""); err != nil {
 		return nil, fmt.Errorf("aauth: sign: %w", err)
 	}
 

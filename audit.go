@@ -90,7 +90,7 @@ func (c *PSClient) Audit(ctx context.Context, a AuditRequest) error {
 		return fmt.Errorf("aauth: mint agent token: %w", err)
 	}
 	AttachSignatureKey(req, tok)
-	if err := SignRequest(req, c.Agent.Key, c.Agent.Thumbprint()); err != nil {
+	if err := SignRequest(req, c.Agent.Key, ""); err != nil {
 		return fmt.Errorf("aauth: sign: %w", err)
 	}
 

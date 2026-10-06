@@ -167,7 +167,7 @@ func (t *Transport) send(req *http.Request, body []byte, credential, access stri
 	if access != "" {
 		c.Header.Set("Authorization", "AAuth "+access)
 	}
-	if err := SignRequest(c, t.Agent.Key, t.Agent.Thumbprint()); err != nil {
+	if err := SignRequest(c, t.Agent.Key, ""); err != nil {
 		return nil, err
 	}
 	return t.base().RoundTrip(c)
@@ -186,7 +186,7 @@ func (t *Transport) followDeferred(req *http.Request, res *http.Response) (*http
 				return err
 			}
 			AttachSignatureKey(poll, tok)
-			return SignRequest(poll, t.Agent.Key, t.Agent.Thumbprint())
+			return SignRequest(poll, t.Agent.Key, "")
 		},
 	})
 }

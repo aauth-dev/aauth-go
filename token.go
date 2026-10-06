@@ -195,6 +195,9 @@ type VerifyAgentTokenOptions struct {
 	// iss/dwk SHOULD; the aauth -09 agent-token profile makes them MUST —
 	// set true for cross-domain interop).
 	RequireProviderClaims bool
+	// Signature tunes HTTP message-signature verification in
+	// VerifyAndExtractAgent (validity window, required components, clock).
+	Signature RequestVerifyOptions
 }
 
 // VerifyAgentToken verifies an aa-agent+jwt per draft -09 §5.2.4 and returns

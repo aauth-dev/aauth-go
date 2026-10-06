@@ -27,6 +27,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,6 +39,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 var updateVectors = flag.Bool("update", false, "rewrite derived values in testdata/vectors")
@@ -528,24 +530,44 @@ type httpSignatureCase struct {
 	// Signed holds the headers signing adds (derived): Signature-Input,
 	// Signature, and Content-Digest when there is a body.
 	Signed map[string]string `json:"signed"`
-	// Tamper, when set, replaces request members after signing; the
-	// signature must then fail to verify.
+	// Tamper, when set, replaces request members after signing.
 	Tamper *vectorRequest `json:"tamper,omitempty"`
+	// Verify configures the verifier.
+	Verify *vectorVerify `json:"verify,omitempty"`
+	// Expect is "valid", or the Signature-Error code verification yields.
+	Expect string `json:"expect"`
+}
+
+type vectorVerify struct {
+	// AtOffset is the verifier's clock, in seconds after the signature's
+	// created parameter (default 0).
+	AtOffset            int64    `json:"at_offset,omitempty"`
+	WindowSeconds       int64    `json:"window_seconds,omitempty"`
+	RequiredComponents  []string `json:"required_components,omitempty"`
+	RequireBodyCoverage bool     `json:"require_body_coverage,omitempty"`
 }
 
 var signedHeaderNames = []string{HeaderSignatureInput, HeaderSignature, "Content-Digest"}
 
+// expectedSigError maps an expected Signature-Error code to the error the
+// verifier returns.
+var expectedSigError = map[string]error{
+	"invalid_signature": ErrSignatureInvalid,
+	"invalid_input":     ErrSignatureInput,
+	"clock_skew":        ErrClockSkew,
+}
+
 func runHTTPSignatureVectors(t *testing.T, raw json.RawMessage, update bool) any {
 	cases := decodeCases[httpSignatureCase](t, raw)
 	for i, c := range cases {
-		priv := c.SigningKey.signer(t)
+		key := c.SigningKey.signer(t)
 		pub, err := c.SigningKey.PublicKey()
 		if err != nil {
 			t.Fatal(err)
 		}
 		if update {
 			req := c.Request.build(t)
-			if err := SignRequest(req, priv, c.SigningKey.Kid); err != nil {
+			if err := SignRequest(req, key, ""); err != nil {
 				t.Fatalf("%s: sign: %v", c.Name, err)
 			}
 			cases[i].Signed = map[string]string{}
@@ -569,12 +591,32 @@ func runHTTPSignatureVectors(t *testing.T, raw json.RawMessage, update bool) any
 		}
 		v.Headers = headers
 		req := v.build(t)
-		err = VerifyRequest(req, pub)
-		if c.Tamper == nil && err != nil {
-			t.Errorf("%s: verify: %v", c.Name, err)
+
+		si, err := parseSignatureInput(req, DefaultSignatureLabel)
+		if err != nil || si.created == nil {
+			t.Fatalf("%s: vector Signature-Input: %v", c.Name, err)
 		}
-		if c.Tamper != nil && err == nil {
-			t.Errorf("%s: tampered request verified", c.Name)
+		opts := RequestVerifyOptions{}
+		offset := int64(0)
+		if c.Verify != nil {
+			offset = c.Verify.AtOffset
+			opts.Window = time.Duration(c.Verify.WindowSeconds) * time.Second
+			opts.RequiredComponents = c.Verify.RequiredComponents
+			opts.RequireBodyCoverage = c.Verify.RequireBodyCoverage
+		}
+		at := time.Unix(*si.created+offset, 0)
+		opts.Now = func() time.Time { return at }
+
+		err = VerifyRequestWithOptions(req, pub, opts)
+		switch {
+		case c.Expect == "valid":
+			if err != nil {
+				t.Errorf("%s: verify: %v", c.Name, err)
+			}
+		case expectedSigError[c.Expect] == nil:
+			t.Errorf("%s: unknown expectation %q", c.Name, c.Expect)
+		case !errors.Is(err, expectedSigError[c.Expect]):
+			t.Errorf("%s: err = %v, want %s", c.Name, err, c.Expect)
 		}
 	}
 	return cases

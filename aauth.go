@@ -85,6 +85,14 @@ var (
 	ErrSignatureInvalid = errors.New("aauth: signature invalid")
 	// ErrExpired means a token's exp claim is in the past.
 	ErrExpired = errors.New("aauth: token expired")
+	// ErrClockSkew means a signature's created (or a token's iat) is further
+	// ahead of the verifier's clock than its validity window — the sender's
+	// clock disagrees with the verifier's (signature-key §5.4.14).
+	ErrClockSkew = errors.New("aauth: clock skew")
+	// ErrSignatureInput means Signature-Input does not cover the components
+	// the verifier requires (signature-key §5.4.5); see
+	// [MissingComponentsError].
+	ErrSignatureInput = errors.New("aauth: signature does not cover required components")
 	// ErrMissingSigKey means the request had no Signature-Key header.
 	ErrMissingSigKey = errors.New("aauth: missing Signature-Key header")
 	// ErrBadSigKey means the Signature-Key header was malformed.

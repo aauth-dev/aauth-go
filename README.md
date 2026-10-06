@@ -127,7 +127,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Fully-specified algorithms: JWS and JWK `alg` is `Ed25519` or `ES256`; `EdDSA`, `none`, symmetric, absent, or kty/crv-inconsistent `alg` rejected (signature-key §3.3) | ✅ |
 | Self-hosted agents (agent as its own AP, bootstrap §4.3) | ✅ |
 | Verification (§5.2.4) — pluggable trust: JWKS discovery / pinned keys / self-signed | ✅ |
-| HTTP Message Signatures profile (`@method @authority @path signature-key` + `content-digest`) | ✅ |
+| HTTP Message Signatures profile (`@method @authority @path signature-key`; `content-digest` + `content-type` on bodies; `created` validity window with `clock_skew`; no `alg`/`keyid` parameters) | ✅ |
 | Signature-Key scheme `jwt` | ✅ |
 | Error model (`Signature-Error` + RFC 9457 problem bodies) | ✅ |
 | Signature-Key schemes `hwk` / `jkt-jwt` / `jwks_uri`; two-key AP minting | ⬜ |

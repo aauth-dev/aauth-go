@@ -8,32 +8,44 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/dunglas/httpsfv"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/yaronf/httpsign"
 )
 
-// The AAuth HTTP message-signature profile (draft -09 §12.7): every request
-// is signed with the key from cnf.jwk, covering exactly the four mandated
+// The AAuth HTTP message-signature profile (draft -11 §11.3): every request
+// is signed with the key from cnf.jwk, covering the four mandated
 // components (each closes a request-substitution attack):
 //
 //	@method, @authority, @path, signature-key
 //
-// content-digest is added when the request has a body — permitted as an
-// additional component (resources advertise extras via
-// additional_signature_components in their metadata).
+// On a request with a body, content-digest and content-type are also
+// covered. Draft -11 §11.3.3.1 requires both on bodies sent to a PS, AS, or
+// revocation endpoint; covering them on every body (content-type when the
+// header is present) keeps one signing path and lets resources require them
+// via additional_signature_components.
 // When the request carries an opaque access token (`Authorization: AAuth …`,
-// §6.4), the authorization header is additionally covered — binding the
+// §6.3), the authorization header is additionally covered — binding the
 // token to the signature so it can't be replayed as a bearer credential.
-func coveredFields(hasBody, hasAAuthAccess bool) httpsign.Fields {
+func coveredComponents(hasBody, hasContentType, hasAAuthAccess bool) []string {
 	base := []string{"@method", "@authority", "@path", "signature-key"}
 	if hasAAuthAccess {
 		base = append(base, "authorization")
 	}
 	if hasBody {
 		base = append(base, "content-digest")
+		if hasContentType {
+			base = append(base, "content-type")
+		}
 	}
-	return httpsign.Headers(base...)
+	return base
+}
+
+// requestHasBody reports whether req carries (or will carry) content.
+func requestHasBody(req *http.Request) bool {
+	return req.Body != nil && req.Body != http.NoBody && req.ContentLength != 0
 }
 
 // hasAAuthAuthorization reports whether the request carries an
@@ -83,15 +95,19 @@ func ParseSignatureKey(req *http.Request) (string, error) {
 
 // SignRequest signs req per the AAuth profile: sets Content-Digest when a
 // body is present, then Signature-Input and Signature under the default
-// label. The Signature-Key header MUST already be attached (it is a covered
-// component). key may be any supported crypto.Signer (see [GenerateKey]);
-// the algorithm is determined by the key, never sent on the wire (draft -11
-// §11.3.3.2). keyid is set to the given value when non-empty.
+// label, with created set to the current time. The Signature-Key header
+// MUST already be attached (it is a covered component). key may be any
+// supported crypto.Signer (see [GenerateKey]); the algorithm is determined
+// by the key and never sent on the wire (draft -11 §11.3.3.2).
+//
+// keyid SHOULD be empty: draft -11 §11.3.3.2 says agents SHOULD NOT send the
+// keyid parameter, since Signature-Key identifies the key. A non-empty value
+// is emitted as given (it MUST then identify the same key).
 func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
 	if req.Header.Get(HeaderSignatureKey) == "" {
 		return ErrMissingSigKey
 	}
-	hasBody := req.Body != nil && req.ContentLength != 0
+	hasBody := requestHasBody(req)
 	if hasBody && req.Header.Get("Content-Digest") == "" {
 		d, err := httpsign.GenerateContentDigestHeader(&req.Body, []string{ContentDigestAlg})
 		if err != nil {
@@ -103,7 +119,8 @@ func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
 	if keyid != "" {
 		cfg = cfg.SetKeyID(keyid)
 	}
-	signer, err := newHTTPSigner(key, cfg, coveredFields(hasBody, hasAAuthAuthorization(req)))
+	fields := httpsign.Headers(coveredComponents(hasBody, req.Header.Get("Content-Type") != "", hasAAuthAuthorization(req))...)
+	signer, err := newHTTPSigner(key, cfg, fields)
 	if err != nil {
 		return err
 	}
@@ -157,17 +174,156 @@ func newHTTPVerifier(pub crypto.PublicKey, cfg *httpsign.VerifyConfig, fields ht
 	return nil, fmt.Errorf("%w: key type %T", ErrUnsupportedAlgorithm, pub)
 }
 
+// DefaultSignatureWindow is the default signature validity window for the
+// created parameter (draft -11 §11.3.4 step 3; resources may advertise
+// another value as signature_window).
+const DefaultSignatureWindow = 60 * time.Second
+
+// RequestVerifyOptions tunes HTTP message-signature verification.
+type RequestVerifyOptions struct {
+	// Window is the signature validity window for created. A signature
+	// older than the window is rejected as invalid ([ErrSignatureInvalid]);
+	// one further ahead of the verifier's clock than the window is rejected
+	// as clock skew ([ErrClockSkew]). Zero means DefaultSignatureWindow.
+	Window time.Duration
+	// RequiredComponents lists covered components the server requires in
+	// addition to the base set (e.g. a resource's
+	// additional_signature_components).
+	RequiredComponents []string
+	// RequireBodyCoverage requires content-digest and content-type to be
+	// covered on a request with a body. PS, AS, and revocation endpoints set
+	// it (draft -11 §11.3.3.1).
+	RequireBodyCoverage bool
+	// Now returns the verifier's current time; nil means time.Now.
+	Now func() time.Time
+}
+
+func (o RequestVerifyOptions) now() time.Time {
+	if o.Now != nil {
+		return o.Now()
+	}
+	return time.Now()
+}
+
+func (o RequestVerifyOptions) window() time.Duration {
+	if o.Window > 0 {
+		return o.Window
+	}
+	return DefaultSignatureWindow
+}
+
+// signatureInput is the parsed Signature-Input member for one label.
+type signatureInput struct {
+	components []string
+	created    *int64
+	expires    *int64
+}
+
+// parseSignatureInput parses the Signature-Input dictionary member for label
+// (RFC 9421 §4.1).
+func parseSignatureInput(req *http.Request, label string) (signatureInput, error) {
+	var si signatureInput
+	vals := req.Header.Values(HeaderSignatureInput)
+	if len(vals) == 0 {
+		return si, fmt.Errorf("%w: Signature-Input missing", ErrSignatureInvalid)
+	}
+	dict, err := httpsfv.UnmarshalDictionary(vals)
+	if err != nil {
+		return si, fmt.Errorf("%w: Signature-Input: %w", ErrSignatureInvalid, err)
+	}
+	m, ok := dict.Get(label)
+	if !ok {
+		return si, fmt.Errorf("%w: Signature-Input has no %q member", ErrSignatureInvalid, label)
+	}
+	il, ok := m.(httpsfv.InnerList)
+	if !ok {
+		return si, fmt.Errorf("%w: Signature-Input %q is not an inner list", ErrSignatureInvalid, label)
+	}
+	for _, it := range il.Items {
+		name, ok := it.Value.(string)
+		if !ok {
+			return si, fmt.Errorf("%w: covered component is not a string", ErrSignatureInvalid)
+		}
+		si.components = append(si.components, name)
+	}
+	if il.Params != nil {
+		for _, p := range []struct {
+			name string
+			dst  **int64
+		}{{"created", &si.created}, {"expires", &si.expires}} {
+			v, ok := il.Params.Get(p.name)
+			if !ok {
+				continue
+			}
+			n, ok := v.(int64)
+			if !ok {
+				return si, fmt.Errorf("%w: %s is not an integer", ErrSignatureInvalid, p.name)
+			}
+			*p.dst = &n
+		}
+	}
+	return si, nil
+}
+
 // VerifyRequest verifies the HTTP message signature against pub (an
-// ed25519.PublicKey or P-256 *ecdsa.PublicKey), requiring the mandated
-// component coverage.
+// ed25519.PublicKey or P-256 *ecdsa.PublicKey) with default options; see
+// [VerifyRequestWithOptions].
 func VerifyRequest(req *http.Request, pub crypto.PublicKey) error {
-	// No SetAllowedAlgs: AAuth derives the algorithm from the key's JWK alg
-	// (draft -11 §11.3.1) rather than a signed alg parameter; the verifier
-	// construction below pins the algorithm to the key type.
-	// If the request carries Authorization: AAuth, that header MUST be a
-	// covered component (§6.4) — required symmetrically here.
-	cfg := httpsign.NewVerifyConfig().SetVerifyCreated(false)
-	v, err := newHTTPVerifier(pub, cfg, coveredFields(false, hasAAuthAuthorization(req)))
+	return VerifyRequestWithOptions(req, pub, RequestVerifyOptions{})
+}
+
+// VerifyRequestWithOptions verifies the HTTP message signature on req
+// against pub per draft -11 §11.3.4:
+//
+//  1. Signature, Signature-Input, and Signature-Key must be present
+//     ([ErrSignatureInvalid]).
+//  2. The covered components must include the base set, authorization
+//     when an AAuth credential is sent, and any the options require
+//     ([*MissingComponentsError], matching [ErrSignatureInput]).
+//  3. created must be present and within the validity window: older is
+//     [ErrSignatureInvalid], further ahead than the window is
+//     [ErrClockSkew]. An expires in the past is [ErrSignatureInvalid].
+//  4. The signature must verify under pub, whose type fixes the algorithm
+//     (no alg parameter is consulted), and a Content-Digest must match the
+//     body ([ErrSignatureInvalid]).
+func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts RequestVerifyOptions) error {
+	for _, h := range []string{HeaderSignature, HeaderSignatureInput, HeaderSignatureKey} {
+		if req.Header.Get(h) == "" {
+			return fmt.Errorf("%w: %s missing", ErrSignatureInvalid, h)
+		}
+	}
+	si, err := parseSignatureInput(req, DefaultSignatureLabel)
+	if err != nil {
+		return err
+	}
+
+	required := coveredComponents(false, false, hasAAuthAuthorization(req))
+	required = append(required, opts.RequiredComponents...)
+	if opts.RequireBodyCoverage && requestHasBody(req) {
+		required = append(required, "content-digest", "content-type")
+	}
+	if missing := missingComponents(si.components, required); len(missing) > 0 {
+		return &MissingComponentsError{Required: dedupe(required), Missing: missing}
+	}
+
+	now := opts.now().Unix()
+	window := int64(opts.window() / time.Second)
+	switch {
+	case si.created == nil:
+		return fmt.Errorf("%w: created parameter missing", ErrSignatureInvalid)
+	case *si.created < now-window:
+		return fmt.Errorf("%w: created %d is older than the %ds window", ErrSignatureInvalid, *si.created, window)
+	case *si.created > now+window:
+		return fmt.Errorf("%w: created %d is %ds ahead of the verifier's clock", ErrClockSkew, *si.created, *si.created-now)
+	}
+	if si.expires != nil && *si.expires < now {
+		return fmt.Errorf("%w: signature expired at %d", ErrSignatureInvalid, *si.expires)
+	}
+
+	// The window and expires checks above use the verifier's (injectable)
+	// clock, so httpsign's own wall-clock checks are disabled.
+	cfg := httpsign.NewVerifyConfig().SetVerifyCreated(false).SetRejectExpired(false)
+	v, err := newHTTPVerifier(pub, cfg, httpsign.Headers(coveredComponents(false, false, hasAAuthAuthorization(req))...))
 	if err != nil {
 		return err
 	}
@@ -180,6 +336,48 @@ func VerifyRequest(req *http.Request, pub crypto.PublicKey) error {
 		}
 	}
 	return nil
+}
+
+// MissingComponentsError reports a Signature-Input that does not cover the
+// components the verifier requires (Signature-Error invalid_input with
+// required_input). It matches [ErrSignatureInput] under errors.Is.
+type MissingComponentsError struct {
+	Required []string // every component the verifier requires
+	Missing  []string // the required components the signature omitted
+}
+
+// Error implements error.
+func (e *MissingComponentsError) Error() string {
+	return fmt.Sprintf("%v: missing %s", ErrSignatureInput, strings.Join(e.Missing, ", "))
+}
+
+// Is reports whether target is ErrSignatureInput.
+func (e *MissingComponentsError) Is(target error) bool { return target == ErrSignatureInput }
+
+func missingComponents(have, want []string) []string {
+	set := make(map[string]bool, len(have))
+	for _, c := range have {
+		set[c] = true
+	}
+	var missing []string
+	for _, c := range dedupe(want) {
+		if !set[c] {
+			missing = append(missing, c)
+		}
+	}
+	return missing
+}
+
+func dedupe(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // VerifyAndExtractAgent is the server-side entry point: parse Signature-Key,
@@ -198,7 +396,7 @@ func VerifyAndExtractAgent(ctx context.Context, req *http.Request, opts VerifyAg
 	if err != nil {
 		return nil, err
 	}
-	if err := VerifyRequest(req, pub); err != nil {
+	if err := VerifyRequestWithOptions(req, pub, opts.Signature); err != nil {
 		return nil, err
 	}
 	return claims, nil
