@@ -117,8 +117,9 @@
       "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
       "claims": {
         "dwk": "aauth-person.json",
-        "agent": "aauth:assistant@agent.example",
+        "ps": "https://ps.example",
         "scope": "data.read",
+        "mission_s256": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
         "cnf": {
           "jwk": {
             "kty": "OKP",
@@ -130,7 +131,7 @@
           }
         },
         "iss": "https://ps.example",
-        "sub": "user-1234",
+        "sub": "8f14e45fceea167a5a36dedd4bea2543",
         "aud": [
           "https://resource.example"
         ],
@@ -139,7 +140,48 @@
         "jti": "auth-token-1"
       },
       "audience": "https://resource.example",
-      "token": "eyJhbGciOiJFZDI1NTE5Iiwia2lkIjoia1ByS19xbXhWV2FZVkE5d3dCRjZJdW8zdlZ6ejdUeEhDVHdYQnlnclM0ayIsInR5cCI6ImFhLWF1dGgrand0In0.eyJkd2siOiJhYXV0aC1wZXJzb24uanNvbiIsImFnZW50IjoiYWF1dGg6YXNzaXN0YW50QGFnZW50LmV4YW1wbGUiLCJzY29wZSI6ImRhdGEucmVhZCIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiIxMXFZQVlLeENyZlZTXzdUeVdRSE9nN2hjdlBhcGlNbHJ3SWFhUGNIVVJvIiwia2lkIjoia1ByS19xbXhWV2FZVkE5d3dCRjZJdW8zdlZ6ejdUeEhDVHdYQnlnclM0ayIsImFsZyI6IkVkMjU1MTkiLCJ1c2UiOiJzaWcifX0sImlzcyI6Imh0dHBzOi8vcHMuZXhhbXBsZSIsInN1YiI6InVzZXItMTIzNCIsImF1ZCI6WyJodHRwczovL3Jlc291cmNlLmV4YW1wbGUiXSwiZXhwIjo0MTAyNDQ2NjAwLCJpYXQiOjQxMDI0NDMwMDAsImp0aSI6ImF1dGgtdG9rZW4tMSJ9._OrJhyZpAid_cAgkdS9lHXOsGahnRLcDmkrZjmeN7HZkXO4b2LK7orYPgcrQR36keVtW1BHEDfK3zqEpOhqFBQ"
+      "token": "eyJhbGciOiJFZDI1NTE5Iiwia2lkIjoia1ByS19xbXhWV2FZVkE5d3dCRjZJdW8zdlZ6ejdUeEhDVHdYQnlnclM0ayIsInR5cCI6ImFhLWF1dGgrand0In0.eyJkd2siOiJhYXV0aC1wZXJzb24uanNvbiIsInBzIjoiaHR0cHM6Ly9wcy5leGFtcGxlIiwic2NvcGUiOiJkYXRhLnJlYWQiLCJtaXNzaW9uX3MyNTYiOiJkQmpmdEplWjRDVlAtbUI5MksyN3VoYlVKVTFwMXJfd1cxZ0ZXRk9FalhrIiwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IjExcVlBWUt4Q3JmVlNfN1R5V1FIT2c3aGN2UGFwaU1scndJYWFQY0hVUm8iLCJraWQiOiJrUHJLX3FteFZXYVlWQTl3d0JGNkl1bzN2Vnp6N1R4SENUd1hCeWdyUzRrIiwiYWxnIjoiRWQyNTUxOSIsInVzZSI6InNpZyJ9fSwiaXNzIjoiaHR0cHM6Ly9wcy5leGFtcGxlIiwic3ViIjoiOGYxNGU0NWZjZWVhMTY3YTVhMzZkZWRkNGJlYTI1NDMiLCJhdWQiOlsiaHR0cHM6Ly9yZXNvdXJjZS5leGFtcGxlIl0sImV4cCI6NDEwMjQ0NjYwMCwiaWF0Ijo0MTAyNDQzMDAwLCJqdGkiOiJhdXRoLXRva2VuLTEifQ.XiG4-rWI3-p5SzDn-kwEPoItsd3xJCaPqhGpKHxJy0YbprMXUC2wJ-uB4cBfncgchg34DPZsJrCkJJN26im7AQ"
+    },
+    {
+      "name": "auth token (AS-issued)",
+      "typ": "aa-auth+jwt",
+      "signing_key": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "Ed25519",
+        "use": "sig",
+        "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
+      },
+      "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+      "claims": {
+        "dwk": "aauth-access.json",
+        "ps": "https://ps.example",
+        "scope": "data.read",
+        "account": "alice@example.com",
+        "tenant": "acme",
+        "cnf": {
+          "jwk": {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+            "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+            "alg": "Ed25519",
+            "use": "sig"
+          }
+        },
+        "iss": "https://as.example",
+        "sub": "8f14e45fceea167a5a36dedd4bea2543",
+        "aud": [
+          "https://resource.example"
+        ],
+        "exp": 4102446600,
+        "iat": 4102443000,
+        "jti": "auth-token-as-1"
+      },
+      "audience": "https://resource.example",
+      "token": "eyJhbGciOiJFZDI1NTE5Iiwia2lkIjoia1ByS19xbXhWV2FZVkE5d3dCRjZJdW8zdlZ6ejdUeEhDVHdYQnlnclM0ayIsInR5cCI6ImFhLWF1dGgrand0In0.eyJkd2siOiJhYXV0aC1hY2Nlc3MuanNvbiIsInBzIjoiaHR0cHM6Ly9wcy5leGFtcGxlIiwic2NvcGUiOiJkYXRhLnJlYWQiLCJhY2NvdW50IjoiYWxpY2VAZXhhbXBsZS5jb20iLCJ0ZW5hbnQiOiJhY21lIiwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IjExcVlBWUt4Q3JmVlNfN1R5V1FIT2c3aGN2UGFwaU1scndJYWFQY0hVUm8iLCJraWQiOiJrUHJLX3FteFZXYVlWQTl3d0JGNkl1bzN2Vnp6N1R4SENUd1hCeWdyUzRrIiwiYWxnIjoiRWQyNTUxOSIsInVzZSI6InNpZyJ9fSwiaXNzIjoiaHR0cHM6Ly9hcy5leGFtcGxlIiwic3ViIjoiOGYxNGU0NWZjZWVhMTY3YTVhMzZkZWRkNGJlYTI1NDMiLCJhdWQiOlsiaHR0cHM6Ly9yZXNvdXJjZS5leGFtcGxlIl0sImV4cCI6NDEwMjQ0NjYwMCwiaWF0Ijo0MTAyNDQzMDAwLCJqdGkiOiJhdXRoLXRva2VuLWFzLTEifQ.2sETVfU3hsrk8HDh4iTVY_Ay85YilaPDqsmd3mTL_TnsdYOR7w92uQ80WeQ2DYbmr2xHhob3yih1XPDts0NuBQ"
     },
     {
       "name": "person token",

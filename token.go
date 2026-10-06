@@ -26,49 +26,9 @@ type AgentClaims struct {
 	jwt.RegisteredClaims
 }
 
-// IsSubAgent reports whether the token marks a sub-agent (draft -09 §10.2).
+// IsSubAgent reports whether the token marks a sub-agent (draft -11 §10.2).
 // Sub-agents MUST NOT request authorization directly.
 func (c *AgentClaims) IsSubAgent() bool { return c.ParentAgent != "" }
-
-// AuthClaims is the payload of an aa-auth+jwt (draft -09 §9.4.1) — issued by
-// a PS (three-party, dwk=aauth-person.json) or AS (four-party,
-// dwk=aauth-access.json), asserting identity and/or consent. Bound to the
-// agent's key via cnf.jwk; aud is the resource. At least one of sub or
-// scope MUST be present. Lifetime MUST NOT exceed 1 hour.
-type AuthClaims struct {
-	DWK     string      `json:"dwk"`               // well-known doc name for key discovery
-	Agent   string      `json:"agent"`             // the authorized agent's identifier
-	Scope   string      `json:"scope,omitempty"`   // authorized scopes, space-separated
-	Cnf     Cnf         `json:"cnf"`               // confirmation claim binding the agent's key
-	Mission *MissionRef `json:"mission,omitempty"` // mission context, when issued under one
-	Tenant  string      `json:"tenant,omitempty"`  // tenant identifier (enterprise deployments)
-	// Act records the upstream delegation chain (§10.3, RFC 8693 §4.1).
-	// Absent for a directly-obtained token; present after call chaining or
-	// sub-agent authorization.
-	Act *ActClaim `json:"act,omitempty"`
-	jwt.RegisteredClaims
-}
-
-// ActClaim is a node in the delegation chain (§10.3). Agent is the aauth:
-// identifier of the immediate upstream agent — the intermediary resource in
-// call chaining, or the parent in sub-agent authorization. If that agent was
-// itself delegated to, its upstream is the nested Act. The + delimiter in an
-// AAuth identifier distinguishes sub-agent from call-chain relationships, so
-// no separate type field is needed. The presenter's own identity is in the
-// top-level agent claim and is not repeated inside act.
-type ActClaim struct {
-	Agent string    `json:"agent"`         // the immediate upstream agent's identifier
-	Act   *ActClaim `json:"act,omitempty"` // the next node up the chain, if any
-}
-
-// Delegators returns the chain of upstream agent identifiers, nearest first.
-func (a *ActClaim) Delegators() []string {
-	var out []string
-	for n := a; n != nil; n = n.Act {
-		out = append(out, n.Agent)
-	}
-	return out
-}
 
 // mintTyped signs claims as a JWT with the given typ and kid header. The
 // JWS alg is the fully-specified algorithm of key (draft -11 §11.5.1):
@@ -105,11 +65,6 @@ func mintTyped(claims jwt.Claims, key crypto.Signer, typ, kid string) (string, e
 // key within the provider's JWKS (draft -11 §11.5.1).
 func MintAgentToken(claims AgentClaims, key crypto.Signer, kid string) (string, error) {
 	return mintTyped(claims, key, TypAgent, kid)
-}
-
-// MintAuthToken signs an aa-auth+jwt (Person Server or Access Server side).
-func MintAuthToken(claims AuthClaims, key crypto.Signer, kid string) (string, error) {
-	return mintTyped(claims, key, TypAuth, kid)
 }
 
 // KeyResolver resolves the token-signature verification key for an issuer.

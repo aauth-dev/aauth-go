@@ -87,7 +87,7 @@ func (w *threePartyWorld) serveResource(t *testing.T, resourceURL func() string,
 		switch typ {
 		case TypAuth:
 			// §9.4.2: after authorization the agent presents the auth token.
-			claims, err := VerifyAndExtractAuth(r.Context(), r, resourceURL(), localOpts(w.resolver()))
+			claims, err := VerifyAndExtractAuth(r.Context(), r, resourceURL(), AuthTokenVerifyOptions{TokenVerifyOptions: localOpts(w.resolver())})
 			if err != nil {
 				WriteSignatureFailure(rw, err)
 				return
@@ -153,7 +153,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 		// §6.7.2: the resource token is addressed to us and bound to this
 		// agent's key, and the presented person token is ours, for that
 		// resource, and the one the resource token names.
-		rc, _, err := VerifyResourceToken(r.Context(), treq.ResourceToken, ResourceTokenVerifyOptions{
+		rc, presented, err := VerifyResourceToken(r.Context(), treq.ResourceToken, ResourceTokenVerifyOptions{
 			TokenVerifyOptions: localOpts(w.resolver()),
 			Audience:           w.psURL,
 			PS:                 w.psURL,
@@ -177,7 +177,17 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 			_ = json.NewEncoder(rw).Encode(PendingStatus{Status: "pending"})
 			return
 		}
-		w.writeAuthToken(t, rw, agent, rc)
+		// §9.4.1: sub, account, mission_s256, and tenant from the
+		// resource token; exp bounded by the agent and presented tokens.
+		tok, _, err := IssueAuthToken(AuthTokenParams{
+			Issuer: w.psURL, Resource: rc, Presented: presented, Agent: agent, Scope: rc.Scope,
+		}, w.psAgent.Key, w.psAgent.JWK().Kid)
+		if err != nil {
+			WriteTokenError(rw, err)
+			return
+		}
+		rw.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(rw).Encode(TokenResponse{AuthToken: tok, ExpiresIn: 3600})
 	})
 	psMux.HandleFunc("GET /pending/tok1", func(rw http.ResponseWriter, r *http.Request) {
 		if int(w.polls.Add(1)) < w.interactionPolls {
@@ -217,7 +227,7 @@ func (w *threePartyWorld) writeAuthToken(t *testing.T, rw http.ResponseWriter, a
 	jti, _ := randomJTI()
 	tok, err := MintAuthToken(AuthClaims{
 		DWK:   WellKnownPerson,
-		Agent: agent.Subject,
+		PS:    w.psURL,
 		Scope: rc.Scope,
 		Cnf:   Cnf{JWK: agent.Cnf.JWK},
 		RegisteredClaims: jwt.RegisteredClaims{

@@ -70,10 +70,11 @@ func MintResourceToken(claims ResourceClaims, key crypto.Signer, kid string) (st
 
 // PresentedToken is a verified token that a request carried in
 // Signature-Key and that a resource token names (draft -11 §6.7): a person
-// token (*[PersonClaims]) returned by [VerifyPersonToken] or
-// [VerifyAndExtractPerson]. Only claims returned by this package's
-// verification functions qualify; claims built or decoded by hand are
-// refused.
+// token (*[PersonClaims]) or an auth token (*[AuthClaims]). It is also the
+// form of a verified presented_token or upstream_token at a PS or AS
+// (§6.7.2, §9.4.5). Only claims returned by this package's verification
+// functions qualify for issuing a resource token; claims built or decoded
+// by hand are refused.
 type PresentedToken interface {
 	// PersonServer is the PS whose namespace the token's sub belongs to:
 	// the iss of a person token, the ps of an auth token.
@@ -86,6 +87,7 @@ type PresentedToken interface {
 type presentedView struct {
 	typ, ps, sub, jti, missionS256, tenant string
 	cnf                                    *JWK
+	exp                                    time.Time
 	verified                               bool
 }
 
@@ -95,7 +97,8 @@ func (c *PersonClaims) PersonServer() string { return c.Issuer }
 func (c *PersonClaims) presented() presentedView {
 	return presentedView{
 		typ: TypPerson, ps: c.Issuer, sub: c.Subject, jti: c.ID,
-		missionS256: c.MissionS256, tenant: c.Tenant, cnf: c.Cnf.JWK, verified: c.verified,
+		missionS256: c.MissionS256, tenant: c.Tenant, cnf: c.Cnf.JWK,
+		exp: timeOf(c.ExpiresAt), verified: c.verified,
 	}
 }
 
@@ -115,7 +118,7 @@ type ResourceTokenParams struct {
 	Resource string
 	// Audience is the party that will redeem the token: the resource's AS
 	// in four-party. Empty means three-party: the PS the presented token
-	// names (the iss of a person token, §6.7).
+	// names (the iss of a person token, the ps of an auth token, §6.7).
 	Audience string
 	// Scope is the requested scope, space-separated (§11.10).
 	Scope string
@@ -262,7 +265,8 @@ type ResourceTokenVerifyOptions struct {
 //
 //  1. the resource token per §11.5.2, with aud equal to opts.Audience;
 //  2. agent_jkt equal to opts.AgentJKT;
-//  3. the presented token by its typ — a person token per §7.1.4 — with aud
+//  3. the presented token by its typ — a person token per §7.1.4 or an auth
+//     token per §9.4.3 (without the resource's record check) — with aud
 //     equal to the resource token's iss and cnf.jwk matching agent_jkt;
 //     then its jti equals presented_jti, its PS equals ps, and its sub,
 //     mission_s256, and tenant equal the resource token's; and ps names
@@ -342,9 +346,15 @@ func verifyPresented(ctx context.Context, opts ResourceTokenVerifyOptions, rc *R
 			return nil, NewTokenParamError(ParamPresentedToken, err)
 		}
 		presented = pc
+	case TypAuth:
+		ac, err := verifyAuthJWT(ctx, opts.PresentedToken, rc.Issuer, popts)
+		if err != nil {
+			return nil, NewTokenParamError(ParamPresentedToken, err)
+		}
+		presented = ac
 	default:
 		return nil, NewTokenParamError(ParamPresentedToken,
-			fmt.Errorf("%w: presented token typ %q is not %s", ErrWrongTokenType, typ, TypPerson))
+			fmt.Errorf("%w: presented token typ %q is neither %s nor %s", ErrWrongTokenType, typ, TypPerson, TypAuth))
 	}
 	if cnf := presented.presented().cnf; cnf == nil || cnf.Thumbprint() != rc.AgentJKT {
 		return nil, NewTokenParamError(ParamPresentedToken,

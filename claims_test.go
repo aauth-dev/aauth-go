@@ -24,6 +24,7 @@ func mintTestAuth(t *testing.T, issuer *Agent, a *Agent, iss, aud string, now ti
 	jwk := a.JWK()
 	c := AuthClaims{
 		DWK:   WellKnownPerson,
+		PS:    iss,
 		Scope: "files:read",
 		Cnf:   Cnf{JWK: &jwk},
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -87,11 +88,11 @@ func TestCommonClaimRules(t *testing.T) {
 		{name: "lifetime over one hour", mutate: func(c *AuthClaims) {
 			c.ExpiresAt = jwt.NewNumericDate(now.Add(time.Hour + time.Second))
 		}, want: ErrInvalidToken},
-		{name: "iss not a server identifier", mutate: func(c *AuthClaims) { c.Issuer = "https://ps.example:8443" }, opts: func(o TokenVerifyOptions) TokenVerifyOptions {
+		{name: "iss not a server identifier", mutate: func(c *AuthClaims) { c.Issuer = "https://ps.example:8443"; c.PS = c.Issuer }, opts: func(o TokenVerifyOptions) TokenVerifyOptions {
 			o.Resolver = StaticResolver{"https://ps.example:8443": ps.JWKS()}
 			return o
 		}, want: ErrInvalidToken},
-		{name: "iss check skipped for local development", mutate: func(c *AuthClaims) { c.Issuer = "http://127.0.0.1:8080" }, opts: func(o TokenVerifyOptions) TokenVerifyOptions {
+		{name: "iss check skipped for local development", mutate: func(c *AuthClaims) { c.Issuer = "http://127.0.0.1:8080"; c.PS = c.Issuer }, opts: func(o TokenVerifyOptions) TokenVerifyOptions {
 			o.Resolver = StaticResolver{"http://127.0.0.1:8080": ps.JWKS()}
 			o.InsecureSkipIdentifierCheck = true
 			return o
@@ -110,7 +111,7 @@ func TestCommonClaimRules(t *testing.T) {
 				o = c.opts(o)
 			}
 			tok := mintTestAuth(t, ps, agent, iss, aud, now, c.mutate)
-			_, err := VerifyAuthToken(ctx, tok, aud, o)
+			_, err := VerifyAuthToken(ctx, tok, aud, AuthTokenVerifyOptions{TokenVerifyOptions: o})
 			switch {
 			case c.want == nil && err != nil:
 				t.Fatalf("rejected: %v", err)
@@ -129,7 +130,7 @@ func TestVerifyAuthTokenSelfSignedCnf(t *testing.T) {
 	a := testAgent(t)
 	now := time.Now()
 	tok := mintTestAuth(t, a, a, "https://ps.example", "https://resource.example", now, nil)
-	if _, err := VerifyAuthToken(context.Background(), tok, "https://resource.example", TokenVerifyOptions{Resolver: SelfSignedResolver{}}); err != nil {
+	if _, err := VerifyAuthToken(context.Background(), tok, "https://resource.example", AuthTokenVerifyOptions{TokenVerifyOptions: TokenVerifyOptions{Resolver: SelfSignedResolver{}}}); err != nil {
 		t.Fatalf("self-signed auth token: %v", err)
 	}
 }

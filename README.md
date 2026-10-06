@@ -97,10 +97,10 @@ The root package is the stable protocol vocabulary. Grouped by role:
 | **Identity** | [`Agent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent), [`NewAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#NewAgent), [`Agent.MintToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.MintToken), [`Agent.MintSubAgentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.MintSubAgentToken), [`ParseAgentIdentifier`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ParseAgentIdentifier) |
 | **Signing** | [`SignRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#SignRequest), [`AttachSignatureKey`](https://pkg.go.dev/github.com/aauth-dev/auth-go#AttachSignatureKey), [`VerifyRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyRequest), [`ServerSigner`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ServerSigner), [`VerifyServerRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyServerRequest) |
 | **Verification / trust** | [`VerifyAndExtractAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAndExtractAgent), [`VerifyAgentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAgentToken), [`KeyResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#KeyResolver) · [`JWKSResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#JWKSResolver) · [`StaticResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#StaticResolver) · [`SelfSignedResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#SelfSignedResolver) |
-| **Person Server side** | [`IssuePersonToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssuePersonToken), [`VerifySubagentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifySubagentToken), [`WriteTokenError`](https://pkg.go.dev/github.com/aauth-dev/auth-go#WriteTokenError) |
+| **Person Server side** | [`IssuePersonToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssuePersonToken), [`VerifyResourceToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyResourceToken), [`IssueAuthToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssueAuthToken), [`VerifySubagentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifySubagentToken), [`WriteTokenError`](https://pkg.go.dev/github.com/aauth-dev/auth-go#WriteTokenError) |
 | **Agent client** | [`PSClient`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient) ([`RequestPermission`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.RequestPermission), [`ExchangeToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.ExchangeToken), [`Audit`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.Audit)), [`Transport`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Transport) |
 | **Resource side** | [`VerifyAndExtractPerson`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAndExtractPerson), [`IssueResourceToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssueResourceToken), [`ChallengeAuthToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ChallengeAuthToken), [`VerifyAndExtractAuth`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAndExtractAuth) |
-| **Delegation** | [`RouteDownstream`](https://pkg.go.dev/github.com/aauth-dev/auth-go#RouteDownstream), [`ActClaim`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ActClaim), [`NextAct`](https://pkg.go.dev/github.com/aauth-dev/auth-go#NextAct) |
+| **Delegation** | [`RouteDownstream`](https://pkg.go.dev/github.com/aauth-dev/auth-go#RouteDownstream), [`VerifyUpstreamToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyUpstreamToken), [`VerifySubagentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifySubagentToken) |
 | **Deferred / interaction** | [`DoDeferred`](https://pkg.go.dev/github.com/aauth-dev/auth-go#DoDeferred), [`Requirement`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Requirement), [`WriteClarification`](https://pkg.go.dev/github.com/aauth-dev/auth-go#WriteClarification), [`interactioncode`](https://pkg.go.dev/github.com/aauth-dev/auth-go/interactioncode) |
 
 ## Protocol coverage
@@ -155,7 +155,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | PS-Asserted (three-party; challenge → PS token exchange → auth token) | ✅ |
 | Person tokens (`aa-person+jwt`, §7.1): issue with lifetime bounds (1h, agent / upstream / mission expiry), sub-agent key binding, verify incl. cnf request binding and no `scope`/`account` | ✅ |
 | Resource tokens (`aa-resource+jwt`, §6.7): issued only against a verified person token (`ps`, `sub`, `presented_jti`, `mission_s256`, `tenant` copied; `agent_jkt` from its `cnf`); PS/AS verification with the presented-token cross-check (§6.7.2); agent-side challenge verification incl. JWT signature, `ps`, `sub`, `presented_jti` (§6.7.3) | ✅ |
-| Auth tokens (`aa-auth+jwt`): -09 claim set, verification incl. cnf request binding (§9.4) | ✅ |
+| Auth tokens (`aa-auth+jwt`, §9.4): draft -11 claim set (`ps`, `sub`, `scope`, `account`, `mission_s256`, `tenant`; no `agent`/`act`/`mission`); `IssueAuthToken` with exp bounds (1h, agent / presented / upstream / mission); resource verification incl. cnf request binding and an `(iss, sub)` record-check hook; agent-side response verification (§9.4.4); upstream token verification (§9.4.5) | ✅ |
 | `AAuth-Requirement` header codec | ✅ |
 | Federated (four-party; Access Server) | ⬜ |
 | Rich Resource Requests (R3) | ⛔ |
@@ -168,7 +168,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Deferred responses (202 / `Location` / `Retry-After` / `Prefer: wait`, 429 backoff) | ✅ |
 | Audit endpoint (§7.5) + mission-status errors (§8.6) | ✅ |
 | Clarification chat (§7.3): question → answer / updated-request / cancel | ✅ |
-| Call chaining (§10.1) + `act` delegation chain (§10.3) | ✅ |
+| Call chaining (§10.1.1): routing by the upstream token's PS, upstream token verification; downstream person-token step and intermediary flow | 🟡 |
 | Interaction chaining (§10.1.2) | ✅ |
 | Interaction codes (Crockford base32) | ✅ |
 | Mission lifecycle: proposal, approval, scoped access, completion | ⬜ |

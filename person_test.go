@@ -73,7 +73,7 @@ func TestIssueAndVerifyPersonToken(t *testing.T) {
 	}
 
 	// A person token is never an auth token (§7.1.4, §13.11).
-	if _, err := VerifyAuthToken(ctx, tok, testResource, psOpts(ps)); !errors.Is(err, ErrWrongTokenType) {
+	if _, err := VerifyAuthToken(ctx, tok, testResource, AuthTokenVerifyOptions{TokenVerifyOptions: psOpts(ps)}); !errors.Is(err, ErrWrongTokenType) {
 		t.Fatalf("person token as auth token: err = %v, want ErrWrongTokenType", err)
 	}
 	// Another resource's token.

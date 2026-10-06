@@ -50,67 +50,6 @@ func ChallengeAuthToken(w http.ResponseWriter, resourceToken string) {
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
-// VerifyAuthToken verifies an aa-auth+jwt per §9.4.3 and the common JWT
-// rules (draft -11 §11.5.2) from the resource's perspective: issuer trust
-// via opts.Resolver, dwk aauth-access.json or aauth-person.json, iss a
-// server identifier, iat REQUIRED, a lifetime (exp − iat) of at most one
-// hour, aud = this resource, a valid cnf.jwk, at least one of sub/scope,
-// and exp in the future with no skew tolerance. Request-context binding
-// (cnf.jwk vs the HTTP signature) is completed by [VerifyAndExtractAuth].
-func VerifyAuthToken(ctx context.Context, token, resourceURL string, opts TokenVerifyOptions) (*AuthClaims, error) {
-	claims := &AuthClaims{}
-	check := jwtCheck{
-		typ:         TypAuth,
-		dwks:        []string{WellKnownAccess, WellKnownPerson},
-		maxLifetime: MaxAuthTokenLifetime,
-		issuer:      func(iss string) error { return opts.checkServerIdentifier("iss", iss) },
-		resolver:    opts.Resolver,
-		clock:       opts.Signature,
-	}
-	if err := check.verify(ctx, token, claims); err != nil {
-		return nil, err
-	}
-	if err := checkAudience("auth token", claims.Audience, resourceURL); err != nil {
-		return nil, err
-	}
-	if claims.Cnf.JWK == nil {
-		return nil, fmt.Errorf("%w: cnf.jwk", ErrMissingClaim)
-	}
-	// cnf.jwk MUST carry a fully-specified alg (draft -11 §11.5.1).
-	if err := claims.Cnf.JWK.Validate(); err != nil {
-		return nil, fmt.Errorf("cnf.jwk: %w", err)
-	}
-	if claims.Subject == "" && claims.Scope == "" {
-		return nil, fmt.Errorf("%w: at least one of sub/scope", ErrMissingClaim)
-	}
-	if err := checkExpiry(&claims.RegisteredClaims, opts.Signature); err != nil {
-		return nil, err
-	}
-	return claims, nil
-}
-
-// VerifyAndExtractAuth authenticates a resource request signed with an auth
-// token in Signature-Key (§9.4.2): verify the token ([VerifyAuthToken]),
-// then the HTTP message signature against its cnf.jwk.
-func VerifyAndExtractAuth(ctx context.Context, req *http.Request, resourceURL string, opts TokenVerifyOptions) (*AuthClaims, error) {
-	token, err := ParseSignatureKey(req)
-	if err != nil {
-		return nil, err
-	}
-	claims, err := VerifyAuthToken(ctx, token, resourceURL, opts)
-	if err != nil {
-		return nil, err
-	}
-	pub, err := claims.Cnf.JWK.PublicKey()
-	if err != nil {
-		return nil, err
-	}
-	if err := VerifyRequestWithOptions(req, pub, opts.Signature); err != nil {
-		return nil, err
-	}
-	return claims, nil
-}
-
 // ExchangeToken presents a resource token at the PS token endpoint (§7.1.3)
 // and returns the granted auth token, following deferred (202) responses —
 // including operator/user interaction waits — until resolution.

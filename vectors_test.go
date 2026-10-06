@@ -578,7 +578,7 @@ func verifyVectorToken(t *testing.T, c jwtCase) error {
 		_, err := VerifyAgentToken(ctx, c.Token, VerifyAgentTokenOptions{Resolver: resolver, RequireProviderClaims: true, Signature: clock})
 		return err
 	case TypAuth:
-		_, err := VerifyAuthToken(ctx, c.Token, c.Audience, TokenVerifyOptions{Resolver: resolver, Signature: clock})
+		_, err := VerifyAuthToken(ctx, c.Token, c.Audience, AuthTokenVerifyOptions{TokenVerifyOptions: TokenVerifyOptions{Resolver: resolver, Signature: clock}})
 		return err
 	case TypPerson:
 		_, err := VerifyPersonToken(ctx, c.Token, c.Audience, TokenVerifyOptions{Resolver: resolver, Signature: clock})

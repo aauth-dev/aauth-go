@@ -25,7 +25,8 @@ import (
 //   - on 401 requirement=auth-token (§6.5), verifies the resource-token
 //     challenge against the token it presented (§6.7.3), exchanges it at the
 //     PS token endpoint with that token as presented_token — following
-//     deferred (202) waits — caches the auth token, and retries. Step-up
+//     deferred (202) waits — checks the auth token it receives (§9.4.4),
+//     caches it, and retries. Step-up
 //     re-challenges (§6.5) trigger a fresh exchange;
 //   - follows resource-managed 202 interaction waits (§6.5), surfacing
 //     requirement=interaction via OnRequirement;
@@ -126,12 +127,20 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if t.PS == nil {
 			return nil, fmt.Errorf("aauth: resource at %s requires an auth token but Transport.PS is not configured", org)
 		}
-		if _, err := VerifyResourceChallenge(req.Context(), reqmt.ResourceToken, t.challengeOptions(org, presented)); err != nil {
+		rc, err := VerifyResourceChallenge(req.Context(), reqmt.ResourceToken, t.challengeOptions(org, presented))
+		if err != nil {
 			return nil, fmt.Errorf("aauth: challenge from %s: %w", org, err)
 		}
 		grant, err := t.PS.ExchangeToken(req.Context(), TokenRequest{ResourceToken: reqmt.ResourceToken, PresentedToken: presented})
 		if err != nil {
 			return nil, err
+		}
+		// §9.4.4: the grant is from the party the resource token named, for
+		// this resource, our key, and the person we presented.
+		if _, err := VerifyAuthTokenResponse(req.Context(), grant.AuthToken, AuthResponseVerifyOptions{
+			Resource: rc, Agent: t.Agent, Presented: presented,
+		}); err != nil {
+			return nil, fmt.Errorf("aauth: auth token for %s: %w", org, err)
 		}
 		t.storeAuth(org, grant)
 		cred = grant.AuthToken
