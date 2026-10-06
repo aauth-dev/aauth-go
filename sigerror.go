@@ -46,7 +46,9 @@ const (
 )
 
 // AcceptedSignatureSchemes returns the Signature-Key schemes this
-// implementation verifies on AAuth requests, in preference order.
+// implementation verifies on agent-facing AAuth requests: agents MUST use
+// jwt (draft -11 §11.3.2). Endpoints for server-signed requests accept
+// jwks_uri instead (see [VerifyServerRequest]).
 func AcceptedSignatureSchemes() []string { return []string{SchemeJWT} }
 
 // AcceptedSignatureAlgs returns the fully-specified algorithms this
@@ -65,6 +67,11 @@ type SignatureError struct {
 	// form (a token, a quoted string, an inner list, ...). Unknown members
 	// are preserved; recipients ignore what they don't know.
 	Params map[string]string
+	// AcceptSchemes, when set, overrides the Accept-Signature-Scheme list
+	// WriteSignatureError sends with unsupported_scheme (for example
+	// jwks_uri on an endpoint for server-signed requests). It is not part
+	// of the Signature-Error header.
+	AcceptSchemes []string
 }
 
 // Error implements error.
@@ -234,7 +241,12 @@ func SignatureErrorFor(err error) (e SignatureError, ok bool) {
 	case errors.Is(err, ErrClockSkew):
 		return SignatureError{Code: SigErrClockSkew}, true
 	case errors.Is(err, ErrUnsupportedScheme):
-		return SignatureError{Code: SigErrUnsupportedScheme}, true
+		e := SignatureError{Code: SigErrUnsupportedScheme}
+		var use *UnsupportedSchemeError
+		if errors.As(err, &use) {
+			e.AcceptSchemes = use.Accepted
+		}
+		return e, true
 	case errors.Is(err, ErrUnsupportedAlgorithm):
 		return SignatureError{Code: SigErrUnsupportedAlgorithm}, true
 	case errors.Is(err, ErrInvalidKey):
@@ -279,7 +291,11 @@ func WriteSignatureError(w http.ResponseWriter, e SignatureError, detail string)
 	h.Set(HeaderSignatureError, e.String())
 	switch e.Code {
 	case SigErrUnsupportedScheme:
-		h.Set(HeaderAcceptSignatureScheme, strings.Join(AcceptedSignatureSchemes(), ", "))
+		schemes := e.AcceptSchemes
+		if len(schemes) == 0 {
+			schemes = AcceptedSignatureSchemes()
+		}
+		h.Set(HeaderAcceptSignatureScheme, strings.Join(schemes, ", "))
 	case SigErrUnsupportedAlgorithm:
 		h.Set(HeaderAcceptSignatureAlg, strings.Join(AcceptedSignatureAlgs(), ", "))
 	}

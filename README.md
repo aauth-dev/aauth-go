@@ -95,7 +95,7 @@ The root package is the stable protocol vocabulary. Grouped by role:
 | Area | Key symbols |
 |---|---|
 | **Identity** | [`Agent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent), [`NewAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#NewAgent), [`Agent.MintToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.MintToken), [`Agent.MintSubAgentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.MintSubAgentToken), [`ParseAgentIdentifier`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ParseAgentIdentifier) |
-| **Signing** | [`SignRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#SignRequest), [`AttachSignatureKey`](https://pkg.go.dev/github.com/aauth-dev/auth-go#AttachSignatureKey), [`VerifyRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyRequest) |
+| **Signing** | [`SignRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#SignRequest), [`AttachSignatureKey`](https://pkg.go.dev/github.com/aauth-dev/auth-go#AttachSignatureKey), [`VerifyRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyRequest), [`ServerSigner`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ServerSigner), [`VerifyServerRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyServerRequest) |
 | **Verification / trust** | [`VerifyAndExtractAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAndExtractAgent), [`VerifyAgentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAgentToken), [`KeyResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#KeyResolver) · [`JWKSResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#JWKSResolver) · [`StaticResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#StaticResolver) · [`SelfSignedResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#SelfSignedResolver) |
 | **Agent client** | [`PSClient`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient) ([`RequestPermission`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.RequestPermission), [`ExchangeToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.ExchangeToken), [`Audit`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.Audit)), [`Transport`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Transport) |
 | **Resource side** | [`IssueResourceToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssueResourceToken), [`ChallengeAuthToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ChallengeAuthToken), [`VerifyAndExtractAuth`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAndExtractAuth) |
@@ -137,7 +137,9 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | HTTP Message Signatures profile (`@method @authority @path signature-key`; `content-digest` + `content-type` on bodies; `created` validity window with `clock_skew`; no `alg`/`keyid` parameters) | ✅ |
 | Signature-Key header parsed as an RFC 9651 dictionary; scheme `jwt` (others answered `unsupported_scheme`) | ✅ |
 | Error model: signature-key-09 `Signature-Error` codes, 401 on every signature failure, `Accept-Signature-Scheme` / `Accept-Signature-Alg`, RFC 9457 problem bodies | ✅ |
-| Signature-Key schemes `hwk` / `jkt-jwt` / `jwks_uri`; two-key AP minting | ⬜ |
+| Signature-Key scheme `jwks_uri` for server-signed requests (PS→AS, revocation; §11.3.2): `ServerSigner`, `VerifyServerRequest` | ✅ |
+| Signature-Key scheme `jkt-jwt` (AP key refresh); two-key AP minting | ⬜ |
+| Signature-Key scheme `hwk` (not used by AAuth, §11.3.2) | ⛔ |
 | Signature-Key scheme `x509` | ⛔ |
 
 ### Layer 2 — Resource access

@@ -28,7 +28,7 @@ func newJWKSServer(t *testing.T, keys ...JWK) *jwksServer {
 	t.Helper()
 	s := &jwksServer{set: JWKS{Keys: keys}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/aauth-agent.json", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /.well-known/{doc}", func(w http.ResponseWriter, _ *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.fail {

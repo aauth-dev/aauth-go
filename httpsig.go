@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -124,6 +125,22 @@ func ParseSignatureKeyMember(req *http.Request, label string) (SignatureKey, err
 	return sk, nil
 }
 
+// UnsupportedSchemeError reports a Signature-Key scheme the verifier does
+// not accept for this request, with the schemes it does accept (sent as
+// Accept-Signature-Scheme). It matches [ErrUnsupportedScheme].
+type UnsupportedSchemeError struct {
+	Scheme   string   // the scheme presented
+	Accepted []string // the schemes the verifier accepts here
+}
+
+// Error implements error.
+func (e *UnsupportedSchemeError) Error() string {
+	return fmt.Sprintf("%v: %q (accepted: %s)", ErrUnsupportedScheme, e.Scheme, strings.Join(e.Accepted, ", "))
+}
+
+// Is reports whether target is ErrUnsupportedScheme.
+func (e *UnsupportedSchemeError) Is(target error) bool { return target == ErrUnsupportedScheme }
+
 // ParseSignatureKey returns the JWT carried under the jwt scheme for the
 // default label. Any other scheme is [ErrUnsupportedScheme] (draft -11
 // §11.3.4 step 4: agents MUST use the jwt scheme).
@@ -133,7 +150,7 @@ func ParseSignatureKey(req *http.Request) (string, error) {
 		return "", err
 	}
 	if sk.Scheme != SchemeJWT {
-		return "", fmt.Errorf("%w: %q", ErrUnsupportedScheme, sk.Scheme)
+		return "", &UnsupportedSchemeError{Scheme: sk.Scheme, Accepted: []string{SchemeJWT}}
 	}
 	tok := sk.Params["jwt"]
 	if tok == "" {
@@ -377,7 +394,7 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 		return err
 	}
 	if err := httpsign.VerifyRequest(DefaultSignatureLabel, *v, req); err != nil {
-		return fmt.Errorf("%w: %w", ErrSignatureInvalid, err)
+		return fmt.Errorf("%w: %w: %w", ErrSignatureInvalid, errSignatureMismatch, err)
 	}
 	if cds := req.Header.Values("Content-Digest"); len(cds) > 0 && req.Body != nil {
 		if err := httpsign.ValidateContentDigestHeader(cds, &req.Body, []string{ContentDigestAlg}); err != nil {
@@ -386,6 +403,9 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 	}
 	return nil
 }
+
+// errSignatureMismatch marks a failure of the RFC 9421 cryptographic check.
+var errSignatureMismatch = errors.New("signature does not verify")
 
 // MissingComponentsError reports a Signature-Input that does not cover the
 // components the verifier requires (Signature-Error invalid_input with
