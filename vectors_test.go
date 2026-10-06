@@ -376,6 +376,8 @@ func metadataTarget(doc string) (any, error) {
 		return &AgentProviderMetadata{}, nil
 	case WellKnownPerson:
 		return &PersonServerMetadata{}, nil
+	case WellKnownAccess:
+		return &AccessServerMetadata{}, nil
 	case WellKnownResource:
 		return &ResourceMetadata{}, nil
 	}
@@ -411,6 +413,12 @@ func runMetadataVectors(t *testing.T, raw json.RawMessage, _ bool) any {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: round trip\n got %s\nwant %s", c.Document, out, c.JSON)
+		}
+		// Every example publishes its role's REQUIRED members.
+		if v, ok := dst.(interface{ Validate() error }); !ok {
+			t.Errorf("%s: no Validate method", c.Document)
+		} else if err := v.Validate(); err != nil {
+			t.Errorf("%s: %v", c.Document, err)
 		}
 	}
 	return nil

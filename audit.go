@@ -1,11 +1,9 @@
 package aauth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -60,8 +58,8 @@ func missionStatusErrorFrom(status int, body []byte) *MissionStatusError {
 // The endpoint is PersonServerMetadata.AuditEndpoint when discovered, else
 // BaseURL+"/audit".
 func (c *PSClient) Audit(ctx context.Context, a AuditRequest) error {
-	if c.Agent == nil {
-		return fmt.Errorf("aauth: PSClient.Agent is required")
+	if err := c.requireAgent(); err != nil {
+		return err
 	}
 	if a.Action == "" {
 		return fmt.Errorf("aauth: AuditRequest.Action is required")
@@ -69,36 +67,7 @@ func (c *PSClient) Audit(ctx context.Context, a AuditRequest) error {
 	if a.Mission.Approver == "" || a.Mission.S256 == "" {
 		return fmt.Errorf("aauth: AuditRequest.Mission is required (audit needs a mission, §7.5)")
 	}
-	endpoint := c.AuditEndpoint
-	if endpoint == "" {
-		endpoint = c.BaseURL + "/audit"
-	}
-	body, err := json.Marshal(a)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.ContentLength = int64(len(body))
-	req.Body = io.NopCloser(bytes.NewReader(body))
-
-	tok, err := c.Agent.MintToken()
-	if err != nil {
-		return fmt.Errorf("aauth: mint agent token: %w", err)
-	}
-	AttachSignatureKey(req, tok)
-	if err := SignRequest(req, c.Agent.Key, ""); err != nil {
-		return fmt.Errorf("aauth: sign: %w", err)
-	}
-
-	hc := c.HTTPClient
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	res, err := hc.Do(req)
+	res, err := c.post(ctx, c.endpoint(c.AuditEndpoint, "/audit"), a, false)
 	if err != nil {
 		return err
 	}
@@ -106,7 +75,7 @@ func (c *PSClient) Audit(ctx context.Context, a AuditRequest) error {
 	if res.StatusCode == http.StatusCreated {
 		return nil
 	}
-	b, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+	b := readErrorBody(res)
 	if mse := missionStatusErrorFrom(res.StatusCode, b); mse != nil {
 		return mse
 	}

@@ -135,6 +135,8 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Verification (§5.2.4) — pluggable trust: JWKS discovery / pinned keys / self-signed | ✅ |
 | Common JWT rules (§11.5): `typ`/`dwk` checked, `iat` required (ahead of the clock → `clock_skew`), `exp` with no skew tolerance, `iss` a server identifier, person/auth lifetime ≤ 1h, `BoundedExpiry` for issuers; token-parameter error codes (`invalid_`/`expired_`/`revoked_` × `presented`/`upstream`/`subagent`/`resource`, §11.9.3) | ✅ |
 | Metadata `issuer` verified against the fetch URL (`issuer_missing` / `issuer_mismatch`, §11.2) | ✅ |
+| Metadata documents for all four roles (§11.2): common members (`accept_signature_algs`, display fields), PS `auth_token_endpoint` + `person_token_endpoint` (REQUIRED) and optional endpoints, `aauth-access.json`, resource `scope_descriptions` / `signature_window` / `revocation_endpoint`; `Validate` for REQUIRED members; `PSClient.Discover` | ✅ |
+| `aauth-resource` link relation (§11.2.5): `ResourceMetadataLink`, `ResourceLinks` (only server-identifier targets) | ✅ |
 | JWKS cache (§11.4): cache headers, 1-minute refresh floor, unknown-`kid` and re-key refresh, 24h max age, backoff, bounded entries | ✅ |
 | Egress admission for discovery fetches (signature-key §7.3) | 🟡 bring your own `http.Client` |
 | HTTP Message Signatures profile (`@method @authority @path signature-key`; `content-digest` + `content-type` on bodies; `created` validity window with `clock_skew`; no `alg`/`keyid` parameters) | ✅ |

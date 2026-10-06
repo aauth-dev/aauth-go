@@ -1,11 +1,9 @@
 package aauth
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 )
 
@@ -48,11 +46,12 @@ type TokenResponse struct {
 // and returns the granted auth token, following deferred (202) responses —
 // including operator/user interaction waits — until resolution.
 //
-// The endpoint is PersonServerMetadata.TokenEndpoint when discovered, else
+// The endpoint is [PSClient.AuthTokenEndpoint] (from
+// PersonServerMetadata.AuthTokenEndpoint when discovered), else
 // BaseURL+"/token".
 func (c *PSClient) ExchangeToken(ctx context.Context, treq TokenRequest) (*TokenResponse, error) {
-	if c.Agent == nil {
-		return nil, fmt.Errorf("aauth: PSClient.Agent is required")
+	if err := c.requireAgent(); err != nil {
+		return nil, err
 	}
 	if treq.ResourceToken == "" {
 		return nil, fmt.Errorf("aauth: TokenRequest.ResourceToken is required")
@@ -60,42 +59,13 @@ func (c *PSClient) ExchangeToken(ctx context.Context, treq TokenRequest) (*Token
 	if c.Agent.ID.IsSubAgent() {
 		return nil, ErrSubAgentDirect
 	}
-	endpoint := c.TokenEndpoint
-	if endpoint == "" {
-		endpoint = c.BaseURL + "/token"
-	}
-	body, err := json.Marshal(treq)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.ContentLength = int64(len(body))
-	req.Body = io.NopCloser(bytes.NewReader(body))
-
-	agentTok, err := c.Agent.MintToken()
-	if err != nil {
-		return nil, fmt.Errorf("aauth: mint agent token: %w", err)
-	}
-	AttachSignatureKey(req, agentTok)
-	if c.PreferWaitSeconds > 0 {
-		req.Header.Set(HeaderPrefer, fmt.Sprintf("wait=%d", c.PreferWaitSeconds))
-	}
-	if err := SignRequest(req, c.Agent.Key, ""); err != nil {
-		return nil, fmt.Errorf("aauth: sign: %w", err)
-	}
-
-	final, err := DoDeferred(ctx, c.HTTPClient, req, c.deferredOptions())
+	final, err := c.post(ctx, c.endpoint(c.AuthTokenEndpoint, "/token"), treq, true)
 	if err != nil {
 		return nil, err
 	}
 	defer closeBody(final.Body)
 	if final.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(final.Body, 4096))
-		return nil, tokenEndpointError("token endpoint", final.StatusCode, b)
+		return nil, tokenEndpointError("auth token endpoint", final.StatusCode, readErrorBody(final))
 	}
 	var tr TokenResponse
 	if err := json.NewDecoder(final.Body).Decode(&tr); err != nil {

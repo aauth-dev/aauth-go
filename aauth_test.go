@@ -285,7 +285,7 @@ func TestJWKSResolverDiscovery(t *testing.T) {
 	mux := http.NewServeMux()
 	var base string
 	mux.HandleFunc("GET /.well-known/aauth-agent.json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(AgentProviderMetadata{Issuer: base, JWKSURI: base + "/jwks.json"})
+		_ = json.NewEncoder(w).Encode(AgentProviderMetadata{ServerMetadata: ServerMetadata{Issuer: base, JWKSURI: base + "/jwks.json"}})
 	})
 	mux.HandleFunc("GET /jwks.json", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(provider.JWKS())
