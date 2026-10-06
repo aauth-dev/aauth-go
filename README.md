@@ -120,7 +120,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 |---|---|---|
 | **Agent** | ✅ | identity, token minting, PS client (person and auth tokens, permission, audit), and a protocol-aware `http.RoundTripper` (`Transport`): auto-signing; `agent-token`, `person-token`, and `auth-token` requirements (401, and 202 deferred delivery, §6.5.1); challenge and auth-token response verification; per-resource caches with the top-down 5-minute refresh margin (§7.9.1); `clock_skew` wait-and-retry once; revoked/expired cached tokens dropped; `AAuth-Access` lifecycle |
 | **Resource** | ✅ | agent + auth-token authentication, resource-token issuing, 401 challenges, `AAuth-Access` two-party flow |
-| **Person Server** | 🟡 | permission, token exchange, audit, clarification, deferred responses; mission lifecycle pending |
+| **Person Server** | 🟡 | token minting and verification helpers, clarification, deferred responses, mission identifiers; endpoint handlers pending |
 | **Access Server** | ⬜ | four-party federation not yet implemented |
 
 ### Layer 1 — Identity
@@ -175,7 +175,8 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | PS interaction endpoint (§7.6): `interaction` / `payment` relay and `question`, deferred polling, `interaction_unavailable` fallback (§11.6.3.2), `ProblemError` for RFC 9457 errors | ✅ |
 | Interaction chaining (§10.1.2) | ✅ |
 | Interaction codes (Crockford base32) | ✅ |
-| Mission lifecycle: proposal, approval, scoped access, completion | ⬜ |
+| Mission lifecycle, agent side (§8.1–§8.5, §8.7): proposal (with `resources`), approval `{s256, mission, capabilities, person_tokens}` verified over the exact blob bytes (`MissionS256`, `NewMissionApproval`), approval person tokens cached, update and completion at `{mission_endpoint}/{mission_s256}`, typed errors | ✅ |
+| Mission lifecycle, PS side (persistence, log, review) | ⬜ |
 
 ## Design notes
 
