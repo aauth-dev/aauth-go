@@ -163,7 +163,7 @@ func mustMintAuth(t *testing.T, ps *Agent, iss, aud, agent string, cnf *JWK, sco
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 		},
-	}, ps.Priv, ps.JWK().Kid)
+	}, ps.Key, ps.JWK().Kid)
 	if err != nil {
 		t.Fatal(err)
 	}

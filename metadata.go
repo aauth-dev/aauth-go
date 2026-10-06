@@ -2,7 +2,7 @@ package aauth
 
 import (
 	"context"
-	"crypto/ed25519"
+	"crypto"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,7 +67,7 @@ type JWKSResolver struct {
 }
 
 // ResolveKey implements KeyResolver.
-func (r JWKSResolver) ResolveKey(ctx context.Context, iss, dwk, kid string, _ *JWK) (ed25519.PublicKey, error) {
+func (r JWKSResolver) ResolveKey(ctx context.Context, iss, dwk, kid string, _ *JWK) (crypto.PublicKey, error) {
 	k, err := r.resolve(ctx, iss, dwk, kid)
 	if err != nil {
 		return nil, err

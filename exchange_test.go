@@ -142,7 +142,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 			http.Error(rw, err.Error(), http.StatusUnauthorized)
 			return
 		}
-		rt, err := IssueResourceToken(w.resourceURL, w.psURL, agent, "files:read", w.resourceKey.Priv, w.resourceKey.JWK().Kid)
+		rt, err := IssueResourceToken(w.resourceURL, w.psURL, agent, "files:read", w.resourceKey.Key, w.resourceKey.JWK().Kid)
 		if err != nil {
 			http.Error(rw, err.Error(), http.StatusInternalServerError)
 			return
@@ -170,7 +170,7 @@ func (w *threePartyWorld) writeAuthToken(t *testing.T, rw http.ResponseWriter, a
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
 		},
-	}, w.psAgent.Priv, w.psAgent.JWK().Kid)
+	}, w.psAgent.Key, w.psAgent.JWK().Kid)
 	if err != nil {
 		t.Errorf("mint auth token: %v", err)
 		http.Error(rw, err.Error(), http.StatusInternalServerError)
@@ -197,7 +197,7 @@ func callResource(t *testing.T, a *Agent, url, token string) *http.Response {
 		t.Fatal(err)
 	}
 	AttachSignatureKey(req, token)
-	if err := SignRequest(req, a.Priv, a.Thumbprint()); err != nil {
+	if err := SignRequest(req, a.Key, a.Thumbprint()); err != nil {
 		t.Fatal(err)
 	}
 	res, err := http.DefaultClient.Do(req)
@@ -284,7 +284,7 @@ func TestThreePartyFlow_InteractionDeferred(t *testing.T) {
 func TestSubAgentCannotExchange(t *testing.T) {
 	w := newThreePartyWorld(t)
 	subID, _ := w.agent.ID.SubAgent("worker")
-	sub := &Agent{ID: subID, Priv: w.agent.Priv, Pub: w.agent.Pub, TokenTTL: time.Hour}
+	sub := &Agent{ID: subID, Key: w.agent.Key, TokenTTL: time.Hour}
 	psc := NewPSClient(w.psURL, sub)
 	if _, err := psc.ExchangeToken(context.Background(), TokenRequest{ResourceToken: "x"}); err != ErrSubAgentDirect {
 		t.Fatalf("err = %v, want ErrSubAgentDirect", err)

@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/lestrrat-go/jwx/v3 v3.0.12
 	github.com/yaronf/httpsign v0.5.1
 )
 
@@ -19,7 +20,6 @@ require (
 	github.com/lestrrat-go/httprc/v3 v3.0.1 // indirect
 	github.com/lestrrat-go/iter v1.0.2 // indirect
 	github.com/lestrrat-go/jwx/v2 v2.1.2 // indirect
-	github.com/lestrrat-go/jwx/v3 v3.0.12 // indirect
 	github.com/lestrrat-go/option v1.0.1 // indirect
 	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect

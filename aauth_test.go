@@ -111,7 +111,7 @@ func TestSubAgentToken(t *testing.T) {
 func TestVerifyRejectsWrongTyp(t *testing.T) {
 	a := testAgent(t)
 	jwk := a.JWK()
-	tok, err := MintAuthToken(AuthClaims{Scope: "x", Cnf: Cnf{JWK: &jwk}}, a.Priv, jwk.Kid)
+	tok, err := MintAuthToken(AuthClaims{Scope: "x", Cnf: Cnf{JWK: &jwk}}, a.Key, jwk.Kid)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func newSignedRequest(t *testing.T, a *Agent, method, url, body string) *http.Re
 		t.Fatal(err)
 	}
 	AttachSignatureKey(req, tok)
-	if err := SignRequest(req, a.Priv, a.Thumbprint()); err != nil {
+	if err := SignRequest(req, a.Key, a.Thumbprint()); err != nil {
 		t.Fatal(err)
 	}
 	setBody(req, body) // SignRequest consumed the body for content-digest

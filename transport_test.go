@@ -109,7 +109,7 @@ func TestTransportRejectsUnboundAccessToken(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api", nil)
 	tok, _ := agent.MintToken()
 	AttachSignatureKey(req, tok)
-	if err := SignRequest(req, agent.Priv, agent.Thumbprint()); err != nil {
+	if err := SignRequest(req, agent.Key, agent.Thumbprint()); err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "AAuth stolen-token")
@@ -222,7 +222,7 @@ func TestTransportBuffersAndResendsBody(t *testing.T) {
 		}
 		b, _ := io.ReadAll(req.Body)
 		bodySeen <- string(b)
-		rt, err := IssueResourceToken(w.resourceURL, w.psURL, agentClaims, "files:write", w.resourceKey.Priv, w.resourceKey.JWK().Kid)
+		rt, err := IssueResourceToken(w.resourceURL, w.psURL, agentClaims, "files:write", w.resourceKey.Key, w.resourceKey.JWK().Kid)
 		if err != nil {
 			http.Error(rw, err.Error(), http.StatusInternalServerError)
 			return

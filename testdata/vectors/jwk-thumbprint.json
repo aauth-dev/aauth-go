@@ -1,9 +1,41 @@
 {
-  "description": "RFC 7638 JWK thumbprints over the required members (RFC 8037 §2 for OKP).",
-  "spec": "RFC 7638 §3; RFC 8037 Appendix A.3",
+  "description": "RFC 7638 JWK thumbprints over the required members (RFC 8037 \u00a72 for OKP).",
+  "spec": "RFC 7638 \u00a73; RFC 8037 Appendix A.3",
   "kind": "jwk-thumbprint",
   "cases": [
-    {"name": "RFC 8037 A.3 Ed25519", "jwk": {"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}, "thumbprint": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"},
-    {"name": "non-required members do not affect the thumbprint", "jwk": {"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","kid":"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k","alg":"Ed25519","use":"sig"}, "thumbprint": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"}
+    {
+      "name": "RFC 8037 A.3 Ed25519",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+      },
+      "thumbprint": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
+    },
+    {
+      "name": "non-required members do not affect the thumbprint",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
+        "alg": "Ed25519",
+        "use": "sig"
+      },
+      "thumbprint": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
+    },
+    {
+      "name": "P-256 (RFC 7515 Appendix A.3 key)",
+      "jwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+        "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+        "kid": "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U",
+        "alg": "ES256",
+        "use": "sig"
+      },
+      "thumbprint": "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U"
+    }
   ]
 }

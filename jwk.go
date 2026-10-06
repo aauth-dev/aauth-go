@@ -1,6 +1,7 @@
 package aauth
 
 import (
+	"crypto"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -12,11 +13,12 @@ import (
 // or references MUST carry a fully-specified alg (signature-key §3.3);
 // [JWK.Validate] enforces this.
 type JWK struct {
-	Kty string `json:"kty"`           // key type; "OKP" for Ed25519
-	Crv string `json:"crv,omitempty"` // curve; "Ed25519"
-	X   string `json:"x,omitempty"`   // base64url-encoded public key
+	Kty string `json:"kty"`           // key type; "OKP" (Ed25519) or "EC" (P-256)
+	Crv string `json:"crv,omitempty"` // curve; "Ed25519" or "P-256"
+	X   string `json:"x,omitempty"`   // base64url public key (OKP) or x coordinate (EC)
+	Y   string `json:"y,omitempty"`   // base64url y coordinate (EC only)
 	Kid string `json:"kid,omitempty"` // key id; the RFC 7638 thumbprint
-	Alg string `json:"alg,omitempty"` // fully-specified algorithm; "Ed25519"
+	Alg string `json:"alg,omitempty"` // fully-specified algorithm; "Ed25519" or "ES256"
 	Use string `json:"use,omitempty"` // intended use; "sig"
 }
 
@@ -40,10 +42,16 @@ func NewEd25519JWK(pub ed25519.PublicKey) JWK {
 	return j
 }
 
-// Thumbprint computes the RFC 7638 thumbprint (RFC 8037 §2 member set for
-// OKP: crv, kty, x — lexicographic, no whitespace), base64url-encoded.
+// Thumbprint computes the RFC 7638 thumbprint over the required members in
+// lexicographic order with no whitespace — crv, kty, x for OKP (RFC 8037
+// §2); crv, kty, x, y for EC (RFC 7638 §3.2) — base64url-encoded.
 func (j JWK) Thumbprint() string {
-	canonical := fmt.Sprintf(`{"crv":%q,"kty":%q,"x":%q}`, j.Crv, j.Kty, j.X)
+	var canonical string
+	if j.Kty == "EC" {
+		canonical = fmt.Sprintf(`{"crv":%q,"kty":%q,"x":%q,"y":%q}`, j.Crv, j.Kty, j.X, j.Y)
+	} else {
+		canonical = fmt.Sprintf(`{"crv":%q,"kty":%q,"x":%q}`, j.Crv, j.Kty, j.X)
+	}
 	sum := sha256.Sum256([]byte(canonical))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
@@ -55,11 +63,17 @@ func (j JWK) Thumbprint() string {
 // [ErrInvalidKey].
 func (j JWK) Validate() error { return validateKeyAlg(j) }
 
-// PublicKey validates the JWK (see [JWK.Validate]) and decodes it to an
-// Ed25519 public key.
-func (j JWK) PublicKey() (ed25519.PublicKey, error) {
+// PublicKey validates the JWK (see [JWK.Validate]) and decodes it to a
+// crypto.PublicKey: an ed25519.PublicKey for alg Ed25519, or a P-256
+// *ecdsa.PublicKey for alg ES256. Decoding failures, including an EC point
+// not on the curve, are [ErrInvalidKey].
+func (j JWK) PublicKey() (crypto.PublicKey, error) {
 	if err := j.Validate(); err != nil {
 		return nil, err
+	}
+	switch j.Alg {
+	case AlgES256:
+		return decodeP256(j.X, j.Y)
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(j.X)
 	if err != nil {

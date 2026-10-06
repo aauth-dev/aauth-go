@@ -80,3 +80,16 @@ func ExampleParseAgentIdentifier() {
 	// Output:
 	// claude-code devbox.local false
 }
+
+// ExampleNewAgent_es256 creates an agent with a P-256 key (ES256), the
+// usual choice where keys live in a secure enclave. Any crypto.Signer with
+// a P-256 or Ed25519 public key can be supplied with WithKey instead.
+func ExampleNewAgent_es256() {
+	id, _ := aauth.ParseAgentIdentifier("aauth:assistant@agent.example")
+	agent, err := aauth.NewAgent(id, aauth.WithKeyAlgorithm(aauth.AlgES256))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(agent.JWK().Alg)
+	// Output: ES256
+}

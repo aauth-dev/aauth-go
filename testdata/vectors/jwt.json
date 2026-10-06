@@ -1,5 +1,5 @@
 {
-  "description": "AAuth JWTs minted with a deterministic Ed25519 key (RFC 8037 Appendix A.1). Ed25519 signatures are deterministic, so the compact serialization is exact.",
+  "description": "AAuth JWTs minted with deterministic keys: Ed25519 (RFC 8037 Appendix A.1), whose signatures are deterministic so the compact serialization is exact, and P-256 (RFC 7515 Appendix A.3), whose ES256 signatures are randomized so those tokens are checked by verification.",
   "spec": "draft-hardt-oauth-aauth-protocol §5.3, §6.7, §9.4, §11.5",
   "kind": "jwt",
   "cases": [
@@ -137,6 +137,43 @@
       },
       "audience": "https://resource.example",
       "token": "eyJhbGciOiJFZDI1NTE5Iiwia2lkIjoia1ByS19xbXhWV2FZVkE5d3dCRjZJdW8zdlZ6ejdUeEhDVHdYQnlnclM0ayIsInR5cCI6ImFhLWF1dGgrand0In0.eyJkd2siOiJhYXV0aC1wZXJzb24uanNvbiIsImFnZW50IjoiYWF1dGg6YXNzaXN0YW50QGFnZW50LmV4YW1wbGUiLCJzY29wZSI6ImRhdGEucmVhZCIsImNuZiI6eyJqd2siOnsia3R5IjoiT0tQIiwiY3J2IjoiRWQyNTUxOSIsIngiOiIxMXFZQVlLeENyZlZTXzdUeVdRSE9nN2hjdlBhcGlNbHJ3SWFhUGNIVVJvIiwia2lkIjoia1ByS19xbXhWV2FZVkE5d3dCRjZJdW8zdlZ6ejdUeEhDVHdYQnlnclM0ayIsImFsZyI6IkVkMjU1MTkiLCJ1c2UiOiJzaWcifX0sImlzcyI6Imh0dHBzOi8vcHMuZXhhbXBsZSIsInN1YiI6InVzZXItMTIzNCIsImF1ZCI6WyJodHRwczovL3Jlc291cmNlLmV4YW1wbGUiXSwiZXhwIjo0MTAyNDQ2NjAwLCJpYXQiOjQxMDI0NDMwMDAsImp0aSI6ImF1dGgtdG9rZW4tMSJ9._OrJhyZpAid_cAgkdS9lHXOsGahnRLcDmkrZjmeN7HZkXO4b2LK7orYPgcrQR36keVtW1BHEDfK3zqEpOhqFBQ"
+    },
+    {
+      "name": "agent token (ES256)",
+      "typ": "aa-agent+jwt",
+      "signing_key": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+        "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+        "kid": "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U",
+        "alg": "ES256",
+        "use": "sig",
+        "d": "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"
+      },
+      "kid": "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U",
+      "claims": {
+        "dwk": "aauth-agent.json",
+        "ps": "https://ps.example",
+        "cnf": {
+          "jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+            "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+            "kid": "oKIywvGUpTVTyxMQ3bwIIeQUudfr_CkLMjCE19ECD-U",
+            "alg": "ES256",
+            "use": "sig"
+          }
+        },
+        "iss": "https://agent.example",
+        "sub": "aauth:assistant@agent.example",
+        "exp": 4102444800,
+        "iat": 1767225600,
+        "jti": "agent-token-es256"
+      },
+      "token": "eyJhbGciOiJFUzI1NiIsImtpZCI6Im9LSXl3dkdVcFRWVHl4TVEzYndJSWVRVXVkZnJfQ2tMTWpDRTE5RUNELVUiLCJ0eXAiOiJhYS1hZ2VudCtqd3QifQ.eyJkd2siOiJhYXV0aC1hZ2VudC5qc29uIiwicHMiOiJodHRwczovL3BzLmV4YW1wbGUiLCJjbmYiOnsiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiZjgzT0ozRDJ4RjFCZzh2dWI5dExlMWdITXpWNzZlOFR1czl1UEh2UlZFVSIsInkiOiJ4X0ZFelJ1OW0zNkhMTl90dWU2NTlMTnBYVzZwQ3lTdGlrWWpLSVdJNWEwIiwia2lkIjoib0tJeXd2R1VwVFZUeXhNUTNid0lJZVFVdWRmcl9Da0xNakNFMTlFQ0QtVSIsImFsZyI6IkVTMjU2IiwidXNlIjoic2lnIn19LCJpc3MiOiJodHRwczovL2FnZW50LmV4YW1wbGUiLCJzdWIiOiJhYXV0aDphc3Npc3RhbnRAYWdlbnQuZXhhbXBsZSIsImV4cCI6NDEwMjQ0NDgwMCwiaWF0IjoxNzY3MjI1NjAwLCJqdGkiOiJhZ2VudC10b2tlbi1lczI1NiJ9.3rvXYWIs_AFFeV7RWHnjIo7hnkBLN6Ara9wip9kTzzVRKUAOTFgmdMCoiiqkn-6CUu-wSqKCtA8-6D7z2CpUeg",
+      "randomized": true
     },
     {
       "name": "JWS alg EdDSA is rejected",

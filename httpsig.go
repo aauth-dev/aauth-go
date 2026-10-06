@@ -2,11 +2,14 @@ package aauth
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/yaronf/httpsign"
 )
 
@@ -81,8 +84,10 @@ func ParseSignatureKey(req *http.Request) (string, error) {
 // SignRequest signs req per the AAuth profile: sets Content-Digest when a
 // body is present, then Signature-Input and Signature under the default
 // label. The Signature-Key header MUST already be attached (it is a covered
-// component). keyid is set to the signing key's RFC 7638 thumbprint.
-func SignRequest(req *http.Request, priv ed25519.PrivateKey, keyid string) error {
+// component). key may be any supported crypto.Signer (see [GenerateKey]);
+// the algorithm is determined by the key, never sent on the wire (draft -11
+// §11.3.3.2). keyid is set to the given value when non-empty.
+func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
 	if req.Header.Get(HeaderSignatureKey) == "" {
 		return ErrMissingSigKey
 	}
@@ -94,8 +99,11 @@ func SignRequest(req *http.Request, priv ed25519.PrivateKey, keyid string) error
 		}
 		req.Header.Set("Content-Digest", d)
 	}
-	cfg := httpsign.NewSignConfig().SetKeyID(keyid).SignAlg(false).SignCreated(true)
-	signer, err := httpsign.NewEd25519Signer(priv, cfg, coveredFields(hasBody, hasAAuthAuthorization(req)))
+	cfg := httpsign.NewSignConfig().SignAlg(false).SignCreated(true)
+	if keyid != "" {
+		cfg = cfg.SetKeyID(keyid)
+	}
+	signer, err := newHTTPSigner(key, cfg, coveredFields(hasBody, hasAAuthAuthorization(req)))
 	if err != nil {
 		return err
 	}
@@ -108,16 +116,58 @@ func SignRequest(req *http.Request, priv ed25519.PrivateKey, keyid string) error
 	return nil
 }
 
-// VerifyRequest verifies the HTTP message signature against pub, requiring
-// the mandated component coverage.
-func VerifyRequest(req *http.Request, pub ed25519.PublicKey) error {
+// newHTTPSigner builds an RFC 9421 signer for key. In-memory Ed25519 and
+// P-256 keys use httpsign's native signers; any other crypto.Signer (e.g. a
+// hardware-backed key) goes through the JOSE signer, which produces the
+// same signature bytes (RFC 9421 §3.3.7).
+func newHTTPSigner(key crypto.Signer, cfg *httpsign.SignConfig, fields httpsign.Fields) (*httpsign.Signer, error) {
+	if key == nil {
+		return nil, fmt.Errorf("%w: nil signing key", ErrInvalidKey)
+	}
+	alg, err := AlgForPublicKey(key.Public())
+	if err != nil {
+		return nil, err
+	}
+	switch k := key.(type) {
+	case ed25519.PrivateKey:
+		return httpsign.NewEd25519Signer(k, cfg, fields)
+	case *ecdsa.PrivateKey:
+		return httpsign.NewP256Signer(*k, cfg, fields)
+	}
+	switch alg {
+	case AlgEd25519:
+		return httpsign.NewJWSSignerV3(jwa.EdDSA(), key, cfg, fields)
+	default: // AlgES256; AlgForPublicKey admits nothing else
+		return httpsign.NewJWSSignerV3(jwa.ES256(), key, cfg, fields)
+	}
+}
+
+// newHTTPVerifier builds an RFC 9421 verifier for pub, an ed25519.PublicKey
+// or a P-256 *ecdsa.PublicKey.
+func newHTTPVerifier(pub crypto.PublicKey, cfg *httpsign.VerifyConfig, fields httpsign.Fields) (*httpsign.Verifier, error) {
+	if _, err := AlgForPublicKey(pub); err != nil {
+		return nil, err
+	}
+	switch k := pub.(type) {
+	case ed25519.PublicKey:
+		return httpsign.NewEd25519Verifier(k, cfg, fields)
+	case *ecdsa.PublicKey:
+		return httpsign.NewP256Verifier(*k, cfg, fields)
+	}
+	return nil, fmt.Errorf("%w: key type %T", ErrUnsupportedAlgorithm, pub)
+}
+
+// VerifyRequest verifies the HTTP message signature against pub (an
+// ed25519.PublicKey or P-256 *ecdsa.PublicKey), requiring the mandated
+// component coverage.
+func VerifyRequest(req *http.Request, pub crypto.PublicKey) error {
 	// No SetAllowedAlgs: AAuth derives the algorithm from the key's JWK alg
-	// (draft -09 §12.7.1) rather than a signed alg parameter; the Ed25519
-	// verifier construction below pins the algorithm.
+	// (draft -11 §11.3.1) rather than a signed alg parameter; the verifier
+	// construction below pins the algorithm to the key type.
 	// If the request carries Authorization: AAuth, that header MUST be a
 	// covered component (§6.4) — required symmetrically here.
 	cfg := httpsign.NewVerifyConfig().SetVerifyCreated(false)
-	v, err := httpsign.NewEd25519Verifier(pub, cfg, coveredFields(false, hasAAuthAuthorization(req)))
+	v, err := newHTTPVerifier(pub, cfg, coveredFields(false, hasAAuthAuthorization(req)))
 	if err != nil {
 		return err
 	}

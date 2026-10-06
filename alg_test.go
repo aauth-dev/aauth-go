@@ -9,7 +9,7 @@ import (
 )
 
 func TestJWKValidate(t *testing.T) {
-	good := NewEd25519JWK(testAgent(t).Pub)
+	good := testAgent(t).JWK()
 	if good.Alg != AlgEd25519 {
 		t.Fatalf("NewEd25519JWK alg = %q, want %q", good.Alg, AlgEd25519)
 	}
@@ -50,7 +50,7 @@ func TestJWKValidate(t *testing.T) {
 }
 
 func TestJWKPublicKeyBadX(t *testing.T) {
-	j := NewEd25519JWK(testAgent(t).Pub)
+	j := testAgent(t).JWK()
 	j.X = "AAAA"
 	if _, err := j.PublicKey(); !errors.Is(err, ErrInvalidKey) {
 		t.Fatalf("err = %v, want ErrInvalidKey", err)
@@ -81,7 +81,7 @@ func TestAgentTokenHeaderAlg(t *testing.T) {
 	legacy := jwt.NewWithClaims(jwt.SigningMethodEdDSA, AgentClaims{DWK: WellKnownAgent, Cnf: Cnf{JWK: &jwk},
 		RegisteredClaims: jwt.RegisteredClaims{Subject: a.ID.String()}})
 	legacy.Header["typ"] = TypAgent
-	s, err := legacy.SignedString(a.Priv)
+	s, err := legacy.SignedString(a.Key)
 	if err != nil {
 		t.Fatal(err)
 	}

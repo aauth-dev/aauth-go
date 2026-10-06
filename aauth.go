@@ -1,8 +1,9 @@
 // Package aauth implements the AAuth protocol
 // (draft-hardt-oauth-aauth-protocol-09): agent identity and authorization
 // across trust domains, without shared secrets or per-server pre-registration.
-// Every agent gets its own Ed25519 keypair and a self-describing token that
-// binds that key; any party can verify it.
+// Every agent gets its own signing key (Ed25519 by default, or ES256 — any
+// crypto.Signer, so hardware-backed keys work) and a self-describing token
+// that binds that key; any party can verify it.
 //
 // # Layers
 //

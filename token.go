@@ -2,7 +2,8 @@ package aauth
 
 import (
 	"context"
-	"crypto/ed25519"
+	"crypto"
+	"encoding/base64"
 	"errors"
 	"fmt"
 
@@ -90,31 +91,51 @@ type ResourceClaims struct {
 	jwt.RegisteredClaims
 }
 
-// mintTyped signs claims as a JWT with the fully-specified alg "Ed25519"
-// (draft -11 §11.5.1) and the given typ and kid header.
-func mintTyped(claims jwt.Claims, priv ed25519.PrivateKey, typ, kid string) (string, error) {
-	tok := jwt.NewWithClaims(SigningMethodEd25519, claims)
+// mintTyped signs claims as a JWT with the given typ and kid header. The
+// JWS alg is the fully-specified algorithm of key (draft -11 §11.5.1):
+// Ed25519 or ES256. key may be any supported crypto.Signer.
+func mintTyped(claims jwt.Claims, key crypto.Signer, typ, kid string) (string, error) {
+	if key == nil {
+		return "", fmt.Errorf("%w: nil signing key", ErrInvalidKey)
+	}
+	alg, err := AlgForPublicKey(key.Public())
+	if err != nil {
+		return "", err
+	}
+	method, err := jwtMethodFor(alg)
+	if err != nil {
+		return "", err
+	}
+	tok := jwt.NewWithClaims(method, claims)
 	tok.Header["typ"] = typ
 	if kid != "" {
 		tok.Header["kid"] = kid
 	}
-	return tok.SignedString(priv)
+	signingString, err := tok.SigningString()
+	if err != nil {
+		return "", err
+	}
+	sig, err := signJOSE(key, alg, []byte(signingString))
+	if err != nil {
+		return "", err
+	}
+	return signingString + "." + base64.RawURLEncoding.EncodeToString(sig), nil
 }
 
 // MintAgentToken signs an aa-agent+jwt. The kid header identifies the signing
-// key within the provider's JWKS (draft -09 §5.2.2: header MUST carry kid).
-func MintAgentToken(claims AgentClaims, priv ed25519.PrivateKey, kid string) (string, error) {
-	return mintTyped(claims, priv, TypAgent, kid)
+// key within the provider's JWKS (draft -11 §11.5.1).
+func MintAgentToken(claims AgentClaims, key crypto.Signer, kid string) (string, error) {
+	return mintTyped(claims, key, TypAgent, kid)
 }
 
-// MintAuthToken signs an aa-auth+jwt (Person Server side).
-func MintAuthToken(claims AuthClaims, priv ed25519.PrivateKey, kid string) (string, error) {
-	return mintTyped(claims, priv, TypAuth, kid)
+// MintAuthToken signs an aa-auth+jwt (Person Server or Access Server side).
+func MintAuthToken(claims AuthClaims, key crypto.Signer, kid string) (string, error) {
+	return mintTyped(claims, key, TypAuth, kid)
 }
 
 // MintResourceToken signs an aa-resource+jwt (resource side).
-func MintResourceToken(claims ResourceClaims, priv ed25519.PrivateKey, kid string) (string, error) {
-	return mintTyped(claims, priv, TypResource, kid)
+func MintResourceToken(claims ResourceClaims, key crypto.Signer, kid string) (string, error) {
+	return mintTyped(claims, key, TypResource, kid)
 }
 
 // KeyResolver resolves the token-signature verification key for an issuer.
@@ -125,8 +146,12 @@ func MintResourceToken(claims ResourceClaims, priv ed25519.PrivateKey, kid strin
 //   - SelfSignedResolver: verify against the token's own cnf.jwk — the
 //     self-hosted/local shape where possession of the cnf key IS the
 //     identity and the verifier applies its own policy per agent.
+//
+// ResolveKey returns the issuer's public key as a crypto.PublicKey
+// (ed25519.PublicKey or P-256 *ecdsa.PublicKey); keys decoded from a JWK
+// have already passed [JWK.Validate].
 type KeyResolver interface {
-	ResolveKey(ctx context.Context, iss, dwk, kid string, cnf *JWK) (ed25519.PublicKey, error)
+	ResolveKey(ctx context.Context, iss, dwk, kid string, cnf *JWK) (crypto.PublicKey, error)
 }
 
 // SelfSignedResolver trusts the embedded cnf.jwk to verify the token's own
@@ -136,7 +161,7 @@ type KeyResolver interface {
 type SelfSignedResolver struct{}
 
 // ResolveKey implements KeyResolver, returning the key from cnf.jwk.
-func (SelfSignedResolver) ResolveKey(_ context.Context, _, _, _ string, cnf *JWK) (ed25519.PublicKey, error) {
+func (SelfSignedResolver) ResolveKey(_ context.Context, _, _, _ string, cnf *JWK) (crypto.PublicKey, error) {
 	if cnf == nil {
 		return nil, fmt.Errorf("%w: cnf.jwk", ErrMissingClaim)
 	}
@@ -147,7 +172,7 @@ func (SelfSignedResolver) ResolveKey(_ context.Context, _, _, _ string, cnf *JWK
 type StaticResolver map[string]JWKS
 
 // ResolveKey implements KeyResolver, returning the pinned key for iss by kid.
-func (r StaticResolver) ResolveKey(_ context.Context, iss, _, kid string, _ *JWK) (ed25519.PublicKey, error) {
+func (r StaticResolver) ResolveKey(_ context.Context, iss, _, kid string, _ *JWK) (crypto.PublicKey, error) {
 	set, ok := r[iss]
 	if !ok {
 		return nil, fmt.Errorf("aauth: unknown issuer %q", iss)

@@ -3,7 +3,7 @@ package aauth
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
+	"crypto"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,7 +48,7 @@ type TokenResponse struct {
 // IssueResourceToken is the resource-side helper for the 401 challenge
 // (§6.6): mint an aa-resource+jwt for the agent that just called, addressed
 // to its PS (three-party) or an AS (four-party).
-func IssueResourceToken(resourceURL, audience string, agent *AgentClaims, scope string, priv ed25519.PrivateKey, kid string) (string, error) {
+func IssueResourceToken(resourceURL, audience string, agent *AgentClaims, scope string, key crypto.Signer, kid string) (string, error) {
 	now := time.Now()
 	jti, err := randomJTI()
 	if err != nil {
@@ -67,7 +67,7 @@ func IssueResourceToken(resourceURL, audience string, agent *AgentClaims, scope 
 			ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)), // SHOULD NOT exceed 5 min
 		},
 	}
-	return MintResourceToken(claims, priv, kid)
+	return MintResourceToken(claims, key, kid)
 }
 
 // ChallengeAuthToken builds the 401 response headers for requirement=auth-token.
@@ -252,7 +252,7 @@ func (c *PSClient) ExchangeToken(ctx context.Context, treq TokenRequest) (*Token
 	if c.PreferWaitSeconds > 0 {
 		req.Header.Set(HeaderPrefer, fmt.Sprintf("wait=%d", c.PreferWaitSeconds))
 	}
-	if err := SignRequest(req, c.Agent.Priv, c.Agent.Thumbprint()); err != nil {
+	if err := SignRequest(req, c.Agent.Key, c.Agent.Thumbprint()); err != nil {
 		return nil, fmt.Errorf("aauth: sign: %w", err)
 	}
 

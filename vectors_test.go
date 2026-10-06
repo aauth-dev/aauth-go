@@ -22,12 +22,15 @@ package aauth
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -133,25 +136,47 @@ type privateJWK struct {
 	D string `json:"d"`
 }
 
-// signer returns the Ed25519 private key the JWK describes.
-func (p privateJWK) signer(t *testing.T) ed25519.PrivateKey {
+// signer returns the private key the JWK describes (Ed25519 or P-256).
+func (p privateJWK) signer(t *testing.T) crypto.Signer {
 	t.Helper()
-	if p.Kty != "OKP" || p.Crv != "Ed25519" {
+	d, err := base64.RawURLEncoding.DecodeString(p.D)
+	if err != nil {
+		t.Fatalf("vector key d: %v", err)
+	}
+	var key crypto.Signer
+	switch {
+	case p.Kty == "OKP" && p.Crv == "Ed25519" && len(d) == ed25519.SeedSize:
+		key = ed25519.NewKeyFromSeed(d)
+	case p.Kty == "EC" && p.Crv == "P-256" && len(d) == 32:
+		pub, err := decodeP256(p.X, p.Y)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key = &ecdsa.PrivateKey{PublicKey: *pub, D: new(big.Int).SetBytes(d)}
+	default:
 		t.Fatalf("unsupported vector key kty=%s crv=%s", p.Kty, p.Crv)
 	}
-	seed, err := base64.RawURLEncoding.DecodeString(p.D)
-	if err != nil || len(seed) != ed25519.SeedSize {
-		t.Fatalf("vector key d: %v (len %d)", err, len(seed))
-	}
-	priv := ed25519.NewKeyFromSeed(seed)
-	pub, err := p.PublicKey()
+	// The private and public halves must agree.
+	derived, err := NewJWK(key.Public())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pub.Equal(priv.Public()) {
-		t.Fatal("vector key: x does not match d")
+	if derived.Thumbprint() != p.Thumbprint() {
+		t.Fatal("vector key: public members do not match d")
 	}
-	return priv
+	// Prove possession of d: sign and verify.
+	alg, err := AlgForPublicKey(key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := signJOSE(key, alg, []byte("vector"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyJOSE(key.Public(), []byte("vector"), sig); err != nil {
+		t.Fatalf("vector key: d does not match public key: %v", err)
+	}
+	return key
 }
 
 // --- jwk-thumbprint -------------------------------------------------------
@@ -334,6 +359,10 @@ type jwtCase struct {
 	// Reject, when set, says why Token must fail verification; such a
 	// token is not minted or regenerated.
 	Reject string `json:"reject,omitempty"`
+	// Randomized marks an algorithm with randomized signatures (ES256):
+	// the stored token is checked by verification rather than by byte
+	// comparison with a fresh mint.
+	Randomized bool `json:"randomized,omitempty"`
 }
 
 func mintVector(t *testing.T, c jwtCase) string {
@@ -388,8 +417,11 @@ func runJWTVectors(t *testing.T, raw json.RawMessage, update bool) any {
 			cases[i].Token = got
 			continue
 		}
-		if got != c.Token {
+		if !c.Randomized && got != c.Token {
 			t.Errorf("%s: minted token differs from vector\n got %s\nwant %s", c.Name, got, c.Token)
+		}
+		if c.Randomized && headerOf(t, got) != headerOf(t, c.Token) {
+			t.Errorf("%s: minted header %s, vector header %s", c.Name, headerOf(t, got), headerOf(t, c.Token))
 		}
 		// The payload carries exactly the vector's claims.
 		parts := strings.Split(c.Token, ".")
@@ -416,6 +448,15 @@ func runJWTVectors(t *testing.T, raw json.RawMessage, update bool) any {
 		}
 	}
 	return cases
+}
+
+func headerOf(t *testing.T, token string) string {
+	t.Helper()
+	h, _, ok := strings.Cut(token, ".")
+	if !ok {
+		t.Fatalf("not a compact JWS: %q", token)
+	}
+	return h
 }
 
 func verifyVectorToken(t *testing.T, c jwtCase) error {
