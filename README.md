@@ -172,6 +172,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Audit endpoint (§7.8, `mission_s256` REQUIRED) + mission status errors with `termination_reason` (§8.8) | ✅ |
 | Clarification chat (§7.5): question → answer / updated-request (with the REQUIRED `presented_token`, §7.5.2.2) / cancel | ✅ |
 | Call chaining (§10.1.1): routing by the upstream token's PS, upstream token verification; downstream person-token step and intermediary flow | 🟡 |
+| PS interaction endpoint (§7.6): `interaction` / `payment` relay and `question`, deferred polling, `interaction_unavailable` fallback (§11.6.3.2), `ProblemError` for RFC 9457 errors | ✅ |
 | Interaction chaining (§10.1.2) | ✅ |
 | Interaction codes (Crockford base32) | ✅ |
 | Mission lifecycle: proposal, approval, scoped access, completion | ⬜ |
