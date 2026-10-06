@@ -126,7 +126,8 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 
 | Capability | Status |
 |---|---|
-| Agent identifiers (`aauth:name@domain`; sub-agents `name+worker@domain`, single-level rule) | ✅ |
+| Agent identifiers (`aauth:name@domain`; sub-agents `name+worker@domain`, single-level rule), validated per -11 §5.2 (local-part charset and length, case-sensitive) | ✅ |
+| Server identifiers (`ValidateServerIdentifier`, §11.1.1: https, host only, lowercase, A-labels) | ✅ |
 | Agent tokens — `sig=jwt` (-09 claim set: `iss dwk sub jti cnf iat exp ps parent_agent`, `kid` header) | ✅ |
 | Fully-specified algorithms: JWS and JWK `alg` is `Ed25519` or `ES256`; `EdDSA`, `none`, symmetric, absent, or kty/crv-inconsistent `alg` rejected (signature-key §3.3) | ✅ |
 | Self-hosted agents (agent as its own AP, bootstrap §4.3) | ✅ |
@@ -178,7 +179,8 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 - **Pluggable trust.** [`KeyResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#KeyResolver) lets the same
   verification code serve public JWKS discovery, pinned keys (offline /
   air-gapped), or local self-signed agents. Strict `RequireProviderClaims`
-  enforces §5.2.4 (`iss` HTTPS URL, `dwk`, `jti`) for cross-domain interop.
+  enforces the agent-token profile (`iss` and `ps` server identifiers, `dwk`,
+  `jti`) for cross-domain interop.
 - **The RFC 9421 + Signature-Key layer is isolated** in `httpsig.go` — the
   reference implementations externalize it too, so a signature-key draft bump
   stays contained.

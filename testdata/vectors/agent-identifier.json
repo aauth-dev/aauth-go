@@ -1,14 +1,100 @@
 {
-  "description": "Agent identifier parsing (aauth:local@domain; sub-agents local+discriminator@domain).",
-  "spec": "draft-hardt-oauth-aauth-protocol §5.2",
+  "description": "Agent identifier parsing and validation (aauth:local@domain; sub-agents parent+discriminator@domain). Local part: A-Za-z0-9 - _ + . , 1-255 characters, case-sensitive. Domain: a server identifier host (lowercase, A-labels, no scheme or port).",
+  "spec": "draft-hardt-oauth-aauth-protocol-11 §5.2, §11.1.1",
   "kind": "agent-identifier",
   "cases": [
-    {"input": "aauth:assistant-v2@agent.example", "valid": true, "name": "assistant-v2", "domain": "agent.example"},
-    {"input": "aauth:planner.7f3c@vendor.example", "valid": true, "name": "planner.7f3c", "domain": "vendor.example"},
-    {"input": "aauth:planner.7f3c+search1@vendor.example", "valid": true, "name": "planner.7f3c", "discriminator": "search1", "domain": "vendor.example"},
-    {"input": "assistant@agent.example", "valid": false},
-    {"input": "aauth:@agent.example", "valid": false},
-    {"input": "aauth:assistant@", "valid": false},
-    {"input": "aauth:+worker@agent.example", "valid": false}
+    {
+      "input": "aauth:assistant-v2@agent.example",
+      "valid": true,
+      "name": "assistant-v2",
+      "domain": "agent.example"
+    },
+    {
+      "input": "aauth:planner.7f3c@vendor.example",
+      "valid": true,
+      "name": "planner.7f3c",
+      "domain": "vendor.example"
+    },
+    {
+      "input": "aauth:planner.7f3c+search1@vendor.example",
+      "valid": true,
+      "name": "planner.7f3c",
+      "discriminator": "search1",
+      "domain": "vendor.example"
+    },
+    {
+      "input": "aauth:Agent@agent.example",
+      "valid": true,
+      "name": "Agent",
+      "domain": "agent.example"
+    },
+    {
+      "input": "aauth:agent_1@xn--nxasmq6b.example",
+      "valid": true,
+      "name": "agent_1",
+      "domain": "xn--nxasmq6b.example"
+    },
+    {
+      "input": "aauth:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@agent.example",
+      "valid": true,
+      "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "agent.example"
+    },
+    {
+      "input": "aauth:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@agent.example",
+      "valid": false
+    },
+    {
+      "input": "aauth:My Agent@agent.example",
+      "valid": false
+    },
+    {
+      "input": "aauth:@agent.example",
+      "valid": false
+    },
+    {
+      "input": "aauth:agent@http://agent.example",
+      "valid": false
+    },
+    {
+      "input": "aauth:agent@agent.example:8443",
+      "valid": false
+    },
+    {
+      "input": "aauth:agent@Agent.Example",
+      "valid": false
+    },
+    {
+      "input": "aauth:agent@agent.example/",
+      "valid": false
+    },
+    {
+      "input": "aauth:agent@-agent.example",
+      "valid": false
+    },
+    {
+      "input": "aauth:agent@agent..example",
+      "valid": false
+    },
+    {
+      "input": "aauth:agént@agent.example",
+      "valid": false
+    },
+    {
+      "input": "aauth:assistant@",
+      "valid": false
+    },
+    {
+      "input": "aauth:+worker@agent.example",
+      "valid": false
+    },
+    {
+      "input": "aauth:assistant+@agent.example",
+      "valid": false
+    },
+    {
+      "input": "assistant@agent.example",
+      "valid": false
+    }
   ]
 }

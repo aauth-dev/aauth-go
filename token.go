@@ -235,11 +235,13 @@ func (r StaticResolver) ResolveKey(_ context.Context, iss, _, kid string, _ *JWK
 type VerifyAgentTokenOptions struct {
 	// Resolver locates the token-signature key. Required.
 	Resolver KeyResolver
-	// RequireProviderClaims enforces draft -09 §5.2.4 strictly: iss must be
-	// an HTTPS URL, dwk must equal WellKnownAgent, jti must be present.
-	// Self-hosted local deployments MAY relax this (signature-key §3.6 makes
-	// iss/dwk SHOULD; the aauth -09 agent-token profile makes them MUST —
-	// set true for cross-domain interop).
+	// RequireProviderClaims enforces the draft -11 agent-token profile
+	// strictly (§5.3.3, §11.5.2): iss must be a server identifier
+	// (§11.1.1), dwk must equal WellKnownAgent, jti must be present, and a
+	// ps claim, when present, must be a server identifier. Self-hosted
+	// local deployments MAY relax this (signature-key §3.8 makes iss/dwk
+	// SHOULD; the AAuth agent-token profile makes them MUST — set true for
+	// cross-domain interop).
 	RequireProviderClaims bool
 	// Signature tunes HTTP message-signature verification in
 	// VerifyAndExtractAgent (validity window, required components, clock).
@@ -287,16 +289,24 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 		return nil, fmt.Errorf("%w: sub", ErrMissingClaim)
 	}
 	if _, err := ParseAgentIdentifier(claims.Subject); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: sub: %w", ErrInvalidToken, err)
 	}
 	if claims.ParentAgent != "" {
 		if _, err := ParseAgentIdentifier(claims.ParentAgent); err != nil {
-			return nil, fmt.Errorf("aauth: parent_agent: %w", err)
+			return nil, fmt.Errorf("%w: parent_agent: %w", ErrInvalidToken, err)
 		}
 	}
 	if opts.RequireProviderClaims {
-		if claims.Issuer == "" || len(claims.Issuer) < 9 || claims.Issuer[:8] != "https://" {
-			return nil, fmt.Errorf("%w: iss must be an HTTPS URL (got %q)", ErrMissingClaim, claims.Issuer)
+		if claims.Issuer == "" {
+			return nil, fmt.Errorf("%w: iss", ErrMissingClaim)
+		}
+		if err := ValidateServerIdentifier(claims.Issuer); err != nil {
+			return nil, fmt.Errorf("%w: iss: %w", ErrInvalidToken, err)
+		}
+		if claims.PS != "" {
+			if err := ValidateServerIdentifier(claims.PS); err != nil {
+				return nil, fmt.Errorf("%w: ps: %w", ErrInvalidToken, err)
+			}
 		}
 		if claims.DWK != WellKnownAgent {
 			return nil, fmt.Errorf("%w: dwk must be %q (got %q)", ErrMissingClaim, WellKnownAgent, claims.DWK)

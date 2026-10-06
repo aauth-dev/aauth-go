@@ -80,6 +80,10 @@ type VerifyServerOptions struct {
 	// Signature tunes HTTP message-signature verification. PS, AS, and
 	// revocation endpoints should set RequireBodyCoverage (§11.3.3.1).
 	Signature RequestVerifyOptions
+	// InsecureSkipIdentifierCheck accepts an id that is not a server
+	// identifier (§11.1.1: https, host only, lowercase), for development
+	// and tests against local servers. Never set it in production.
+	InsecureSkipIdentifierCheck bool
 }
 
 // VerifyServerRequest authenticates a request signed under the jwks_uri
@@ -99,6 +103,14 @@ func VerifyServerRequest(ctx context.Context, req *http.Request, opts VerifyServ
 	caller := &ServerCaller{ID: sk.Params["id"], DWK: sk.Params["dwk"], Kid: sk.Params["kid"]}
 	if caller.ID == "" || caller.DWK == "" || caller.Kid == "" {
 		return nil, fmt.Errorf("%w: jwks_uri scheme requires id, dwk, and kid", ErrBadSigKey)
+	}
+	if !opts.InsecureSkipIdentifierCheck {
+		// id MUST be the server's issuer (§11.3.2), which is a server
+		// identifier; checking it first also keeps discovery off
+		// non-https and port-qualified URLs.
+		if err := ValidateServerIdentifier(caller.ID); err != nil {
+			return nil, fmt.Errorf("%w: id: %w", ErrBadSigKey, err)
+		}
 	}
 	if len(opts.DWKs) > 0 && !contains(opts.DWKs, caller.DWK) {
 		return nil, fmt.Errorf("%w: signer role %q not accepted here", ErrInvalidKey, caller.DWK)

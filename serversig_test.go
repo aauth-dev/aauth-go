@@ -58,9 +58,10 @@ func TestVerifyServerRequest(t *testing.T) {
 	s, signer := psSigner(t)
 	ctx := context.Background()
 	opts := VerifyServerOptions{
-		Resolver:  NewJWKSResolver(nil),
-		DWKs:      []string{WellKnownPerson},
-		Signature: RequestVerifyOptions{RequireBodyCoverage: true},
+		InsecureSkipIdentifierCheck: true,
+		Resolver:                    NewJWKSResolver(nil),
+		DWKs:                        []string{WellKnownPerson},
+		Signature:                   RequestVerifyOptions{RequireBodyCoverage: true},
 	}
 	caller, err := VerifyServerRequest(ctx, serverRequest(t, signer), opts)
 	if err != nil {
@@ -93,7 +94,7 @@ func TestVerifyServerRequestRejections(t *testing.T) {
 	// An agent's jwt scheme is not accepted here; the 401 names jwks_uri.
 	a := testAgent(t)
 	req := signedTestRequest(t, a, "", "")
-	_, err := VerifyServerRequest(ctx, req, VerifyServerOptions{})
+	_, err := VerifyServerRequest(ctx, req, VerifyServerOptions{InsecureSkipIdentifierCheck: true})
 	if code(err) != SigErrUnsupportedScheme {
 		t.Fatalf("jwt scheme: err = %v", err)
 	}
@@ -105,11 +106,11 @@ func TestVerifyServerRequestRejections(t *testing.T) {
 
 	// Role restriction and signer trust are checked before any fetch.
 	before := s.jwksFetches.Load()
-	_, err = VerifyServerRequest(ctx, serverRequest(t, signer), VerifyServerOptions{DWKs: []string{WellKnownAccess}})
+	_, err = VerifyServerRequest(ctx, serverRequest(t, signer), VerifyServerOptions{InsecureSkipIdentifierCheck: true, DWKs: []string{WellKnownAccess}})
 	if code(err) != SigErrInvalidKey {
 		t.Fatalf("dwk: err = %v", err)
 	}
-	_, err = VerifyServerRequest(ctx, serverRequest(t, signer), VerifyServerOptions{TrustSigner: func(string, string) bool { return false }})
+	_, err = VerifyServerRequest(ctx, serverRequest(t, signer), VerifyServerOptions{InsecureSkipIdentifierCheck: true, TrustSigner: func(string, string) bool { return false }})
 	if code(err) != SigErrInvalidKey {
 		t.Fatalf("trust: err = %v", err)
 	}
@@ -120,21 +121,21 @@ func TestVerifyServerRequestRejections(t *testing.T) {
 	// Missing parameters.
 	req = serverRequest(t, signer)
 	req.Header.Set(HeaderSignatureKey, `sig=jwks_uri;id="`+s.srv.URL+`";dwk="aauth-person.json"`)
-	if _, err := VerifyServerRequest(ctx, req, VerifyServerOptions{}); code(err) != SigErrInvalidSignature {
+	if _, err := VerifyServerRequest(ctx, req, VerifyServerOptions{InsecureSkipIdentifierCheck: true}); code(err) != SigErrInvalidSignature {
 		t.Fatalf("no kid: err = %v", err)
 	}
 
 	// Unknown kid.
 	other := signer
 	other.Kid = "nope"
-	if _, err := VerifyServerRequest(ctx, serverRequest(t, other), VerifyServerOptions{Resolver: NewJWKSResolver(nil)}); code(err) != SigErrUnknownKey {
+	if _, err := VerifyServerRequest(ctx, serverRequest(t, other), VerifyServerOptions{InsecureSkipIdentifierCheck: true, Resolver: NewJWKSResolver(nil)}); code(err) != SigErrUnknownKey {
 		t.Fatalf("unknown kid: err = %v", err)
 	}
 
 	// The metadata claims a different issuer than id.
 	evil := "https://evil.example"
 	s.update(func(s *jwksServer) { s.issuer = &evil })
-	if _, err := VerifyServerRequest(ctx, serverRequest(t, signer), VerifyServerOptions{Resolver: NewJWKSResolver(nil)}); code(err) != SigErrIssuerMismatch {
+	if _, err := VerifyServerRequest(ctx, serverRequest(t, signer), VerifyServerOptions{InsecureSkipIdentifierCheck: true, Resolver: NewJWKSResolver(nil)}); code(err) != SigErrIssuerMismatch {
 		t.Fatalf("issuer mismatch: err = %v", err)
 	}
 }
@@ -142,7 +143,7 @@ func TestVerifyServerRequestRejections(t *testing.T) {
 func TestVerifyServerRequestRekey(t *testing.T) {
 	s, signer := psSigner(t)
 	clock := &fakeClock{t: time.Now()}
-	opts := VerifyServerOptions{Resolver: JWKSResolver{Cache: &JWKSCache{Now: clock.Now}}}
+	opts := VerifyServerOptions{InsecureSkipIdentifierCheck: true, Resolver: JWKSResolver{Cache: &JWKSCache{Now: clock.Now}}}
 	ctx := context.Background()
 	if _, err := VerifyServerRequest(ctx, serverRequest(t, signer), opts); err != nil {
 		t.Fatal(err)
@@ -162,5 +163,13 @@ func TestVerifyServerRequestRekey(t *testing.T) {
 	clock.Advance(2 * time.Minute)
 	if _, err := VerifyServerRequest(ctx, serverRequest(t, signer), opts); err != nil {
 		t.Fatalf("after re-key: %v", err)
+	}
+}
+
+func TestVerifyServerRequestRequiresServerIdentifier(t *testing.T) {
+	_, signer := psSigner(t) // a local http://127.0.0.1:port issuer
+	_, err := VerifyServerRequest(context.Background(), serverRequest(t, signer), VerifyServerOptions{})
+	if !errors.Is(err, ErrInvalidIdentifier) || !errors.Is(err, ErrBadSigKey) {
+		t.Fatalf("err = %v, want ErrInvalidIdentifier", err)
 	}
 }

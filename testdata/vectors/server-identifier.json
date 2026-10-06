@@ -1,0 +1,59 @@
+{
+  "description": "Server identifiers (issuer values): https, host only, no port/path/query/fragment/trailing slash, lowercase, A-labels.",
+  "spec": "draft-hardt-oauth-aauth-protocol-11 \u00a711.1.1",
+  "kind": "server-identifier",
+  "cases": [
+    {
+      "input": "https://agent.example",
+      "valid": true
+    },
+    {
+      "input": "https://xn--nxasmq6b.example",
+      "valid": true
+    },
+    {
+      "input": "https://localhost",
+      "valid": true
+    },
+    {
+      "input": "http://agent.example",
+      "valid": false
+    },
+    {
+      "input": "https://Agent.Example",
+      "valid": false
+    },
+    {
+      "input": "https://agent.example:8443",
+      "valid": false
+    },
+    {
+      "input": "https://agent.example/v1",
+      "valid": false
+    },
+    {
+      "input": "https://agent.example/",
+      "valid": false
+    },
+    {
+      "input": "https://agent.example?x=1",
+      "valid": false
+    },
+    {
+      "input": "https://agent.example#f",
+      "valid": false
+    },
+    {
+      "input": "https://user@agent.example",
+      "valid": false
+    },
+    {
+      "input": "https://",
+      "valid": false
+    },
+    {
+      "input": "agent.example",
+      "valid": false
+    }
+  ]
+}

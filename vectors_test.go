@@ -56,14 +56,15 @@ type vectorFile struct {
 type vectorRunner func(t *testing.T, cases json.RawMessage, update bool) any
 
 var vectorRunners = map[string]vectorRunner{
-	"jwk-thumbprint":   runThumbprintVectors,
-	"agent-identifier": runIdentifierVectors,
-	"requirement":      runRequirementVectors,
-	"signature-error":  runSignatureErrorVectors,
-	"signature-key":    runSignatureKeyVectors,
-	"metadata":         runMetadataVectors,
-	"jwt":              runJWTVectors,
-	"http-signature":   runHTTPSignatureVectors,
+	"jwk-thumbprint":    runThumbprintVectors,
+	"agent-identifier":  runIdentifierVectors,
+	"server-identifier": runServerIdentifierVectors,
+	"requirement":       runRequirementVectors,
+	"signature-error":   runSignatureErrorVectors,
+	"signature-key":     runSignatureKeyVectors,
+	"metadata":          runMetadataVectors,
+	"jwt":               runJWTVectors,
+	"http-signature":    runHTTPSignatureVectors,
 }
 
 func TestVectors(t *testing.T) {
@@ -227,6 +228,26 @@ func runIdentifierVectors(t *testing.T, raw json.RawMessage, _ bool) any {
 		}
 		if id.String() != c.Input {
 			t.Errorf("%q: String() = %q", c.Input, id.String())
+		}
+	}
+	return nil
+}
+
+// --- server-identifier ----------------------------------------------------
+
+type serverIdentifierCase struct {
+	Input string `json:"input"`
+	Valid bool   `json:"valid"`
+}
+
+func runServerIdentifierVectors(t *testing.T, raw json.RawMessage, _ bool) any {
+	for _, c := range decodeCases[serverIdentifierCase](t, raw) {
+		err := ValidateServerIdentifier(c.Input)
+		if c.Valid && err != nil {
+			t.Errorf("%q: %v", c.Input, err)
+		}
+		if !c.Valid && err == nil {
+			t.Errorf("%q: accepted, want rejected", c.Input)
 		}
 	}
 	return nil
