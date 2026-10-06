@@ -57,40 +57,89 @@ func hasAAuthAuthorization(req *http.Request) bool {
 // ContentDigestAlg is the digest algorithm for the Content-Digest header.
 const ContentDigestAlg = "sha-256"
 
-// AttachSignatureKey sets the Signature-Key header carrying the agent (or
-// auth) token via scheme=jwt (signature-key draft §3.6). The dictionary key
-// is the signature label (§3: labels correlate across Signature-Input,
-// Signature, and Signature-Key).
-func AttachSignatureKey(req *http.Request, token string) {
-	req.Header.Set(HeaderSignatureKey, fmt.Sprintf(`%s=jwt; jwt=%q`, DefaultSignatureLabel, token))
+// Signature-Key schemes used by AAuth (draft -11 §11.3.2; signature-key §3).
+const (
+	// SchemeJWT carries a JWT whose cnf.jwk is the signing key. Agents MUST
+	// use it on AAuth resource, PS, and AS requests.
+	SchemeJWT = "jwt"
+	// SchemeJWKSURI identifies a server signing in its own right, whose key
+	// is discovered from {id}/.well-known/{dwk} → jwks_uri → kid.
+	SchemeJWKSURI = "jwks_uri"
+)
+
+// SignatureKey is one parsed member of the Signature-Key header
+// (signature-key §3): a Structured Field Dictionary keyed by signature
+// label whose member value is a Token naming the scheme, with parameters.
+type SignatureKey struct {
+	Label  string            // the dictionary key; matches the Signature-Input label
+	Scheme string            // the scheme token, e.g. "jwt" or "jwks_uri"
+	Params map[string]string // String-valued parameters (jwt; id, dwk, kid)
 }
 
-// ParseSignatureKey extracts the scheme=jwt token for the default label.
+// AttachSignatureKey sets the Signature-Key header carrying the agent (or
+// person or auth) token via the jwt scheme (signature-key §3.8), serialized
+// as a Structured Field Dictionary member keyed by the signature label:
+//
+//	sig=jwt;jwt="eyJ..."
+func AttachSignatureKey(req *http.Request, token string) {
+	req.Header.Set(HeaderSignatureKey, DefaultSignatureLabel+"=jwt;jwt="+sfString(token))
+}
+
+// ParseSignatureKeyMember parses the Signature-Key header as a Structured
+// Field Dictionary (RFC 9651 §3.2) and returns the member for label. A
+// missing header is [ErrMissingSigKey]; a malformed header, a missing
+// member for the label, or a member that is not a Token with parameters is
+// [ErrBadSigKey]. Members for other labels are ignored (§3.1), whatever
+// their scheme.
+func ParseSignatureKeyMember(req *http.Request, label string) (SignatureKey, error) {
+	vals := req.Header.Values(HeaderSignatureKey)
+	if len(vals) == 0 {
+		return SignatureKey{}, ErrMissingSigKey
+	}
+	dict, err := httpsfv.UnmarshalDictionary(vals)
+	if err != nil {
+		return SignatureKey{}, fmt.Errorf("%w: %w", ErrBadSigKey, err)
+	}
+	m, ok := dict.Get(label)
+	if !ok {
+		return SignatureKey{}, fmt.Errorf("%w: no member for label %q", ErrBadSigKey, label)
+	}
+	it, ok := m.(httpsfv.Item)
+	if !ok {
+		return SignatureKey{}, fmt.Errorf("%w: member %q is not an item", ErrBadSigKey, label)
+	}
+	scheme, ok := it.Value.(httpsfv.Token)
+	if !ok {
+		return SignatureKey{}, fmt.Errorf("%w: member %q scheme is not a token", ErrBadSigKey, label)
+	}
+	sk := SignatureKey{Label: label, Scheme: string(scheme), Params: map[string]string{}}
+	if it.Params != nil {
+		for _, name := range it.Params.Names() {
+			v, _ := it.Params.Get(name)
+			if s, ok := v.(string); ok {
+				sk.Params[name] = s
+			}
+		}
+	}
+	return sk, nil
+}
+
+// ParseSignatureKey returns the JWT carried under the jwt scheme for the
+// default label. Any other scheme is [ErrUnsupportedScheme] (draft -11
+// §11.3.4 step 4: agents MUST use the jwt scheme).
 func ParseSignatureKey(req *http.Request) (string, error) {
-	h := req.Header.Get(HeaderSignatureKey)
-	if h == "" {
-		return "", ErrMissingSigKey
+	sk, err := ParseSignatureKeyMember(req, DefaultSignatureLabel)
+	if err != nil {
+		return "", err
 	}
-	// Structured-field dictionary member: <label>=jwt;jwt="<token>".
-	// Accept whitespace variance between parameters.
-	idx := strings.Index(h, DefaultSignatureLabel+"=jwt")
-	if idx < 0 {
-		return "", ErrBadSigKey
+	if sk.Scheme != SchemeJWT {
+		return "", fmt.Errorf("%w: %q", ErrUnsupportedScheme, sk.Scheme)
 	}
-	rest := h[idx:]
-	jidx := strings.Index(rest, `jwt="`)
-	if jidx < 0 {
-		return "", ErrBadSigKey
+	tok := sk.Params["jwt"]
+	if tok == "" {
+		return "", fmt.Errorf("%w: jwt scheme without a jwt parameter", ErrBadSigKey)
 	}
-	rest = rest[jidx+len(`jwt="`):]
-	end := strings.IndexByte(rest, '"')
-	if end < 0 {
-		return "", ErrBadSigKey
-	}
-	if rest[:end] == "" {
-		return "", ErrBadSigKey
-	}
-	return rest[:end], nil
+	return tok, nil
 }
 
 // SignRequest signs req per the AAuth profile: sets Content-Digest when a

@@ -30,7 +30,8 @@ func Example() {
 			Resolver: aauth.SelfSignedResolver{},
 		})
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			// 401 with the matching Signature-Error code.
+			aauth.WriteSignatureFailure(w, err)
 			return
 		}
 		if _, err := fmt.Fprintf(w, "authenticated %s", claims.Subject); err != nil {

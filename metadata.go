@@ -112,5 +112,5 @@ func (r JWKSResolver) resolve(ctx context.Context, iss, dwk, kid string) (JWK, e
 			return k, nil
 		}
 	}
-	return JWK{}, fmt.Errorf("aauth: no key %q in JWKS of %s", kid, iss)
+	return JWK{}, fmt.Errorf("%w: no key %q in JWKS of %s", ErrUnknownKey, kid, iss)
 }

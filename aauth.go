@@ -93,6 +93,24 @@ var (
 	// the verifier requires (signature-key §5.4.5); see
 	// [MissingComponentsError].
 	ErrSignatureInput = errors.New("aauth: signature does not cover required components")
+	// ErrUnsupportedScheme means the Signature-Key member for the label
+	// names a scheme the verifier does not implement (signature-key §5.4.2).
+	ErrUnsupportedScheme = errors.New("aauth: unsupported Signature-Key scheme")
+	// ErrUnknownKey means no key with the requested kid was found at the
+	// issuer's jwks_uri (signature-key §5.4.8).
+	ErrUnknownKey = errors.New("aauth: unknown key")
+	// ErrIssuerMissing means a discovered metadata document has no issuer
+	// member (signature-key §5.4.9; draft -11 §11.2).
+	ErrIssuerMissing = errors.New("aauth: metadata issuer missing")
+	// ErrIssuerMismatch means a discovered metadata document's issuer
+	// differs from the identity it was fetched under (signature-key
+	// §5.4.10; draft -11 §11.2).
+	ErrIssuerMismatch = errors.New("aauth: metadata issuer mismatch")
+	// ErrRevoked means a token verified and is unexpired but its issuer has
+	// withdrawn it (signature-key §5.4.13). This package does not track
+	// revocations; a deployment's revocation check returns (or wraps) it so
+	// that [SignatureErrorFor] answers revoked_jwt.
+	ErrRevoked = errors.New("aauth: token revoked")
 	// ErrMissingSigKey means the request had no Signature-Key header.
 	ErrMissingSigKey = errors.New("aauth: missing Signature-Key header")
 	// ErrBadSigKey means the Signature-Key header was malformed.

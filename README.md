@@ -78,6 +78,10 @@ resp, err := hc.Get("https://files.example/files") // signed, challenged, retrie
 claims, err := aauth.VerifyAndExtractAgent(ctx, req, aauth.VerifyAgentTokenOptions{
     Resolver: aauth.SelfSignedResolver{}, // or JWKSResolver / StaticResolver
 })
+if err != nil {
+    aauth.WriteSignatureFailure(w, err) // 401 + Signature-Error (e.g. expired_jwt, clock_skew)
+    return
+}
 // claims.Subject, claims.IsSubAgent(), claims.Cnf.JWK — identity established;
 // your policy layer decides what it may do.
 ```
@@ -128,8 +132,8 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Self-hosted agents (agent as its own AP, bootstrap §4.3) | ✅ |
 | Verification (§5.2.4) — pluggable trust: JWKS discovery / pinned keys / self-signed | ✅ |
 | HTTP Message Signatures profile (`@method @authority @path signature-key`; `content-digest` + `content-type` on bodies; `created` validity window with `clock_skew`; no `alg`/`keyid` parameters) | ✅ |
-| Signature-Key scheme `jwt` | ✅ |
-| Error model (`Signature-Error` + RFC 9457 problem bodies) | ✅ |
+| Signature-Key header parsed as an RFC 9651 dictionary; scheme `jwt` (others answered `unsupported_scheme`) | ✅ |
+| Error model: signature-key-09 `Signature-Error` codes, 401 on every signature failure, `Accept-Signature-Scheme` / `Accept-Signature-Alg`, RFC 9457 problem bodies | ✅ |
 | Signature-Key schemes `hwk` / `jkt-jwt` / `jwks_uri`; two-key AP minting | ⬜ |
 | Signature-Key scheme `x509` | ⛔ |
 

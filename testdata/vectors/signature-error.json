@@ -1,9 +1,71 @@
 {
-  "description": "Signature-Error response header values.",
-  "spec": "draft-hardt-httpbis-signature-key §5",
+  "description": "Signature-Error response header values (an RFC 9651 Dictionary whose error member is a Token).",
+  "spec": "draft-hardt-httpbis-signature-key-09 \u00a75.1, \u00a75.4",
   "kind": "signature-error",
   "cases": [
-    {"header": "error=invalid_signature", "code": "invalid_signature", "canonical": true},
-    {"header": "error=unsupported_algorithm", "code": "unsupported_algorithm", "canonical": true}
+    {
+      "header": "error=invalid_signature",
+      "code": "invalid_signature",
+      "canonical": true
+    },
+    {
+      "header": "error=unsupported_algorithm",
+      "code": "unsupported_algorithm",
+      "canonical": true
+    },
+    {
+      "header": "error=unsupported_scheme",
+      "code": "unsupported_scheme",
+      "canonical": true
+    },
+    {
+      "header": "error=invalid_input, required_input=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\")",
+      "code": "invalid_input",
+      "required_input": [
+        "@method",
+        "@authority",
+        "@path",
+        "signature-key",
+        "content-digest"
+      ],
+      "canonical": true
+    },
+    {
+      "header": "error=invalid_input,required_input=(\"@method\"  \"@path\")",
+      "code": "invalid_input",
+      "required_input": [
+        "@method",
+        "@path"
+      ],
+      "canonical": false
+    },
+    {
+      "header": "error=unknown_key",
+      "code": "unknown_key",
+      "canonical": true
+    },
+    {
+      "header": "error=issuer_mismatch",
+      "code": "issuer_mismatch",
+      "canonical": true
+    },
+    {
+      "header": "error=expired_jwt",
+      "code": "expired_jwt",
+      "canonical": true
+    },
+    {
+      "header": "error=clock_skew",
+      "code": "clock_skew",
+      "canonical": true
+    },
+    {
+      "header": "error=revoked_jwt, future_member=\"x\"",
+      "code": "revoked_jwt",
+      "params": {
+        "future_member": "\"x\""
+      },
+      "canonical": true
+    }
   ]
 }

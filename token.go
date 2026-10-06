@@ -175,14 +175,15 @@ type StaticResolver map[string]JWKS
 func (r StaticResolver) ResolveKey(_ context.Context, iss, _, kid string, _ *JWK) (crypto.PublicKey, error) {
 	set, ok := r[iss]
 	if !ok {
-		return nil, fmt.Errorf("aauth: unknown issuer %q", iss)
+		// No trust anchor for this issuer: the token cannot be verified.
+		return nil, fmt.Errorf("%w: untrusted issuer %q", ErrInvalidToken, iss)
 	}
 	for _, k := range set.Keys {
 		if k.Kid == kid || kid == "" {
 			return k.PublicKey()
 		}
 	}
-	return nil, fmt.Errorf("aauth: no key %q for issuer %q", kid, iss)
+	return nil, fmt.Errorf("%w: no key %q for issuer %q", ErrUnknownKey, kid, iss)
 }
 
 // VerifyAgentTokenOptions tunes VerifyAgentToken.

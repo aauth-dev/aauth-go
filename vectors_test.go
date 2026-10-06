@@ -27,7 +27,6 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -61,6 +60,7 @@ var vectorRunners = map[string]vectorRunner{
 	"agent-identifier": runIdentifierVectors,
 	"requirement":      runRequirementVectors,
 	"signature-error":  runSignatureErrorVectors,
+	"signature-key":    runSignatureKeyVectors,
 	"metadata":         runMetadataVectors,
 	"jwt":              runJWTVectors,
 	"http-signature":   runHTTPSignatureVectors,
@@ -261,10 +261,11 @@ func runRequirementVectors(t *testing.T, raw json.RawMessage, _ bool) any {
 // --- signature-error ------------------------------------------------------
 
 type signatureErrorCase struct {
-	Header    string            `json:"header"`
-	Code      string            `json:"code"`
-	Params    map[string]string `json:"params,omitempty"`
-	Canonical bool              `json:"canonical"`
+	Header        string            `json:"header"`
+	Code          string            `json:"code"`
+	RequiredInput []string          `json:"required_input,omitempty"`
+	Params        map[string]string `json:"params,omitempty"`
+	Canonical     bool              `json:"canonical"`
 }
 
 func runSignatureErrorVectors(t *testing.T, raw json.RawMessage, _ bool) any {
@@ -277,6 +278,9 @@ func runSignatureErrorVectors(t *testing.T, raw json.RawMessage, _ bool) any {
 		if got.Code != c.Code {
 			t.Errorf("%q: code = %q, want %q", c.Header, got.Code, c.Code)
 		}
+		if !reflect.DeepEqual(got.RequiredInput, c.RequiredInput) {
+			t.Errorf("%q: required_input = %v, want %v", c.Header, got.RequiredInput, c.RequiredInput)
+		}
 		want := c.Params
 		if want == nil {
 			want = map[string]string{}
@@ -286,6 +290,53 @@ func runSignatureErrorVectors(t *testing.T, raw json.RawMessage, _ bool) any {
 		}
 		if c.Canonical && got.String() != c.Header {
 			t.Errorf("serialize: got %q, want %q", got.String(), c.Header)
+		}
+	}
+	return nil
+}
+
+// --- signature-key ------------------------------------------------------
+
+type signatureKeyCase struct {
+	Header string            `json:"header"`
+	Scheme string            `json:"scheme,omitempty"`
+	Params map[string]string `json:"params,omitempty"`
+	// Error is the Signature-Error code for a jwt-only (agent-facing)
+	// verifier; empty means the header yields an agent token.
+	Error string `json:"error,omitempty"`
+}
+
+func runSignatureKeyVectors(t *testing.T, raw json.RawMessage, _ bool) any {
+	for _, c := range decodeCases[signatureKeyCase](t, raw) {
+		req, err := http.NewRequest(http.MethodGet, "https://resource.example/", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set(HeaderSignatureKey, c.Header)
+		if c.Scheme != "" {
+			sk, err := ParseSignatureKeyMember(req, DefaultSignatureLabel)
+			if err != nil {
+				t.Errorf("%q: %v", c.Header, err)
+				continue
+			}
+			want := c.Params
+			if want == nil {
+				want = map[string]string{}
+			}
+			if sk.Scheme != c.Scheme || !reflect.DeepEqual(sk.Params, want) {
+				t.Errorf("%q: parsed %+v, want scheme %q params %v", c.Header, sk, c.Scheme, want)
+			}
+		}
+		tok, err := ParseSignatureKey(req)
+		if c.Error == "" {
+			if err != nil || tok != c.Params["jwt"] {
+				t.Errorf("%q: token %q, %v", c.Header, tok, err)
+			}
+			continue
+		}
+		se, ok := SignatureErrorFor(err)
+		if !ok || se.Code != c.Error {
+			t.Errorf("%q: err = %v (%q), want %s", c.Header, err, se.Code, c.Error)
 		}
 	}
 	return nil
@@ -549,14 +600,6 @@ type vectorVerify struct {
 
 var signedHeaderNames = []string{HeaderSignatureInput, HeaderSignature, "Content-Digest"}
 
-// expectedSigError maps an expected Signature-Error code to the error the
-// verifier returns.
-var expectedSigError = map[string]error{
-	"invalid_signature": ErrSignatureInvalid,
-	"invalid_input":     ErrSignatureInput,
-	"clock_skew":        ErrClockSkew,
-}
-
 func runHTTPSignatureVectors(t *testing.T, raw json.RawMessage, update bool) any {
 	cases := decodeCases[httpSignatureCase](t, raw)
 	for i, c := range cases {
@@ -608,15 +651,16 @@ func runHTTPSignatureVectors(t *testing.T, raw json.RawMessage, update bool) any
 		opts.Now = func() time.Time { return at }
 
 		err = VerifyRequestWithOptions(req, pub, opts)
-		switch {
-		case c.Expect == "valid":
+		switch c.Expect {
+		case "valid":
 			if err != nil {
 				t.Errorf("%s: verify: %v", c.Name, err)
 			}
-		case expectedSigError[c.Expect] == nil:
-			t.Errorf("%s: unknown expectation %q", c.Name, c.Expect)
-		case !errors.Is(err, expectedSigError[c.Expect]):
-			t.Errorf("%s: err = %v, want %s", c.Name, err, c.Expect)
+		default:
+			se, ok := SignatureErrorFor(err)
+			if !ok || se.Code != c.Expect {
+				t.Errorf("%s: err = %v (Signature-Error %q), want %s", c.Name, err, se.Code, c.Expect)
+			}
 		}
 	}
 	return cases
