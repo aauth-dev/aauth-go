@@ -167,9 +167,9 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 
 | Capability | Status |
 |---|---|
-| Permission endpoint (§7.4) — with or without a mission | ✅ |
+| Permission endpoint (§7.7) — with or without a mission (`mission_s256`) | ✅ |
 | Deferred responses (202 / `Location` / `Retry-After` / `Prefer: wait`, 429 backoff) | ✅ |
-| Audit endpoint (§7.5) + mission-status errors (§8.6) | ✅ |
+| Audit endpoint (§7.8, `mission_s256` REQUIRED) + mission status errors with `termination_reason` (§8.8) | ✅ |
 | Clarification chat (§7.5): question → answer / updated-request (with the REQUIRED `presented_token`, §7.5.2.2) / cancel | ✅ |
 | Call chaining (§10.1.1): routing by the upstream token's PS, upstream token verification; downstream person-token step and intermediary flow | 🟡 |
 | Interaction chaining (§10.1.2) | ✅ |
