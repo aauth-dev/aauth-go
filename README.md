@@ -8,29 +8,45 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/aauth-dev/auth-go)](https://goreportcard.com/report/github.com/aauth-dev/auth-go)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A Go implementation of the **AAuth protocol** —
-[draft-hardt-oauth-aauth-protocol](https://datatracker.ietf.org/doc/draft-hardt-oauth-aauth-protocol/)
-(tracking **-09**) — giving AI agents their own cryptographic identity and a
-clean authorization model across trust domains: **no shared secrets, no
-per-server pre-registration**. Every agent holds its own signing key (Ed25519 by default, or ES256) and a
-self-describing token that binds it; any party can verify the token and every
-request it signs.
+A Go implementation of the **AAuth protocol**: agent identity and
+authorization across trust domains, with **no shared secrets and no
+per-server pre-registration**. Every agent holds its own signing key (Ed25519
+by default, or ES256) and a self-describing token that binds it; any party can
+verify the token and every request it signs.
+
+The module covers every role: agent, resource, Person Server (PS), Access
+Server (AS), and hosted agent provider (AP). Each is a library you embed in
+your own services.
 
 To our knowledge this is **the first Go implementation** of the protocol (the
-draft's §17 Implementation Status lists TypeScript, .NET, Python, and Java).
+draft's Implementation Status section lists TypeScript, .NET, Python, and
+Java).
 
-Companion specs implemented against:
-[signature-key-04](https://datatracker.ietf.org/doc/draft-hardt-httpbis-signature-key/)
-· [aauth-bootstrap-01](https://datatracker.ietf.org/doc/draft-hardt-aauth-bootstrap/).
-For an interactive tour of the protocol, see [explorer.aauth.dev](https://explorer.aauth.dev/).
+## Drafts implemented
+
+| Draft | Version | Constant |
+|---|---|---|
+| [AAuth Protocol](https://datatracker.ietf.org/doc/draft-hardt-oauth-aauth-protocol/) | `draft-hardt-oauth-aauth-protocol-11` | `aauth.ProtocolDraft` |
+| [HTTP Signature Keys](https://datatracker.ietf.org/doc/draft-hardt-httpbis-signature-key/) | `draft-hardt-httpbis-signature-key-09` | `aauth.SignatureKeyDraft` |
+| [AAuth Bootstrap](https://datatracker.ietf.org/doc/draft-hardt-aauth-bootstrap/) | `draft-hardt-aauth-bootstrap-02` | `aauth.BootstrapDraft` |
+
+The drafts are works in progress, and each revision can change the wire
+format; the module's minor version moves with them until the protocol
+stabilizes. Upgrading from v0.1 (draft -09)? See the
+[migration guide](MIGRATION.md) and the [changelog](CHANGELOG.md). For an
+interactive tour of the protocol, see
+[explorer.aauth.dev](https://explorer.aauth.dev/).
 
 ## Contents
 
 - [Install](#install)
-- [Quick start](#quick-start)
-- [API overview](#api-overview)
+- [Packages](#packages)
+- [Quick start: agent](#quick-start-agent)
+- [Quick start: resource](#quick-start-resource)
+- [Quick start: hosted AP, PS, and AS](#quick-start-hosted-ap-ps-and-as)
 - [Protocol coverage](#protocol-coverage)
 - [Design notes](#design-notes)
+- [Security notes](#security-notes)
 - [Testing](#testing)
 - [License](#license)
 
@@ -40,193 +56,355 @@ For an interactive tour of the protocol, see [explorer.aauth.dev](https://explor
 go get github.com/aauth-dev/auth-go
 ```
 
-Requires Go 1.24+. Full API reference: **[pkg.go.dev/github.com/aauth-dev/auth-go](https://pkg.go.dev/github.com/aauth-dev/auth-go)**.
+Requires Go 1.24 or later. The full API reference is on
+**[pkg.go.dev](https://pkg.go.dev/github.com/aauth-dev/auth-go)**.
 
 ```go
 import aauth "github.com/aauth-dev/auth-go"
 ```
 
-## Quick start
+## Packages
 
-**Agent** — ask a Person Server before acting:
+| Package | Contents |
+|---|---|
+| [`aauth`](https://pkg.go.dev/github.com/aauth-dev/auth-go) | The protocol vocabulary shared by every role: identifiers, keys, tokens (mint, issue, verify), HTTP message signatures, metadata, requirements, deferred responses, revocation, errors, and the agent-side `PSClient` and `Transport`. Resources use it directly. |
+| [`personserver`](https://pkg.go.dev/github.com/aauth-dev/auth-go/personserver) | Person Server as an `http.Handler`: person and auth token endpoints, pending requests, missions, permission, audit, interaction, revocation, and federation to access servers. |
+| [`accessserver`](https://pkg.go.dev/github.com/aauth-dev/auth-go/accessserver) | Access Server as an `http.Handler` (AS token endpoint, revocation), plus `Client` (PS to AS over HTTP) and `Server.Local` (in-process PS-AS collapse). |
+| [`agentprovider`](https://pkg.go.dev/github.com/aauth-dev/auth-go/agentprovider) | Hosted agent provider: agent token issuance, two-key and single-key refresh, sub-agent tokens, and a `Client` with a `TokenSource` for agents. |
+| [`ratelimit`](https://pkg.go.dev/github.com/aauth-dev/auth-go/ratelimit) | In-memory token bucket implementing `aauth.Limiter` for single-instance deployments. |
+| [`interactioncode`](https://pkg.go.dev/github.com/aauth-dev/auth-go/interactioncode) | Interaction code generation and canonicalization (Crockford base32). |
 
-```go
-id, _ := aauth.ParseAgentIdentifier("aauth:claude-code@devbox.local")
-agent, _ := aauth.NewAgent(id, aauth.WithPersonServer("http://127.0.0.1:7421"))
+## Quick start: agent
 
-ps := aauth.NewPSClient("http://127.0.0.1:7421", agent)
-res, err := ps.RequestPermission(ctx, aauth.PermissionRequest{
-    Action:      "WriteFile",
-    Description: "write the deploy config",
-    Parameters:  map[string]any{"path": "/tmp/deploy.yaml"},
-})
-// res.Granted() reports the decision; res.Reason explains a denial.
-// A 202 deferred response (a human deciding) is followed automatically.
-```
-
-**Agent, transparently** — wrap an `http.Client` and AAuth disappears; the
-transport signs each request and turns 401 challenges into token exchanges:
+A self-hosted agent is its own agent provider (bootstrap §4.3): it holds a
+key, mints its own agent tokens, and serves `/.well-known/aauth-agent.json`
+and its JWKS (`Agent.JWKS`) at its issuer. Wrap an `http.Client` with
+`Transport` and AAuth disappears from application code:
 
 ```go
+id, err := aauth.ParseAgentIdentifier("aauth:assistant@agent.example")
+if err != nil {
+	return err
+}
+agent, err := aauth.NewAgent(id,
+	aauth.WithIssuer("https://agent.example"),    // serves aauth-agent.json and the JWKS
+	aauth.WithPersonServer("https://ps.example"), // the ps claim
+)
+if err != nil {
+	return err
+}
+
+ps := aauth.NewPSClient("https://ps.example", agent)
+if _, err := ps.Discover(ctx); err != nil { // endpoints from aauth-person.json
+	return err
+}
+
 hc := &http.Client{Transport: aauth.NewTransport(agent, ps)}
-resp, err := hc.Get("https://files.example/files") // signed, challenged, retried
+res, err := hc.Get("https://files.example/files")
 ```
 
-**Server** — authenticate an agent behind any endpoint:
+For each request the transport signs with the agent's key and answers
+`requirement=agent-token`, `person-token`, and `auth-token` challenges (401,
+or a 202 deferred delivery): it obtains a person token, redeems the resource
+token at the PS, verifies what it receives, caches tokens per resource with a
+five-minute refresh margin, and retries. Set `Transport.OnRequirement` to
+show the user an interaction URL and code while a request waits for them.
+
+An agent whose tokens come from a hosted provider uses
+`aauth.WithTokenSource`, for example with `agentprovider.Client.TokenSource`.
+
+Governance is optional and uses the same client:
 
 ```go
-claims, err := aauth.VerifyAndExtractAgent(ctx, req, aauth.VerifyAgentTokenOptions{
-    Resolver: aauth.SelfSignedResolver{}, // or JWKSResolver / StaticResolver
+m, err := ps.ProposeMission(ctx, aauth.MissionProposal{
+	Description: "Reconcile the March invoices",
+	Resources:   []string{"https://ledger.example"},
 })
 if err != nil {
-    aauth.WriteSignatureFailure(w, err) // 401 + Signature-Error (e.g. expired_jwt, clock_skew)
-    return
+	return err
 }
-// claims.Subject, claims.IsSubAgent(), claims.Cnf.JWK — identity established;
-// your policy layer decides what it may do.
+tr := aauth.NewTransport(agent, ps)
+tr.MissionS256 = m.S256 // person and auth tokens are requested under the mission
+
+perm, err := ps.RequestPermission(ctx, aauth.PermissionRequest{
+	Action:      "SendEmail",
+	Description: "email the reconciliation summary",
+	MissionS256: m.S256,
+})
+if err != nil {
+	return err // a *aauth.MissionStatusError once the mission is terminated
+}
+if !perm.Granted() {
+	return errors.New(perm.Reason)
+}
 ```
 
-More runnable examples render on [pkg.go.dev](https://pkg.go.dev/github.com/aauth-dev/auth-go#pkg-examples).
+## Quick start: resource
 
-## API overview
+A resource verifies whichever token a request presents and challenges for the
+next one. With PS authorization (three-party), an agent token is answered
+with `requirement=person-token`, a person token with a resource token
+challenge (`requirement=auth-token`), and an auth token is served:
 
-The root package is the stable protocol vocabulary. Grouped by role:
+```go
+const self = "https://files.example" // the resource's server identifier
+verify := aauth.TokenVerifyOptions{Resolver: aauth.NewJWKSResolver(egressClient)}
 
-| Area | Key symbols |
-|---|---|
-| **Identity** | [`Agent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent), [`NewAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#NewAgent), [`Agent.MintToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.MintToken), [`Agent.NewSubAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.NewSubAgent), [`ParseAgentIdentifier`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ParseAgentIdentifier) |
-| **Signing** | [`SignRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#SignRequest), [`AttachSignatureKey`](https://pkg.go.dev/github.com/aauth-dev/auth-go#AttachSignatureKey), [`VerifyRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyRequest), [`ServerSigner`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ServerSigner), [`VerifyServerRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyServerRequest) |
-| **Verification / trust** | [`VerifyAndExtractAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAndExtractAgent), [`VerifyAgentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAgentToken), [`KeyResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#KeyResolver) · [`JWKSResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#JWKSResolver) · [`StaticResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#StaticResolver) · [`SelfSignedResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#SelfSignedResolver) |
-| **Person Server side** | [`IssuePersonToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssuePersonToken), [`VerifyResourceToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyResourceToken), [`IssueAuthToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssueAuthToken), [`VerifySubagentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifySubagentToken), [`WriteTokenError`](https://pkg.go.dev/github.com/aauth-dev/auth-go#WriteTokenError) |
-| **Agent client** | [`PSClient`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient) ([`RequestPermission`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.RequestPermission), [`RequestAuthToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.RequestAuthToken), [`PersonToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.PersonToken), [`Audit`](https://pkg.go.dev/github.com/aauth-dev/auth-go#PSClient.Audit)), [`Transport`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Transport) |
-| **Resource side** | [`VerifyAndExtractPerson`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAndExtractPerson), [`IssueResourceToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssueResourceToken), [`ChallengeAuthToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ChallengeAuthToken), [`VerifyAndExtractAuth`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAndExtractAuth) |
-| **Delegation** | [`RouteDownstream`](https://pkg.go.dev/github.com/aauth-dev/auth-go#RouteDownstream), [`VerifyUpstreamToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyUpstreamToken), [`VerifySubagentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifySubagentToken) |
-| **Deferred / interaction** | [`DoDeferred`](https://pkg.go.dev/github.com/aauth-dev/auth-go#DoDeferred), [`Requirement`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Requirement), [`WriteClarification`](https://pkg.go.dev/github.com/aauth-dev/auth-go#WriteClarification), [`interactioncode`](https://pkg.go.dev/github.com/aauth-dev/auth-go/interactioncode) |
+handler := func(w http.ResponseWriter, r *http.Request) {
+	tok, err := aauth.ParseSignatureKey(r)
+	if err != nil {
+		aauth.WriteSignatureFailure(w, err) // 401 with Signature-Error
+		return
+	}
+	typ, err := aauth.TokenType(tok)
+	if err != nil {
+		aauth.WriteSignatureFailure(w, err)
+		return
+	}
+	switch typ {
+	case aauth.TypAuth:
+		claims, err := aauth.VerifyAndExtractAuth(r.Context(), r, self,
+			aauth.AuthTokenVerifyOptions{TokenVerifyOptions: verify})
+		if err != nil {
+			aauth.WriteSignatureFailure(w, err)
+			return
+		}
+		serve(w, claims.Subject, claims.Scope) // directed sub, granted scope
+	case aauth.TypPerson:
+		person, err := aauth.VerifyAndExtractPerson(r.Context(), r, self, verify)
+		if err != nil {
+			aauth.WriteSignatureFailure(w, err)
+			return
+		}
+		rt, err := aauth.IssueResourceToken(
+			aauth.ResourceTokenParams{Resource: self, Scope: "files:read"},
+			person, resourceKey, resourceKID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		aauth.ChallengeAuthToken(w, rt) // 401 requirement=auth-token
+	default:
+		aauth.ChallengePersonToken(w) // 401 requirement=person-token
+	}
+}
+```
+
+The resource also serves `/.well-known/aauth-resource.json`
+(`aauth.ResourceMetadata`) and the JWKS holding `resourceKey`. A resource that
+needs only the agent's identity stops at `aauth.VerifyAndExtractAgent`. For
+four-party access, set `ResourceTokenParams.Audience` to the resource's
+access server. The compile-checked version is
+[`Example_resource`](https://pkg.go.dev/github.com/aauth-dev/auth-go#example-package-Resource).
+
+## Quick start: hosted AP, PS, and AS
+
+The server roles are `http.Handler`s over interfaces you implement: storage
+(`personserver.Store`, `accessserver.Store`) and policy
+(`personserver.Decider`, `accessserver.Authorizer`, and the optional
+`MissionApprover`, `PermissionDecider`, `InteractionRelay`, and
+`agentprovider.Registrar`). The library never decides policy. A decision
+allows, denies, or defers, and the hosting application resolves deferred
+requests from its own approval UI (`Approve`, `Deny`, `Ask`).
+
+One origin can host all three roles (PS-AS collapse, §9.3.3); each keeps its
+own key, metadata document, and JWKS:
+
+```go
+ap, err := agentprovider.New(agentprovider.Config{
+	Issuer: issuer, Key: apKey,
+	Limiter: ratelimit.Per(10, time.Minute),
+})
+
+as, err := accessserver.New(accessserver.Config{
+	Issuer: issuer, Key: asKey,
+	Store: accessserver.NewMemoryStore(), // your database in production
+	Authorizer: accessserver.AuthorizerFunc(func(ctx context.Context, r *accessserver.AuthorizationRequest) (accessserver.Decision, error) {
+		return accessserver.Allow(""), nil // the resource token's scope
+	}),
+	Limiter: ratelimit.Per(5, time.Second),
+})
+
+ps, err := personserver.New(personserver.Config{
+	Issuer: issuer, Key: psKey,
+	SubjectKey:     subjectKey, // 32+ random bytes, kept stable
+	Store:          personserver.NewMemoryStore(),
+	InteractionURL: issuer + "/consent",
+	Decider: personserver.DeciderFunc(func(ctx context.Context, r *personserver.TokenRequest) (personserver.Decision, error) {
+		if r.Person == "" {
+			return personserver.DeferInteraction(), nil // a new agent: the person signs in at /consent
+		}
+		return personserver.Allow(personserver.Grant{}), nil
+	}),
+	Federator:    as.Local(issuer), // in-process PS-AS federation
+	CollocatedAS: func(resource string) bool { return resource == "https://ledger.example" },
+	Limiter:      ratelimit.Per(5, time.Second),
+})
+
+mux := http.NewServeMux()
+ap.Register(mux)
+ps.Register(mux)
+as.Register(mux)
+```
+
+The consent page passes the `?code=` it receives to `ps.ConsumeCode`,
+authenticates the person, and calls `ps.Approve` with a `Grant` naming the
+person, which binds the agent. `ap.IssueAgentToken` issues tokens for agent
+keys the application has authorized. The PS routes live under `/ps/` by
+default, so agents find them with `PSClient.Discover`. The full,
+compile-checked version is
+[`Example_collapsedDeployment`](https://pkg.go.dev/github.com/aauth-dev/auth-go/personserver#example-package-CollapsedDeployment),
+and the [`e2e`](e2e) test runs the whole flow: enrollment, three-party
+access, missions, PS-AS collapse, audit, and a revocation cascade.
 
 ## Protocol coverage
 
-AAuth involves four participants — an **Agent** making signed requests, a
-**Resource** (the protected API), a **Person Server** (PS) representing the
-user, and an **Access Server** (AS) enforcing access policy — and stacks three
-layers: proving *who the agent is*, deciding *what it may access*, and
-optionally governing *what it is doing and why*. These tables track how much of
-each is implemented.
+Status against draft -11, by section. Legend: ✅ implemented and tested,
+🟡 partial, ⬜ not yet.
 
-Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of scope for now
+### §5 Agents
 
-### Roles
-
-| Role | Status | What exists |
+| Section | Status | Notes |
 |---|---|---|
-| **Agent** | ✅ | identity, token minting, PS client (person and auth tokens, permission, audit), and a protocol-aware `http.RoundTripper` (`Transport`): auto-signing; `agent-token`, `person-token`, and `auth-token` requirements (401, and 202 deferred delivery, §6.5.1); challenge and auth-token response verification; per-resource caches with the top-down 5-minute refresh margin (§7.9.1); `clock_skew` wait-and-retry once; revoked/expired cached tokens dropped; `AAuth-Access` lifecycle |
-| **Resource** | ✅ | agent + auth-token authentication, resource-token issuing, 401 challenges, `AAuth-Access` two-party flow |
-| **Person Server** | 🟡 | `personserver` package: person token and auth token endpoints (§7.1, §7.2) as an `http.Handler` over caller-supplied `Store` and `Decider`; directed `sub` (keyed HMAC per resource), agent↔person binding, server-side pending requests (`Prefer: wait`, clarification rounds, cancel, interaction codes), sub-agent and call-chaining requests, metadata + JWKS; mission, permission, audit, and interaction endpoints over `MissionApprover` / `PermissionDecider` / `InteractionRelay`; revocation recipient and cascade; four-party federation through a `Federator` (claims answered by a `ClaimsProvider`, interaction / approval / clarification passed through, §9.1.3 delivery checks, `as_unreachable`) |
-| **Agent Provider** | ✅ | `agentprovider` package: provider signing key separate from agent keys, `aauth-agent.json` + JWKS, `IssueAgentToken` for any authorized key, HTTP issuance (`hwk`), two-key refresh (`jkt-jwt`), hosted sub-agent issuance (same `iss`, own key, single level), attestation hook, AP→PS revocation; `Client` + `TokenSource` for agents |
-| **Access Server** | ✅ | `accessserver` package: AS token endpoint (§9.1) over a caller `Authorizer` (allow / deny / `claims` / interaction / approval / clarification 202s), presented-token re-verification, `aa-auth+jwt` with `dwk` `aauth-access.json`, pending URLs for the PS, revocation endpoint with cascade to resources; `Client` (PS→AS over HTTP, `jwks_uri`-signed) and `Server.Local` (in-process PS-AS collapse, §9.3.3) |
+| §5.1 Agent provider | ✅ | Self-hosted (`Agent`, bootstrap §4.3) and hosted (`agentprovider`: separate provider key, `aauth-agent.json`, attestation hook) |
+| §5.2 Agent identifiers | ✅ | `aauth:name@domain`, sub-agents `name+worker@domain`, charset and length rules, case-sensitive |
+| §5.3 Agent token | ✅ | `aa-agent+jwt` minting and verification (`Agent.MintToken`, `VerifyAgentToken`, `VerifyAndExtractAgent`); pluggable trust through `KeyResolver` |
 
-### Layer 1 — Identity
+### §6 Resource access
 
-| Capability | Status |
-|---|---|
-| Agent identifiers (`aauth:name@domain`; sub-agents `name+worker@domain`, single-level rule), validated per -11 §5.2 (local-part charset and length, case-sensitive) | ✅ |
-| Server identifiers (`ValidateServerIdentifier`, §11.1.1: https, host only, lowercase, A-labels) | ✅ |
-| Agent tokens — `sig=jwt` (-09 claim set: `iss dwk sub jti cnf iat exp ps parent_agent`, `kid` header) | ✅ |
-| Fully-specified algorithms: JWS and JWK `alg` is `Ed25519` or `ES256`; `EdDSA`, `none`, symmetric, absent, or kty/crv-inconsistent `alg` rejected (signature-key §3.3) | ✅ |
-| Self-hosted agents (agent as its own AP, bootstrap §4.3) | ✅ |
-| Verification (§5.2.4) — pluggable trust: JWKS discovery / pinned keys / self-signed | ✅ |
-| Common JWT rules (§11.5): `typ`/`dwk` checked, `iat` required (ahead of the clock → `clock_skew`), `exp` with no skew tolerance, `iss` a server identifier, person/auth lifetime ≤ 1h, `BoundedExpiry` for issuers; token-parameter error codes (`invalid_`/`expired_`/`revoked_` × `presented`/`upstream`/`subagent`/`resource`, §11.9.3) | ✅ |
-| Metadata `issuer` verified against the fetch URL (`issuer_missing` / `issuer_mismatch`, §11.2) | ✅ |
-| Metadata documents for all four roles (§11.2): common members (`accept_signature_algs`, display fields), PS `auth_token_endpoint` + `person_token_endpoint` (REQUIRED) and optional endpoints, `aauth-access.json`, resource `scope_descriptions` / `signature_window` / `revocation_endpoint`; `Validate` for REQUIRED members; `PSClient.Discover` | ✅ |
-| `aauth-resource` link relation (§11.2.5): `ResourceMetadataLink`, `ResourceLinks` (only server-identifier targets) | ✅ |
-| JWKS cache (§11.4): cache headers, 1-minute refresh floor, unknown-`kid` and re-key refresh, 24h max age, backoff, bounded entries | ✅ |
-| Egress admission for discovery fetches (signature-key §7.3) | 🟡 bring your own `http.Client` |
-| HTTP Message Signatures profile (`@method @authority @path signature-key`; `content-digest` + `content-type` on bodies; `created` validity window with `clock_skew`; no `alg`/`keyid` parameters) | ✅ |
-| Signature-Key header parsed as an RFC 9651 dictionary; scheme `jwt` (others answered `unsupported_scheme`) | ✅ |
-| Error model: signature-key-09 `Signature-Error` codes, 401 on every signature failure, `Accept-Signature-Scheme` / `Accept-Signature-Alg`, RFC 9457 problem bodies | ✅ |
-| Signature-Key scheme `jwks_uri` for server-signed requests (PS→AS, revocation; §11.3.2): `ServerSigner`, `VerifyServerRequest` | ✅ |
-| Token revocation, caller side (§11.12): `{jti, exp}` signed under `jwks_uri` (`RevocationClient`), 202 polling under the same identity, `unsupported_iss` / `rate_limited` errors, downstream outcomes (`revocation_unsupported` / `revocation_unavailable`), endpoint discovery; `ParseRevocationRequest` for recipients | ✅ |
-| Revocation recipients and cascade (records, downstream fan-out) | 🟡 AS: revocation endpoint (PS and resource callers) revoking the auth tokens issued against a person token, with `downstream` outcomes; PS: `personserver` revocation endpoint (agent provider and resource callers, `unsupported_iss`), cascade by agent identity and through call chains, `RevokePersonToken` / `RevokeAuthToken` / `RevokeBinding` / `TerminateMission` with per-recipient outcomes |
-| Signature-Key scheme `jkt-jwt` (AP key refresh); two-key AP minting: `agentprovider` naming JWT (`NewNamingJWT`, `SignJKTJWT`), verification per signature-key §3.5 with single-use `jti`, refresh behind a caller `Registrar` | ✅ |
-| Signature-Key scheme `hwk` (not used between AAuth parties, §11.3.2): `agentprovider` uses it for enrollment and single-key refresh (bootstrap §8.2) | 🟡 AP only |
-| Signature-Key scheme `x509` | ⛔ |
+| Section | Status | Notes |
+|---|---|---|
+| §6.1 Agent token required | ✅ | `ChallengeAgentToken`; `Transport` retries with the agent token |
+| §6.2 Resource-managed authorization | ✅ | 202 interaction and approval waits followed by `Transport` |
+| §6.3 `AAuth-Access` session token | ✅ | Signature-bound, rolling refresh |
+| §6.4 Person token required | ✅ | `ChallengePersonToken`, `VerifyAndExtractPerson`; `Transport` obtains person tokens |
+| §6.5 Auth token required | ✅ | 401 challenges and 202 deferred delivery (§6.5.1) |
+| §6.6 Authorization endpoint | 🟡 | Metadata member and `IssueResourceToken` for the response; no agent-side client |
+| §6.7 Resource token | ✅ | Issued only against a verified person or auth token; PS and AS verification with the presented-token cross-check (§6.7.2); agent-side challenge verification (§6.7.3) |
 
-### Layer 2 — Resource access
+### §7 Person Server
 
-| Access mode | Status |
-|---|---|
-| Identity-Based (`requirement=agent-token`) | ✅ |
-| Resource-Managed (two-party; session token in `AAuth-Access`, signature-bound, rolling refresh) | ✅ |
-| Person identity (resource verifies a person token presented in place of the agent token) | ✅ resource and PS sides; agent side: `PSClient.PersonToken` (§7.1: `resource`, `mission_s256`, `subagent_token`, `upstream_token`, shared optional parameters, deferred 202s, response checks, cache per key / resource / mission / upstream) and `Transport` answering `requirement=person-token` |
-| PS-Asserted (three-party; challenge → `PSClient.RequestAuthToken` with the REQUIRED `presented_token` → auth token, §7.2) | ✅ |
-| Person tokens (`aa-person+jwt`, §7.1): issue with lifetime bounds (1h, agent / upstream / mission expiry), sub-agent key binding, verify incl. cnf request binding and no `scope`/`account` | ✅ |
-| Resource tokens (`aa-resource+jwt`, §6.7): issued only against a verified person token (`ps`, `sub`, `presented_jti`, `mission_s256`, `tenant` copied; `agent_jkt` from its `cnf`); PS/AS verification with the presented-token cross-check (§6.7.2); agent-side challenge verification incl. JWT signature, `ps`, `sub`, `presented_jti` (§6.7.3) | ✅ |
-| Auth tokens (`aa-auth+jwt`, §9.4): draft -11 claim set (`ps`, `sub`, `scope`, `account`, `mission_s256`, `tenant`; no `agent`/`act`/`mission`); `IssueAuthToken` with exp bounds (1h, agent / presented / upstream / mission); resource verification incl. cnf request binding and an `(iss, sub)` record-check hook; agent-side response verification (§9.4.4); upstream token verification (§9.4.5) | ✅ |
-| `AAuth-Requirement` as an RFC 9651 dictionary (§11.6): `agent-token`, `person-token`, `auth-token`, `interaction`, `approval`, `clarification`, `claims`; challenge and approval-pending helpers | ✅ |
-| Resource metadata `access_mode` values (§11.2.4): `agent-token`, `person-token`, `session-token`, `auth-token` | ✅ |
-| Federated (four-party; Access Server): PS federation with delivery checks and `as_unreachable`, AS token endpoint, PS-AS collapse | ✅ |
-| Rich Resource Requests (R3) | ⛔ |
+| Section | Status | Notes |
+|---|---|---|
+| §7.1 Person token endpoint | ✅ | `PSClient.PersonToken` (cached per key, resource, mission, and upstream token) and the `personserver` endpoint; directed `sub` per resource |
+| §7.2 Auth token endpoint | ✅ | `PSClient.RequestAuthToken` with the REQUIRED `presented_token`; the `personserver` endpoint; resource-initiated interaction (§7.2.3) |
+| §7.3 User interaction | ✅ | `requirement=interaction` with single-use interaction codes |
+| §7.4 Consent presentation | ✅ | The verified request and the agent-asserted hints are handed to the `Decider` |
+| §7.5 Clarification chat | ✅ | Question, answer, updated request, and cancel, with round limits |
+| §7.6 Interaction endpoint | ✅ | `RequestInteraction`, `RelayInteraction`, `interaction_unavailable` fallback |
+| §7.7 Permission endpoint | ✅ | With or without a mission |
+| §7.8 Audit endpoint | ✅ | Records go to the mission log |
+| §7.9 Re-authorization | ✅ | Top-down refresh with a five-minute margin; revoked or expired cached tokens dropped |
 
-### Layer 3 — Governance
+### §8 Missions
 
-| Capability | Status |
-|---|---|
-| Permission endpoint (§7.7) — with or without a mission (`mission_s256`) | ✅ |
-| Deferred responses (202 / `Location` / `Retry-After` / `Prefer: wait`, 429 backoff) | ✅ |
-| Audit endpoint (§7.8, `mission_s256` REQUIRED) + mission status errors with `termination_reason` (§8.8) | ✅ |
-| Clarification chat (§7.5): question → answer / updated-request (with the REQUIRED `presented_token`, §7.5.2.2) / cancel | ✅ |
-| Call chaining (§10.1.1): routing by the upstream token's PS (`RouteDownstream`), intermediary `Transport` (`ChainRouter.Transport`: person token with `upstream_token`, then auth token with `presented_token` + `upstream_token`, own-agent-provider check, downstream exp ≤ upstream), upstream token verification (§9.4.5) | ✅ |
-| Sub-agents (§10.2): own key, token issued by the parent's provider (`Agent.NewSubAgent`, `IssueSubAgentToken`, `WithTokenSource`), single level, parent-mediated person and auth tokens with `subagent_token` (`NewTransport(sub, parentPS)`) | ✅ |
-| PS interaction endpoint (§7.6): `interaction` / `payment` relay and `question`, deferred polling, `interaction_unavailable` fallback (§11.6.3.2), `ProblemError` for RFC 9457 errors | ✅ |
-| Interaction chaining (§10.1.2) | ✅ |
-| Interaction codes (Crockford base32) | ✅ |
-| Mission lifecycle, agent side (§8.1–§8.5, §8.7): proposal (with `resources`), approval `{s256, mission, capabilities, person_tokens}` verified over the exact blob bytes (`MissionS256`, `NewMissionApproval`), approval person tokens cached, update and completion at `{mission_endpoint}/{mission_s256}`, typed errors | ✅ |
-| Mission lifecycle, PS side (§8): `personserver` mission endpoint storing the exact blob bytes (s256 per PS), approval person tokens, log with verifiable update digests, completion review, two states with termination reasons, `mission_not_found` with no existence/ownership oracle | ✅ |
+| Section | Status | Notes |
+|---|---|---|
+| §8.1, §8.2 Creation and approval | ✅ | Exact blob bytes and `mission_s256`; approval person tokens verified and cached |
+| §8.3 Mission log | ✅ | Updates logged with verifiable digests |
+| §8.4, §8.5 Update and completion | ✅ | Completion reviewed by the person |
+| §8.6 Mission management | 🟡 | Active and terminated states with termination reasons, `personserver.Server.TerminateMission`; no mission control plane endpoint |
+| §8.7, §8.8 Errors | ✅ | `mission_not_found` with no existence oracle; `*MissionStatusError` from every PS endpoint, including the token endpoints |
+
+### §9 Access Server federation
+
+| Section | Status | Notes |
+|---|---|---|
+| §9.1 AS token endpoint | ✅ | `accessserver` over an `Authorizer`; PS side through a `Federator` with delivery checks (§9.1.3) and `as_unreachable` |
+| §9.2 Claims required | ✅ | Answered by the PS through a `ClaimsProvider`, never sending `sub` |
+| §9.3 PS-AS federation | ✅ | HTTP `Client` signed under `jwks_uri`; in-process `Server.Local` for collapse (§9.3.3) |
+| §9.4 Auth token | ✅ | Draft -11 claim set; resource verification with an `(iss, sub)` hook; agent-side response checks (§9.4.4); upstream token checks (§9.4.5) |
+
+### §10 Agent delegation
+
+| Section | Status | Notes |
+|---|---|---|
+| §10.1.1 Call chaining | ✅ | `RouteDownstream`, `ChainRouter.Transport`; the intermediary must be its own agent provider; downstream exp bounded by the upstream token |
+| §10.1.2 Interaction chaining | ✅ | `ChainInteraction` |
+| §10.2 Sub-agents | ✅ | Own keys (`Agent.NewSubAgent`, `Agent.IssueSubAgentToken`), single level, parent-mediated tokens with `subagent_token` |
+
+### §11 Common elements
+
+| Section | Status | Notes |
+|---|---|---|
+| §11.1 Identifiers | ✅ | `ValidateServerIdentifier` (https, host only, lowercase, A-labels) |
+| §11.2 Metadata documents | ✅ | All four roles; `issuer` checked against the fetch URL; `Validate` for REQUIRED members; `aauth-resource` link relation |
+| §11.3 HTTP message signatures | ✅ | `@method @authority @path signature-key`, plus `content-digest` and `content-type` on bodies; `created` window and `clock_skew`; Signature-Key schemes `jwt`, `jwks_uri` (server-signed requests), and `jkt-jwt` and `hwk` (agent provider only) |
+| §11.4 JWKS discovery and caching | ✅ | Cache headers, one-minute refresh floor, unknown-`kid` refresh, 24-hour maximum age, backoff, bounded entries |
+| §11.5 AAuth tokens | ✅ | `typ` and `dwk` checked first, `iat` required, `exp` with no skew, `iss` a server identifier, one-hour person and auth tokens; `Ed25519` and `ES256` only |
+| §11.6 Requirement responses | ✅ | `AAuth-Requirement` as an RFC 9651 dictionary with all seven values |
+| §11.7 `AAuth-Capabilities` header | ⬜ | Not sent by `Transport` |
+| §11.8 Deferred responses | ✅ | 202, `Location`, `Retry-After`, `Prefer: wait`, 429 backoff |
+| §11.9 Error responses | ✅ | signature-key-09 `Signature-Error` codes; RFC 9457 problem bodies; token endpoint and polling error codes |
+| §11.10, §11.11 Scopes and account binding | ✅ | Scope never broader than requested; `account` carried through |
+| §11.12 Token revocation | ✅ | `RevocationClient`; recipients in every server role, with cascade and `downstream` outcomes |
+
+Not implemented: the Signature-Key `x509` scheme, Rich Resource Requests, and
+402 payment settlement (an access server's 402 is reported as an error).
 
 ## Design notes
 
-- **Keys are `crypto.Signer`s.** `Agent.Key`, the `Mint*Token` functions, and
-  `SignRequest` take any `crypto.Signer` with an Ed25519 or P-256 public key, so
-  a key held in a platform keystore or secure enclave works like an in-memory
-  one. `NewAgent` generates Ed25519 by default; `WithKeyAlgorithm(AlgES256)`
-  selects P-256. `KeyResolver` returns a `crypto.PublicKey`.
-- **Pluggable trust.** [`KeyResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#KeyResolver) lets the same
-  verification code serve public JWKS discovery, pinned keys (offline /
-  air-gapped), or local self-signed agents. Strict `RequireProviderClaims`
-  enforces the agent-token profile (`iss` and `ps` server identifiers, `dwk`,
-  `jti`) for cross-domain interop.
-- **The RFC 9421 + Signature-Key layer is isolated** in `httpsig.go` — the
-  reference implementations externalize it too, so a signature-key draft bump
-  stays contained.
-- **Sub-agents hold their own keys.** `Agent.NewSubAgent` generates the
-  sub-agent's key and issues its tokens from the parent (its self-hosted
-  provider), so verifiers resolve the provider's key, not `cnf.jwk`. The
-  parent mediates authorization: a sub-agent's `Transport` uses the parent's
-  `PSClient`, which signs PS requests and sends `subagent_token`; a sub-agent
-  calling the PS directly gets `ErrSubAgentDirect`.
-- **Planned package split** mirrors the reference TS monorepo: `agent/`,
-  `server/`, `keys/` (two-key minting, hardware backends), with the root
-  package staying the stable protocol vocabulary.
+- **Library-first.** Every role is a package you embed; there is no binary
+  and no hosted service. Handlers are plain `net/http`, mountable on any mux
+  or router, with no web framework dependency.
+- **Storage-agnostic.** Servers persist through `Store` interfaces you
+  implement over your own database. The in-memory stores define the
+  reference semantics and suit tests and single-process demos.
+- **Policy through interfaces.** Consent, access, mission, permission,
+  issuance, and rate-limit decisions are callbacks (`Decider`, `Authorizer`,
+  `MissionApprover`, `PermissionDecider`, `Registrar`, `Limiter`). The
+  library enforces the protocol; you decide who may do what.
+- **Keys are `crypto.Signer`s.** Any Ed25519 or P-256 signer works, so keys in
+  a platform keystore, HSM, or secure enclave work like in-memory ones.
+  `KeyResolver` returns a `crypto.PublicKey`, and the same verification code
+  serves JWKS discovery, pinned keys, and local self-signed agents.
+- **Signed bytes are never re-serialized.** Request bodies are signed and
+  verified as sent, through `content-digest`; mission blobs are stored and
+  returned as the exact bytes their `mission_s256` covers.
+- **Fully-specified algorithms.** JWS and JWK `alg` is `Ed25519` or `ES256`;
+  `EdDSA`, `none`, symmetric, and missing `alg` values are rejected.
+
+## Security notes
+
+- **Discovery makes outbound requests to URLs taken from tokens.** Verifiers
+  fetch metadata and JWKS from the issuers that tokens name. The library
+  requires issuers to be server identifiers (https, host only) and bounds
+  response sizes, but it does not filter addresses. Pass an `http.Client`
+  that applies egress admission (no private, loopback, or link-local
+  addresses; bounded timeouts) to `NewJWKSResolver`, `PSClient.HTTPClient`,
+  and each server's `Config.HTTPClient` (signature-key §7.3).
+- **In-memory stores and the `ratelimit` token bucket are single-instance.**
+  Their state lives in one process. Run several instances only with shared
+  `Store` and `Limiter` implementations.
+- **`InsecureSkipIdentifierCheck` is for development.** It accepts `http`
+  and port-bearing identifiers and relaxes the agent-token profile. Never set
+  it in production.
+- **Keep the PS `SubjectKey` stable and secret.** It derives every directed
+  `sub`; changing it changes every person's identifier at every resource.
 
 ## Testing
 
 ```bash
-go test ./...
+go test -race ./...
+golangci-lint run
 ```
 
-White-box unit tests cover token round-trips (including wrong-`typ` and
-missing-claim rejection), tampered-`@path` and swapped-`Signature-Key`
-rejection, the stolen-`AAuth-Access` replay guard, sub-agent rules, JWKS
-discovery, and full end-to-end flows (three-party exchange, call chaining,
-clarification dialog) against live `httptest` servers. Runnable
-`package aauth_test` examples double as public-API documentation.
+Unit tests cover token round trips and rejections, signature tampering,
+replay guards, delegation rules, JWKS caching, and every server endpoint
+against live `httptest` servers. The [`e2e`](e2e) package runs an agent
+provider, person server, access server, and two resources together.
+Runnable `Example` functions double as API documentation.
 
 Wire-format golden vectors live in [`testdata/vectors`](testdata/vectors):
-language-neutral JSON files (JWK thumbprints, identifiers, header codecs,
-metadata documents, deterministic Ed25519 JWTs, RFC 9421 request signatures)
-that another implementation can run as a conformance check. After an
-intentional wire change, regenerate derived values with
-`go test -run TestVectors -update` and review the diff.
+language-neutral JSON (JWK thumbprints, identifiers, header codecs, metadata
+documents, deterministic Ed25519 JWTs, RFC 9421 request signatures) that
+another implementation can run as a conformance check. After an intentional
+wire change, regenerate the derived values and review the diff:
+
+```bash
+go test -run TestVectors -update
+```
 
 ## License
 
-[MIT](LICENSE) — matching the reference AAuth implementations.
+[MIT](LICENSE)
