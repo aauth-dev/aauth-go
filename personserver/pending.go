@@ -162,6 +162,10 @@ var (
 	// ErrQuestionPending means a clarification is already awaiting the
 	// agent's answer.
 	ErrQuestionPending = errors.New("personserver: a clarification is already pending")
+	// ErrFederating means the PS has already consented and the request
+	// waits on the access server (§9.1.2); it resolves when the AS
+	// answers, not by Approve.
+	ErrFederating = errors.New("personserver: the request is waiting on the access server")
 )
 
 // snapshot is what a pending request keeps of the original request, so
@@ -713,6 +717,9 @@ func (s *Server) Approve(ctx context.Context, id string, g Grant) error {
 	}
 	if p = s.advance(ctx, p); !p.Open() {
 		return ErrResolved
+	}
+	if p.Federation != nil {
+		return ErrFederating
 	}
 	if p.ResourceInteraction != nil && !p.ResourceInteractionDone {
 		return errors.New("personserver: the resource's interaction has not completed (§7.2.3)")

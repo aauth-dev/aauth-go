@@ -324,13 +324,24 @@ func TestFederatedAfterApproval(t *testing.T) {
 		}
 		return grant(mint, nil), nil
 	}
+	var federating sync.Once
 	w.setNotify(func(p *Pending) {
-		if p.Open() && p.Federation == nil {
+		switch {
+		case p.Open() && p.Federation == nil:
 			go func() {
 				if err := w.ps.Approve(ctx, p.ID, Grant{Scope: "files:read"}); err != nil {
 					t.Error(err)
 				}
 			}()
+		case p.Open():
+			federating.Do(func() {
+				go func() {
+					// Federating, or already resolved by the AS's answer.
+					if err := w.ps.Approve(ctx, p.ID, Grant{}); !errors.Is(err, ErrFederating) && !errors.Is(err, ErrResolved) {
+						t.Errorf("approve while federating: %v", err)
+					}
+				}()
+			})
 		}
 	})
 	rt := w.resourceToken(pt, aauth.ResourceTokenParams{Scope: "files:read", Audience: testAS})
