@@ -120,7 +120,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 |---|---|---|
 | **Agent** | ✅ | identity, token minting, PS client (person and auth tokens, permission, audit), and a protocol-aware `http.RoundTripper` (`Transport`): auto-signing; `agent-token`, `person-token`, and `auth-token` requirements (401, and 202 deferred delivery, §6.5.1); challenge and auth-token response verification; per-resource caches with the top-down 5-minute refresh margin (§7.9.1); `clock_skew` wait-and-retry once; revoked/expired cached tokens dropped; `AAuth-Access` lifecycle |
 | **Resource** | ✅ | agent + auth-token authentication, resource-token issuing, 401 challenges, `AAuth-Access` two-party flow |
-| **Person Server** | 🟡 | token minting and verification helpers, clarification, deferred responses, mission identifiers; endpoint handlers pending |
+| **Person Server** | 🟡 | `personserver` package: person token and auth token endpoints (§7.1, §7.2) as an `http.Handler` over caller-supplied `Store` and `Decider`; directed `sub` (keyed HMAC per resource), agent↔person binding, server-side pending requests (`Prefer: wait`, clarification rounds, cancel, interaction codes), sub-agent and call-chaining requests, metadata + JWKS; governance endpoints pending |
 | **Access Server** | ⬜ | four-party federation not yet implemented |
 
 ### Layer 1 — Identity
