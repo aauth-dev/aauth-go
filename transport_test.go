@@ -205,7 +205,7 @@ func TestTransportBuffersAndResendsBody(t *testing.T) {
 	bodySeen := make(chan string, 2)
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		if tok, err := ParseSignatureKey(req); err == nil && strings.Contains(headerTyp(tok), TypAuth) {
-			claims, err := VerifyAndExtractAuth(req.Context(), req, w.resourceURL, StaticResolver{w.psURL: w.psAgent.JWKS()})
+			claims, err := VerifyAndExtractAuth(req.Context(), req, w.resourceURL, localOpts(StaticResolver{w.psURL: w.psAgent.JWKS()}))
 			if err != nil {
 				http.Error(rw, err.Error(), http.StatusForbidden)
 				return

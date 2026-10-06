@@ -418,6 +418,10 @@ func runMetadataVectors(t *testing.T, raw json.RawMessage, _ bool) any {
 
 // --- jwt ------------------------------------------------------------------
 
+// vectorEpoch (2026-01-01T00:00:00Z) is the verifier's clock for a JWT
+// vector that carries no iat.
+const vectorEpoch = 1767225600
+
 type jwtCase struct {
 	Name       string          `json:"name"`
 	Typ        string          `json:"typ"`
@@ -537,9 +541,12 @@ func verifyVectorToken(t *testing.T, c jwtCase) error {
 	t.Helper()
 	ctx := context.Background()
 	// The issuer whose key is pinned comes from the token itself, so
-	// reject cases need not repeat their claims.
+	// reject cases need not repeat their claims. The verifier's clock is
+	// the token's own iat (or the vector epoch when absent), so stored
+	// tokens stay valid and iat is never ahead of the clock.
 	var iss struct {
 		Iss string `json:"iss"`
+		Iat int64  `json:"iat"`
 	}
 	parts := strings.Split(c.Token, ".")
 	if len(parts) != 3 {
@@ -553,12 +560,17 @@ func verifyVectorToken(t *testing.T, c jwtCase) error {
 		t.Fatal(err)
 	}
 	resolver := StaticResolver{iss.Iss: JWKS{Keys: []JWK{c.SigningKey.JWK}}}
+	at := iss.Iat
+	if at == 0 {
+		at = vectorEpoch
+	}
+	clock := RequestVerifyOptions{Now: func() time.Time { return time.Unix(at, 0) }}
 	switch c.Typ {
 	case TypAgent:
-		_, err := VerifyAgentToken(ctx, c.Token, VerifyAgentTokenOptions{Resolver: resolver, RequireProviderClaims: true})
+		_, err := VerifyAgentToken(ctx, c.Token, VerifyAgentTokenOptions{Resolver: resolver, RequireProviderClaims: true, Signature: clock})
 		return err
 	case TypAuth:
-		_, err := VerifyAuthToken(ctx, c.Token, c.Audience, resolver)
+		_, err := VerifyAuthToken(ctx, c.Token, c.Audience, TokenVerifyOptions{Resolver: resolver, Signature: clock})
 		return err
 	}
 	return nil

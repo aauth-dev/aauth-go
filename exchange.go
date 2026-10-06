@@ -49,6 +49,10 @@ type TokenResponse struct {
 // to its PS (three-party) or an AS (four-party).
 func IssueResourceToken(resourceURL, audience string, agent *AgentClaims, scope string, key crypto.Signer, kid string) (string, error) {
 	now := time.Now()
+	exp, err := BoundedExpiry(now, MaxResourceTokenLifetime, MaxResourceTokenLifetime)
+	if err != nil {
+		return "", err
+	}
 	jti, err := randomJTI()
 	if err != nil {
 		return "", err
@@ -63,7 +67,7 @@ func IssueResourceToken(resourceURL, audience string, agent *AgentClaims, scope 
 			Audience:  jwt.ClaimStrings{audience},
 			ID:        jti,
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)), // SHOULD NOT exceed 5 min
+			ExpiresAt: jwt.NewNumericDate(exp), // SHOULD NOT exceed 5 min (§6.7.1)
 		},
 	}
 	return MintResourceToken(claims, key, kid)
@@ -75,49 +79,33 @@ func ChallengeAuthToken(w http.ResponseWriter, resourceToken string) {
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
-// verifyTyped verifies signature + typ and decodes claims for resource/auth
-// tokens, resolving the issuer key via the same KeyResolver strategies used
-// for agent tokens.
-func verifyTyped(ctx context.Context, token, wantTyp string, dst jwt.Claims, iss func() string, dwk func() string, resolver KeyResolver, cnf *JWK) error {
-	parser := newJWTParser(jwt.WithoutClaimsValidation())
-	utok, _, err := parser.ParseUnverified(token, dst)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrInvalidToken, err)
-	}
-	if typ, _ := utok.Header["typ"].(string); typ != wantTyp {
-		return fmt.Errorf("%w: typ=%q want %q", ErrWrongTokenType, utok.Header["typ"], wantTyp)
-	}
-	if err := checkJWSHeaderAlg(utok); err != nil {
-		return err
-	}
-	kid, _ := utok.Header["kid"].(string)
-	tok, err := parseSigned(ctx, token, dst, resolver, iss(), dwk(), kid, cnf)
-	if err != nil {
-		return classifyJWTError(err)
-	}
-	if !tok.Valid {
-		return ErrInvalidToken
-	}
-	return nil
-}
-
-// VerifyResourceToken verifies an aa-resource+jwt per §6.7.2 from the
-// recipient's (PS or AS) perspective. audience is the recipient's own URL;
-// agent binds the token to the requesting agent's verified claims.
-func VerifyResourceToken(ctx context.Context, token, audience string, agent *AgentClaims, resolver KeyResolver) (*ResourceClaims, error) {
+// VerifyResourceToken verifies an aa-resource+jwt per §6.7.2 and the
+// common JWT rules (draft -11 §11.5.2) from the recipient's (PS or AS)
+// perspective. audience is the recipient's own identifier; agent binds the
+// token to the requesting agent's verified claims.
+func VerifyResourceToken(ctx context.Context, token, audience string, agent *AgentClaims, opts TokenVerifyOptions) (*ResourceClaims, error) {
 	claims := &ResourceClaims{}
-	if err := verifyTyped(ctx, token, TypResource, claims,
-		func() string { return claims.Issuer }, func() string { return claims.DWK }, resolver, nil); err != nil {
+	check := jwtCheck{
+		typ:      TypResource,
+		dwks:     []string{WellKnownResource},
+		issuer:   func(iss string) error { return opts.checkServerIdentifier("iss", iss) },
+		resolver: opts.Resolver,
+		clock:    opts.Signature,
+	}
+	if err := check.verify(ctx, token, claims); err != nil {
 		return nil, err
 	}
-	if len(claims.Audience) != 1 || claims.Audience[0] != audience {
-		return nil, fmt.Errorf("aauth: resource token aud %v, want %q", claims.Audience, audience)
+	if err := checkAudience("resource token", claims.Audience, audience); err != nil {
+		return nil, err
 	}
 	if claims.Agent != agent.Subject {
-		return nil, fmt.Errorf("aauth: resource token agent %q, requester is %q", claims.Agent, agent.Subject)
+		return nil, fmt.Errorf("%w: resource token agent %q, requester is %q", ErrInvalidToken, claims.Agent, agent.Subject)
 	}
 	if claims.AgentJKT != agent.Cnf.JWK.Thumbprint() {
-		return nil, fmt.Errorf("aauth: resource token agent_jkt does not match requester's key")
+		return nil, fmt.Errorf("%w: resource token agent_jkt does not match requester's key", ErrInvalidToken)
+	}
+	if err := checkExpiry(&claims.RegisteredClaims, opts.Signature); err != nil {
+		return nil, err
 	}
 	return claims, nil
 }
@@ -150,18 +138,28 @@ func VerifyResourceChallenge(token, resourceURL string, agent *Agent) (*Resource
 	return claims, nil
 }
 
-// VerifyAuthToken verifies an aa-auth+jwt per §9.4.3 from the resource's
-// perspective: issuer trust via resolver, aud = this resource, at least one
-// of sub/scope, 1-hour lifetime cap. Request-context binding (cnf.jwk vs the
-// HTTP signature) is completed by VerifyAndExtractAuth.
-func VerifyAuthToken(ctx context.Context, token, resourceURL string, resolver KeyResolver) (*AuthClaims, error) {
+// VerifyAuthToken verifies an aa-auth+jwt per §9.4.3 and the common JWT
+// rules (draft -11 §11.5.2) from the resource's perspective: issuer trust
+// via opts.Resolver, dwk aauth-access.json or aauth-person.json, iss a
+// server identifier, iat REQUIRED, a lifetime (exp − iat) of at most one
+// hour, aud = this resource, a valid cnf.jwk, at least one of sub/scope,
+// and exp in the future with no skew tolerance. Request-context binding
+// (cnf.jwk vs the HTTP signature) is completed by [VerifyAndExtractAuth].
+func VerifyAuthToken(ctx context.Context, token, resourceURL string, opts TokenVerifyOptions) (*AuthClaims, error) {
 	claims := &AuthClaims{}
-	if err := verifyTyped(ctx, token, TypAuth, claims,
-		func() string { return claims.Issuer }, func() string { return claims.DWK }, resolver, claims.Cnf.JWK); err != nil {
+	check := jwtCheck{
+		typ:         TypAuth,
+		dwks:        []string{WellKnownAccess, WellKnownPerson},
+		maxLifetime: MaxAuthTokenLifetime,
+		issuer:      func(iss string) error { return opts.checkServerIdentifier("iss", iss) },
+		resolver:    opts.Resolver,
+		clock:       opts.Signature,
+	}
+	if err := check.verify(ctx, token, claims); err != nil {
 		return nil, err
 	}
-	if len(claims.Audience) != 1 || claims.Audience[0] != resourceURL {
-		return nil, fmt.Errorf("aauth: auth token aud %v, want %q", claims.Audience, resourceURL)
+	if err := checkAudience("auth token", claims.Audience, resourceURL); err != nil {
+		return nil, err
 	}
 	if claims.Cnf.JWK == nil {
 		return nil, fmt.Errorf("%w: cnf.jwk", ErrMissingClaim)
@@ -173,22 +171,21 @@ func VerifyAuthToken(ctx context.Context, token, resourceURL string, resolver Ke
 	if claims.Subject == "" && claims.Scope == "" {
 		return nil, fmt.Errorf("%w: at least one of sub/scope", ErrMissingClaim)
 	}
-	if claims.ExpiresAt != nil && claims.IssuedAt != nil &&
-		claims.ExpiresAt.Sub(claims.IssuedAt.Time) > time.Hour {
-		return nil, fmt.Errorf("aauth: auth token lifetime exceeds 1 hour")
+	if err := checkExpiry(&claims.RegisteredClaims, opts.Signature); err != nil {
+		return nil, err
 	}
 	return claims, nil
 }
 
 // VerifyAndExtractAuth authenticates a resource request signed with an auth
-// token in Signature-Key (§9.4.2): verify the token (issuer trust via
-// resolver), then the HTTP message signature against its cnf.jwk.
-func VerifyAndExtractAuth(ctx context.Context, req *http.Request, resourceURL string, resolver KeyResolver) (*AuthClaims, error) {
+// token in Signature-Key (§9.4.2): verify the token ([VerifyAuthToken]),
+// then the HTTP message signature against its cnf.jwk.
+func VerifyAndExtractAuth(ctx context.Context, req *http.Request, resourceURL string, opts TokenVerifyOptions) (*AuthClaims, error) {
 	token, err := ParseSignatureKey(req)
 	if err != nil {
 		return nil, err
 	}
-	claims, err := VerifyAuthToken(ctx, token, resourceURL, resolver)
+	claims, err := VerifyAuthToken(ctx, token, resourceURL, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +193,7 @@ func VerifyAndExtractAuth(ctx context.Context, req *http.Request, resourceURL st
 	if err != nil {
 		return nil, err
 	}
-	if err := VerifyRequest(req, pub); err != nil {
+	if err := VerifyRequestWithOptions(req, pub, opts.Signature); err != nil {
 		return nil, err
 	}
 	return claims, nil
@@ -253,7 +250,7 @@ func (c *PSClient) ExchangeToken(ctx context.Context, treq TokenRequest) (*Token
 	defer closeBody(final.Body)
 	if final.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(final.Body, 4096))
-		return nil, fmt.Errorf("aauth: token endpoint status %d: %s", final.StatusCode, b)
+		return nil, tokenEndpointError("token endpoint", final.StatusCode, b)
 	}
 	var tr TokenResponse
 	if err := json.NewDecoder(final.Body).Decode(&tr); err != nil {

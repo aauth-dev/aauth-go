@@ -79,7 +79,7 @@ func TestCallChainingEndToEnd(t *testing.T) {
 			// Booking presents asst's auth token as upstream proof. Verify it
 			// was issued by us to the immediate upstream agent, then record
 			// that agent in the downstream act chain.
-			upstream, err := VerifyAuthToken(r.Context(), treq.UpstreamToken, booking.ID.String()+"", StaticResolver{psURL: psKey.JWKS()})
+			upstream, err := VerifyAuthToken(r.Context(), treq.UpstreamToken, booking.ID.String()+"", localOpts(StaticResolver{psURL: psKey.JWKS()}))
 			_ = err // audience check below is what matters for this test
 			if upstream == nil {
 				// Fall back to unverified decode for the agent id (test PS).
@@ -101,7 +101,7 @@ func TestCallChainingEndToEnd(t *testing.T) {
 	// delegation chain names asst as the original delegator.
 	var chainSeen []string
 	payments := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		claims, err := VerifyAndExtractAuth(r.Context(), r, paymentsURL, StaticResolver{psURL: psKey.JWKS()})
+		claims, err := VerifyAndExtractAuth(r.Context(), r, paymentsURL, localOpts(StaticResolver{psURL: psKey.JWKS()}))
 		if err != nil {
 			http.Error(rw, err.Error(), http.StatusForbidden)
 			return

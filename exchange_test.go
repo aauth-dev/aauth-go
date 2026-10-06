@@ -75,7 +75,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 		// Verify the resource token: addressed to us, bound to this agent,
 		// signed by the resource (trust pinned).
 		rc, err := VerifyResourceToken(r.Context(), treq.ResourceToken, w.psURL, agent,
-			StaticResolver{w.resourceURL: w.resourceKey.JWKS()})
+			localOpts(StaticResolver{w.resourceURL: w.resourceKey.JWKS()}))
 		if err != nil {
 			http.Error(rw, err.Error(), http.StatusForbidden)
 			return
@@ -127,7 +127,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 		if tok, err := ParseSignatureKey(r); err == nil {
 			if strings.Contains(headerTyp(tok), TypAuth) {
 				claims, err := VerifyAndExtractAuth(r.Context(), r, w.resourceURL,
-					StaticResolver{w.psURL: w.psAgent.JWKS()})
+					localOpts(StaticResolver{w.psURL: w.psAgent.JWKS()}))
 				if err != nil {
 					http.Error(rw, err.Error(), http.StatusForbidden)
 					return
@@ -289,4 +289,10 @@ func TestSubAgentCannotExchange(t *testing.T) {
 	if _, err := psc.ExchangeToken(context.Background(), TokenRequest{ResourceToken: "x"}); err != ErrSubAgentDirect {
 		t.Fatalf("err = %v, want ErrSubAgentDirect", err)
 	}
+}
+
+// localOpts verifies server-issued tokens from local httptest servers,
+// whose http://127.0.0.1:port URLs are not server identifiers.
+func localOpts(r KeyResolver) TokenVerifyOptions {
+	return TokenVerifyOptions{Resolver: r, InsecureSkipIdentifierCheck: true}
 }

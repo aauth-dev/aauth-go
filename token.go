@@ -10,11 +10,13 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// AgentClaims is the payload of an aa-agent+jwt (draft -09 §5.2.2).
+// AgentClaims is the payload of an aa-agent+jwt (draft -11 §5.3.1).
 //
-// Required: iss (agent provider HTTPS URL), dwk ("aauth-agent.json"),
-// sub (agent identifier), jti, cnf.jwk, iat, exp.
-// Optional: ps (Person Server URL), parent_agent (sub-agent marker §10.2).
+// Required: iss (agent provider server identifier), dwk
+// ("aauth-agent.json"), sub (agent identifier), jti, cnf.jwk, iat, exp
+// (SHOULD NOT exceed 24 hours). Optional: ps (Person Server URL; an agent
+// that has a PS MUST carry it, §4.5), parent_agent (sub-agent marker; a
+// sub-agent's iss MUST equal its parent's, §10.2.1).
 type AgentClaims struct {
 	DWK         string `json:"dwk"`                    // well-known doc name for key discovery
 	PS          string `json:"ps,omitempty"`           // the agent's Person Server URL (optional)
@@ -161,7 +163,8 @@ type keyResolutionError struct{ err error }
 func (e keyResolutionError) Error() string { return e.err.Error() }
 func (e keyResolutionError) Unwrap() error { return e.err }
 
-// parseSigned resolves the issuer key and verifies token into dst. When the
+// parseSigned resolves the issuer key and verifies token's signature into
+// dst. Claims validation is left to the caller (see [jwtCheck]). When the
 // signature fails and the resolver caches keys ([KeyRefresher]), it
 // refreshes the key once and retries (draft -11 §11.4), so an issuer that
 // re-keys under the same kid is picked up; the refresh is subject to the
@@ -172,14 +175,15 @@ func parseSigned(ctx context.Context, token string, dst jwt.Claims, resolver Key
 	if err != nil {
 		return nil, keyResolutionError{err}
 	}
-	tok, err := newJWTParser().ParseWithClaims(token, dst, func(*jwt.Token) (any, error) { return key, nil })
+	parser := newJWTParser(jwt.WithoutClaimsValidation())
+	tok, err := parser.ParseWithClaims(token, dst, func(*jwt.Token) (any, error) { return key, nil })
 	if err != nil && errors.Is(err, jwt.ErrTokenSignatureInvalid) {
 		if rr, ok := resolver.(KeyRefresher); ok {
 			fresh, rerr := rr.RefreshKey(ctx, iss, dwk, kid, cnf)
 			if rerr != nil {
 				return nil, keyResolutionError{rerr}
 			}
-			tok, err = newJWTParser().ParseWithClaims(token, dst, func(*jwt.Token) (any, error) { return fresh, nil })
+			tok, err = parser.ParseWithClaims(token, dst, func(*jwt.Token) (any, error) { return fresh, nil })
 		}
 	}
 	return tok, err
@@ -248,35 +252,34 @@ type VerifyAgentTokenOptions struct {
 	Signature RequestVerifyOptions
 }
 
-// VerifyAgentToken verifies an aa-agent+jwt per draft -09 §5.2.4 and returns
-// its claims. The caller still MUST verify the HTTP message signature against
-// claims.Cnf.JWK (step 5) — see VerifyRequest.
+// VerifyAgentToken verifies an aa-agent+jwt per draft -11 §5.3.3 and the
+// common JWT rules (§11.5.2) and returns its claims: typ, alg, signature,
+// iat REQUIRED (refused as [ErrClockSkew] when further ahead of the
+// verifier's clock than opts.Signature's window), and exp in the future
+// with no skew tolerance ([ErrExpired]). With RequireProviderClaims it also
+// requires dwk aauth-agent.json, jti, and iss and ps to be server
+// identifiers. The caller still MUST verify the HTTP message signature
+// against claims.Cnf.JWK — see [VerifyAndExtractAgent].
 func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOptions) (*AgentClaims, error) {
 	if opts.Resolver == nil {
 		return nil, errors.New("aauth: VerifyAgentTokenOptions.Resolver is required")
 	}
-	// First pass, unverified: read typ, alg, kid, and claims to select the key.
-	unverified := &AgentClaims{}
-	parser := newJWTParser(jwt.WithoutClaimsValidation())
-	utok, _, err := parser.ParseUnverified(token, unverified)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
+	check := jwtCheck{typ: TypAgent, resolver: opts.Resolver, clock: opts.Signature}
+	if opts.RequireProviderClaims {
+		check.dwks = []string{WellKnownAgent}
+		check.issuer = func(iss string) error {
+			if iss == "" {
+				return fmt.Errorf("%w: iss", ErrMissingClaim)
+			}
+			if err := ValidateServerIdentifier(iss); err != nil {
+				return fmt.Errorf("%w: iss: %w", ErrInvalidToken, err)
+			}
+			return nil
+		}
 	}
-	if typ, _ := utok.Header["typ"].(string); typ != TypAgent {
-		return nil, fmt.Errorf("%w: typ=%q", ErrWrongTokenType, utok.Header["typ"])
-	}
-	if err := checkJWSHeaderAlg(utok); err != nil {
-		return nil, err
-	}
-	kid, _ := utok.Header["kid"].(string)
-
 	claims := &AgentClaims{}
-	tok, err := parseSigned(ctx, token, claims, opts.Resolver, unverified.Issuer, unverified.DWK, kid, unverified.Cnf.JWK)
-	if err != nil {
-		return nil, classifyJWTError(err)
-	}
-	if !tok.Valid {
-		return nil, ErrInvalidToken
+	if err := check.verify(ctx, token, claims); err != nil {
+		return nil, err
 	}
 	if claims.Cnf.JWK == nil {
 		return nil, fmt.Errorf("%w: cnf.jwk", ErrMissingClaim)
@@ -297,23 +300,50 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 		}
 	}
 	if opts.RequireProviderClaims {
-		if claims.Issuer == "" {
-			return nil, fmt.Errorf("%w: iss", ErrMissingClaim)
-		}
-		if err := ValidateServerIdentifier(claims.Issuer); err != nil {
-			return nil, fmt.Errorf("%w: iss: %w", ErrInvalidToken, err)
-		}
 		if claims.PS != "" {
 			if err := ValidateServerIdentifier(claims.PS); err != nil {
 				return nil, fmt.Errorf("%w: ps: %w", ErrInvalidToken, err)
 			}
 		}
-		if claims.DWK != WellKnownAgent {
-			return nil, fmt.Errorf("%w: dwk must be %q (got %q)", ErrMissingClaim, WellKnownAgent, claims.DWK)
-		}
 		if claims.ID == "" {
 			return nil, fmt.Errorf("%w: jti", ErrMissingClaim)
 		}
 	}
+	if err := checkExpiry(&claims.RegisteredClaims, opts.Signature); err != nil {
+		return nil, err
+	}
 	return claims, nil
+}
+
+// VerifySubagentToken verifies a subagent_token request parameter (draft
+// -11 §7.1, §7.2, §10.2) at a PS: an agent token, verified as by
+// [VerifyAgentToken], that carries parent_agent naming signer — the
+// verified agent token that signed the request — and whose iss equals
+// signer's iss (§10.2.1). A signer that is itself a sub-agent is
+// [ErrSubAgentDirect] (§10.2.2). Every other failure is a [*TokenError]:
+// invalid_subagent_token, expired_subagent_token, or revoked_subagent_token
+// (§11.9.3).
+func VerifySubagentToken(ctx context.Context, token string, signer *AgentClaims, opts VerifyAgentTokenOptions) (*AgentClaims, error) {
+	if signer == nil {
+		return nil, errors.New("aauth: VerifySubagentToken needs the signing agent's verified claims")
+	}
+	if signer.IsSubAgent() {
+		return nil, ErrSubAgentDirect
+	}
+	sub, err := VerifyAgentToken(ctx, token, opts)
+	if err != nil {
+		return nil, NewTokenParamError(ParamSubagentToken, err)
+	}
+	switch {
+	case !sub.IsSubAgent():
+		err = fmt.Errorf("%w: subagent_token has no parent_agent", ErrInvalidToken)
+	case sub.ParentAgent != signer.Subject:
+		err = fmt.Errorf("%w: subagent_token parent_agent %q does not name the signing agent %q", ErrInvalidToken, sub.ParentAgent, signer.Subject)
+	case sub.Issuer != signer.Issuer:
+		err = fmt.Errorf("%w: subagent_token iss %q differs from the signing agent's iss %q", ErrInvalidToken, sub.Issuer, signer.Issuer)
+	}
+	if err != nil {
+		return nil, NewTokenParamError(ParamSubagentToken, err)
+	}
+	return sub, nil
 }
