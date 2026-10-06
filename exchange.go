@@ -80,7 +80,7 @@ func ChallengeAuthToken(w http.ResponseWriter, resourceToken string) {
 // tokens, resolving the issuer key via the same KeyResolver strategies used
 // for agent tokens.
 func verifyTyped(ctx context.Context, token, wantTyp string, dst jwt.Claims, iss func() string, dwk func() string, resolver KeyResolver, cnf *JWK) error {
-	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	parser := newJWTParser(jwt.WithoutClaimsValidation())
 	utok, _, err := parser.ParseUnverified(token, dst)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidToken, err)
@@ -88,15 +88,15 @@ func verifyTyped(ctx context.Context, token, wantTyp string, dst jwt.Claims, iss
 	if typ, _ := utok.Header["typ"].(string); typ != wantTyp {
 		return fmt.Errorf("%w: typ=%q want %q", ErrWrongTokenType, utok.Header["typ"], wantTyp)
 	}
+	if err := checkJWSHeaderAlg(utok); err != nil {
+		return err
+	}
 	kid, _ := utok.Header["kid"].(string)
 	key, err := resolver.ResolveKey(ctx, iss(), dwk(), kid, cnf)
 	if err != nil {
 		return err
 	}
-	tok, err := jwt.ParseWithClaims(token, dst, func(t *jwt.Token) (any, error) {
-		if t.Method.Alg() != jwt.SigningMethodEdDSA.Alg() {
-			return nil, fmt.Errorf("%w: alg %s", ErrSignatureInvalid, t.Method.Alg())
-		}
+	tok, err := newJWTParser().ParseWithClaims(token, dst, func(*jwt.Token) (any, error) {
 		return key, nil
 	})
 	if err != nil {
@@ -175,6 +175,10 @@ func VerifyAuthToken(ctx context.Context, token, resourceURL string, resolver Ke
 	}
 	if claims.Cnf.JWK == nil {
 		return nil, fmt.Errorf("%w: cnf.jwk", ErrMissingClaim)
+	}
+	// cnf.jwk MUST carry a fully-specified alg (draft -11 §11.5.1).
+	if err := claims.Cnf.JWK.Validate(); err != nil {
+		return nil, fmt.Errorf("cnf.jwk: %w", err)
 	}
 	if claims.Subject == "" && claims.Scope == "" {
 		return nil, fmt.Errorf("%w: at least one of sub/scope", ErrMissingClaim)

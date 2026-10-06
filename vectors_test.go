@@ -324,12 +324,16 @@ type jwtCase struct {
 	Typ        string          `json:"typ"`
 	SigningKey privateJWK      `json:"signing_key"`
 	Kid        string          `json:"kid"`
-	Claims     json.RawMessage `json:"claims"`
+	Claims     json.RawMessage `json:"claims,omitempty"`
 	// Audience is the verifier's own identifier, for token types whose
 	// verification checks aud.
 	Audience string `json:"audience,omitempty"`
-	// Token is the exact compact serialization (derived).
+	// Token is the exact compact serialization (derived), or, for a Reject
+	// case, a fixed token that verification must refuse.
 	Token string `json:"token"`
+	// Reject, when set, says why Token must fail verification; such a
+	// token is not minted or regenerated.
+	Reject string `json:"reject,omitempty"`
 }
 
 func mintVector(t *testing.T, c jwtCase) string {
@@ -373,6 +377,12 @@ func mustDecodeStrict(t *testing.T, raw json.RawMessage, dst any) {
 func runJWTVectors(t *testing.T, raw json.RawMessage, update bool) any {
 	cases := decodeCases[jwtCase](t, raw)
 	for i, c := range cases {
+		if c.Reject != "" {
+			if err := verifyVectorToken(t, c); err == nil {
+				t.Errorf("%s: verified, want rejection (%s)", c.Name, c.Reject)
+			}
+			continue
+		}
 		got := mintVector(t, c)
 		if update {
 			cases[i].Token = got
@@ -401,31 +411,42 @@ func runJWTVectors(t *testing.T, raw json.RawMessage, update bool) any {
 			t.Errorf("%s: payload %s, want %s", c.Name, payload, c.Claims)
 		}
 		// And it verifies against the published (public) key.
-		verifyVectorToken(t, c)
+		if err := verifyVectorToken(t, c); err != nil {
+			t.Errorf("%s: verify: %v", c.Name, err)
+		}
 	}
 	return cases
 }
 
-func verifyVectorToken(t *testing.T, c jwtCase) {
+func verifyVectorToken(t *testing.T, c jwtCase) error {
 	t.Helper()
 	ctx := context.Background()
+	// The issuer whose key is pinned comes from the token itself, so
+	// reject cases need not repeat their claims.
 	var iss struct {
 		Iss string `json:"iss"`
 	}
-	if err := json.Unmarshal(c.Claims, &iss); err != nil {
+	parts := strings.Split(c.Token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("%s: not a compact JWS", c.Name)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(payload, &iss); err != nil {
 		t.Fatal(err)
 	}
 	resolver := StaticResolver{iss.Iss: JWKS{Keys: []JWK{c.SigningKey.JWK}}}
 	switch c.Typ {
 	case TypAgent:
-		if _, err := VerifyAgentToken(ctx, c.Token, VerifyAgentTokenOptions{Resolver: resolver, RequireProviderClaims: true}); err != nil {
-			t.Errorf("%s: verify: %v", c.Name, err)
-		}
+		_, err := VerifyAgentToken(ctx, c.Token, VerifyAgentTokenOptions{Resolver: resolver, RequireProviderClaims: true})
+		return err
 	case TypAuth:
-		if _, err := VerifyAuthToken(ctx, c.Token, c.Audience, resolver); err != nil {
-			t.Errorf("%s: verify: %v", c.Name, err)
-		}
+		_, err := VerifyAuthToken(ctx, c.Token, c.Audience, resolver)
+		return err
 	}
+	return nil
 }
 
 // --- http-signature -------------------------------------------------------

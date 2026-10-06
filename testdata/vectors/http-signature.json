@@ -10,7 +10,7 @@
         "crv": "Ed25519",
         "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
         "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
-        "alg": "EdDSA",
+        "alg": "Ed25519",
         "use": "sig",
         "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
       },
@@ -18,12 +18,12 @@
         "method": "GET",
         "url": "https://resource.example/api/documents",
         "headers": {
-          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZERTQSJ9.e30.c2ln\""
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
         }
       },
       "signed": {
-        "Signature": "sig=:vowLzujE/xHK0qyVYlzGNQTq7JPUtQC7GWdOQHl4DKTKwt1nfUyVrggFIph0ZpS5xFW1by4Vjbp0RE5cL0OIDQ==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275126;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
+        "Signature": "sig=:pf43uDuKZyr0BJwN/Fu2269JdayW2RlcmtYXDK0DKIZl3rCGW3eayL0bsVCrYIirL9WweA/sMXW/gkqPRxn6Cw==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275357;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
       }
     },
     {
@@ -33,7 +33,7 @@
         "crv": "Ed25519",
         "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
         "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
-        "alg": "EdDSA",
+        "alg": "Ed25519",
         "use": "sig",
         "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
       },
@@ -42,14 +42,14 @@
         "url": "https://ps.example/token",
         "headers": {
           "Content-Type": "application/json",
-          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZERTQSJ9.e30.c2ln\""
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
         },
         "body": "{\"resource_token\":\"x\"}"
       },
       "signed": {
         "Content-Digest": "sha-256=:ybC6GsvdO/cjY2Rd5x9Ud8/pb3tqRjxfwwUqf9W21uA=:",
-        "Signature": "sig=:NpGtIoJd6zXOt4QZFbBmxNsWZ7PeO3gS5wCoiRqkTdv0VqYh9PLiRpR3AW2U+9ehgb40UK4sFZoEqnhTlD+FBg==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\");created=1791275126;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
+        "Signature": "sig=:bj6Vgh4blT8BVLDVCvu35Ky0hKSDDWwyWqAg+/YkiddxjacN5AmP8fni7w8p2i3DrRKfucBjaiVJI0Oi0gfjCQ==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\");created=1791275357;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
       }
     },
     {
@@ -59,7 +59,7 @@
         "crv": "Ed25519",
         "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
         "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
-        "alg": "EdDSA",
+        "alg": "Ed25519",
         "use": "sig",
         "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
       },
@@ -67,12 +67,12 @@
         "method": "GET",
         "url": "https://resource.example/api/documents",
         "headers": {
-          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZERTQSJ9.e30.c2ln\""
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
         }
       },
       "signed": {
-        "Signature": "sig=:vowLzujE/xHK0qyVYlzGNQTq7JPUtQC7GWdOQHl4DKTKwt1nfUyVrggFIph0ZpS5xFW1by4Vjbp0RE5cL0OIDQ==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275126;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
+        "Signature": "sig=:pf43uDuKZyr0BJwN/Fu2269JdayW2RlcmtYXDK0DKIZl3rCGW3eayL0bsVCrYIirL9WweA/sMXW/gkqPRxn6Cw==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275357;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
       },
       "tamper": {
         "method": "",
@@ -86,7 +86,7 @@
         "crv": "Ed25519",
         "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
         "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
-        "alg": "EdDSA",
+        "alg": "Ed25519",
         "use": "sig",
         "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
       },
@@ -95,14 +95,14 @@
         "url": "https://ps.example/token",
         "headers": {
           "Content-Type": "application/json",
-          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZERTQSJ9.e30.c2ln\""
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
         },
         "body": "{\"resource_token\":\"x\"}"
       },
       "signed": {
         "Content-Digest": "sha-256=:ybC6GsvdO/cjY2Rd5x9Ud8/pb3tqRjxfwwUqf9W21uA=:",
-        "Signature": "sig=:NpGtIoJd6zXOt4QZFbBmxNsWZ7PeO3gS5wCoiRqkTdv0VqYh9PLiRpR3AW2U+9ehgb40UK4sFZoEqnhTlD+FBg==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\");created=1791275126;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
+        "Signature": "sig=:bj6Vgh4blT8BVLDVCvu35Ky0hKSDDWwyWqAg+/YkiddxjacN5AmP8fni7w8p2i3DrRKfucBjaiVJI0Oi0gfjCQ==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\" \"content-digest\");created=1791275357;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
       },
       "tamper": {
         "method": "",
@@ -117,7 +117,7 @@
         "crv": "Ed25519",
         "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
         "kid": "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k",
-        "alg": "EdDSA",
+        "alg": "Ed25519",
         "use": "sig",
         "d": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"
       },
@@ -125,18 +125,18 @@
         "method": "GET",
         "url": "https://resource.example/api/documents",
         "headers": {
-          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZERTQSJ9.e30.c2ln\""
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\""
         }
       },
       "signed": {
-        "Signature": "sig=:vowLzujE/xHK0qyVYlzGNQTq7JPUtQC7GWdOQHl4DKTKwt1nfUyVrggFIph0ZpS5xFW1by4Vjbp0RE5cL0OIDQ==:",
-        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275126;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
+        "Signature": "sig=:pf43uDuKZyr0BJwN/Fu2269JdayW2RlcmtYXDK0DKIZl3rCGW3eayL0bsVCrYIirL9WweA/sMXW/gkqPRxn6Cw==:",
+        "Signature-Input": "sig=(\"@method\" \"@authority\" \"@path\" \"signature-key\");created=1791275357;keyid=\"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k\""
       },
       "tamper": {
         "method": "",
         "url": "",
         "headers": {
-          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZERTQSJ9.e30.b3RoZXI\""
+          "Signature-Key": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.b3RoZXI\""
         }
       }
     }

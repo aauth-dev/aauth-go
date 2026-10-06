@@ -90,9 +90,10 @@ type ResourceClaims struct {
 	jwt.RegisteredClaims
 }
 
-// mintTyped signs claims as an EdDSA JWT with the given typ and kid header.
+// mintTyped signs claims as a JWT with the fully-specified alg "Ed25519"
+// (draft -11 §11.5.1) and the given typ and kid header.
 func mintTyped(claims jwt.Claims, priv ed25519.PrivateKey, typ, kid string) (string, error) {
-	tok := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tok := jwt.NewWithClaims(SigningMethodEd25519, claims)
 	tok.Header["typ"] = typ
 	if kid != "" {
 		tok.Header["kid"] = kid
@@ -178,15 +179,18 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 	if opts.Resolver == nil {
 		return nil, errors.New("aauth: VerifyAgentTokenOptions.Resolver is required")
 	}
-	// First pass, unverified: read typ, kid, and claims to select the key.
+	// First pass, unverified: read typ, alg, kid, and claims to select the key.
 	unverified := &AgentClaims{}
-	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	parser := newJWTParser(jwt.WithoutClaimsValidation())
 	utok, _, err := parser.ParseUnverified(token, unverified)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}
 	if typ, _ := utok.Header["typ"].(string); typ != TypAgent {
 		return nil, fmt.Errorf("%w: typ=%q", ErrWrongTokenType, utok.Header["typ"])
+	}
+	if err := checkJWSHeaderAlg(utok); err != nil {
+		return nil, err
 	}
 	kid, _ := utok.Header["kid"].(string)
 
@@ -196,10 +200,7 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 	}
 
 	claims := &AgentClaims{}
-	tok, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
-		if t.Method.Alg() != jwt.SigningMethodEdDSA.Alg() {
-			return nil, fmt.Errorf("%w: alg %s", ErrSignatureInvalid, t.Method.Alg())
-		}
+	tok, err := newJWTParser().ParseWithClaims(token, claims, func(*jwt.Token) (any, error) {
 		return key, nil
 	})
 	if err != nil {
@@ -213,6 +214,10 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 	}
 	if claims.Cnf.JWK == nil {
 		return nil, fmt.Errorf("%w: cnf.jwk", ErrMissingClaim)
+	}
+	// cnf.jwk MUST carry a fully-specified alg (draft -11 §11.5.1).
+	if err := claims.Cnf.JWK.Validate(); err != nil {
+		return nil, fmt.Errorf("cnf.jwk: %w", err)
 	}
 	if claims.Subject == "" {
 		return nil, fmt.Errorf("%w: sub", ErrMissingClaim)

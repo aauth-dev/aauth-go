@@ -124,6 +124,7 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 |---|---|
 | Agent identifiers (`aauth:name@domain`; sub-agents `name+worker@domain`, single-level rule) | ✅ |
 | Agent tokens — `sig=jwt` (-09 claim set: `iss dwk sub jti cnf iat exp ps parent_agent`, `kid` header) | ✅ |
+| Fully-specified algorithms: JWS and JWK `alg` is `Ed25519`; `EdDSA`, `none`, symmetric, absent, or kty/crv-inconsistent `alg` rejected (signature-key §3.3) | ✅ |
 | Self-hosted agents (agent as its own AP, bootstrap §4.3) | ✅ |
 | Verification (§5.2.4) — pluggable trust: JWKS discovery / pinned keys / self-signed | ✅ |
 | HTTP Message Signatures profile (`@method @authority @path signature-key` + `content-digest`) | ✅ |
