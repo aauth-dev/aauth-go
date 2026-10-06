@@ -139,6 +139,20 @@ type threePartyWorld struct {
 	authTTL          time.Duration // auth token lifetime (default one hour)
 	personRequests   atomic.Int32  // person token requests served
 	authRequests     atomic.Int32  // auth token requests served
+	agentResolver    KeyResolver   // resolves agent tokens at the resource (default self-signed)
+	subagents        atomic.Int32  // requests that carried a subagent_token
+}
+
+// subagent verifies a subagent_token at the world's PS (§10.2.3): a
+// self-hosted parent is its sub-agents' provider, so its key signs them.
+func (w *threePartyWorld) subagent(r *http.Request, parent *AgentClaims, token string) (*AgentClaims, error) {
+	if token == "" {
+		return nil, nil
+	}
+	w.subagents.Add(1)
+	return VerifySubagentToken(r.Context(), token, parent, VerifyAgentTokenOptions{
+		Resolver: StaticResolver{parent.Issuer: {Keys: []JWK{*parent.Cnf.JWK}}},
+	})
 }
 
 // resolver pins the PS's and the resource's keys.
@@ -207,7 +221,11 @@ func (w *threePartyWorld) serveResource(t *testing.T, resourceURL func() string,
 			ChallengeAuthToken(rw, rt)
 		default:
 			// §6.4: the agent is known, the person is not.
-			if _, err := VerifyAndExtractAgent(r.Context(), r, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}}); err != nil {
+			resolver := w.agentResolver
+			if resolver == nil {
+				resolver = SelfSignedResolver{}
+			}
+			if _, err := VerifyAndExtractAgent(r.Context(), r, VerifyAgentTokenOptions{Resolver: resolver}); err != nil {
 				WriteSignatureFailure(rw, err)
 				return
 			}
@@ -243,8 +261,13 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 			WriteTokenError(rw, &TokenError{Code: TokenErrInvalidRequest, Err: err})
 			return
 		}
+		sub, err := w.subagent(r, agent, preq.SubagentToken)
+		if err != nil {
+			WriteTokenError(rw, err)
+			return
+		}
 		tok, pc, err := IssuePersonToken(PersonTokenParams{
-			Issuer: w.psURL, Resource: preq.Resource, Subject: "person-1", Agent: agent,
+			Issuer: w.psURL, Resource: preq.Resource, Subject: "person-1", Agent: agent, Subagent: sub,
 			MissionS256: preq.MissionS256, InsecureSkipIdentifierCheck: true,
 		}, w.psAgent.Key, w.psAgent.JWK().Kid)
 		if err != nil {
@@ -268,11 +291,20 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 		// §6.7.2: the resource token is addressed to us and bound to this
 		// agent's key, and the presented person token is ours, for that
 		// resource, and the one the resource token names.
+		sub, err := w.subagent(r, agent, treq.SubagentToken)
+		if err != nil {
+			WriteTokenError(rw, err)
+			return
+		}
+		bound := agent // §10.2.3: the resource token binds the sub-agent's key
+		if sub != nil {
+			bound = sub
+		}
 		rc, presented, err := VerifyResourceToken(r.Context(), treq.ResourceToken, ResourceTokenVerifyOptions{
 			TokenVerifyOptions: localOpts(w.resolver()),
 			Audience:           w.psURL,
 			PS:                 w.psURL,
-			AgentJKT:           agent.Cnf.JWK.Thumbprint(),
+			AgentJKT:           bound.Cnf.JWK.Thumbprint(),
 			PresentedToken:     treq.PresentedToken,
 		})
 		if err != nil {
@@ -295,7 +327,7 @@ func newThreePartyWorld(t *testing.T) *threePartyWorld {
 		// §9.4.1: sub, account, mission_s256, and tenant from the
 		// resource token; exp bounded by the agent and presented tokens.
 		tok, _, err := IssueAuthToken(AuthTokenParams{
-			Issuer: w.psURL, Resource: rc, Presented: presented, Agent: agent, Scope: rc.Scope, TTL: w.authTTL,
+			Issuer: w.psURL, Resource: rc, Presented: presented, Agent: agent, Subagent: sub, Scope: rc.Scope, TTL: w.authTTL,
 		}, w.psAgent.Key, w.psAgent.JWK().Kid)
 		if err != nil {
 			WriteTokenError(rw, err)

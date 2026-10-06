@@ -134,6 +134,8 @@ func classifyJWTError(err error) error {
 // signature (proof of possession is then established by the HTTP message
 // signature, which must use the same key). Suitable for local/self-hosted
 // agents where the verifier's policy layer decides what the identity may do.
+// It does not verify sub-agent tokens, which the parent's provider key signs
+// over the sub-agent's own cnf key (§10.2.1): resolve the provider's key.
 type SelfSignedResolver struct{}
 
 // ResolveKey implements KeyResolver, returning the key from cnf.jwk.

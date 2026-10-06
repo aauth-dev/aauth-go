@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"time"
 
@@ -34,6 +35,10 @@ type Agent struct {
 
 	// keyAlg selects the algorithm NewAgent generates a key for.
 	keyAlg string
+	// tokenSource, when set, supplies agent tokens issued by another party
+	// (a sub-agent's parent, a hosted agent provider) instead of
+	// self-issuing them.
+	tokenSource func() (string, error)
 }
 
 // NewAgent creates an agent for the given identifier. Unless [WithKey]
@@ -77,6 +82,15 @@ func WithKey(key crypto.Signer) AgentOption {
 // ([AlgEd25519], the default, or [AlgES256]). It has no effect with WithKey.
 func WithKeyAlgorithm(alg string) AgentOption { return func(a *Agent) { a.keyAlg = alg } }
 
+// WithTokenSource makes the agent present tokens issued elsewhere instead
+// of self-issuing them: fn returns a current agent token whose cnf.jwk is
+// the agent's Key — for example one a hosted agent provider issued, or a
+// sub-agent token handed to a worker process (bootstrap §9). fn is called
+// once per token the agent presents and should cache.
+func WithTokenSource(fn func() (string, error)) AgentOption {
+	return func(a *Agent) { a.tokenSource = fn }
+}
+
 // WithTokenTTL overrides the minted-token lifetime (capped at 24h).
 func WithTokenTTL(d time.Duration) AgentOption { return func(a *Agent) { a.TokenTTL = d } }
 
@@ -109,21 +123,77 @@ func (a *Agent) Thumbprint() string { return a.JWK().Thumbprint() }
 // JWKS returns the one-key set a self-hosted agent publishes at its jwks_uri.
 func (a *Agent) JWKS() JWKS { return JWKS{Keys: []JWK{a.JWK()}} }
 
-// MintToken self-issues an aa-agent+jwt with the draft -09 claim set:
-// iss, dwk, sub, jti, cnf.jwk, iat, exp (+ ps when configured).
+// MintToken returns a fresh agent token for the agent: from its token
+// source ([WithTokenSource], [Agent.NewSubAgent]) when it has one, else
+// self-issued — an aa-agent+jwt with iss, dwk, sub, jti, cnf.jwk, iat, exp
+// (+ ps when configured), signed by Key.
 func (a *Agent) MintToken() (string, error) {
-	return a.mint("", time.Now())
+	if a.tokenSource != nil {
+		return a.tokenSource()
+	}
+	return a.mint(a.ID, "", a.JWK(), time.Now())
 }
 
-// MintSubAgentToken issues a token for a short-lived worker under this agent
-// (draft -09 §10.2): sub = aauth:name+discriminator@domain, parent_agent set.
-// The sub-agent shares consent obtained by the parent but stays individually
-// identifiable for audit and revocation.
-func (a *Agent) MintSubAgentToken(discriminator string) (string, error) {
-	return a.mint(discriminator, time.Now())
+// IssueSubAgentToken issues, as this agent's own (self-hosted) agent
+// provider, an agent token for a sub-agent that holds its own key pub
+// (draft -11 §10.2.1; bootstrap §9.1): sub is this agent's identifier with
+// "+discriminator", parent_agent names this agent, iss and ps are this
+// agent's, cnf.jwk is pub, and exp does not exceed the agent's own token
+// lifetime. The sub-agent signs its requests with its own key; a sub-agent
+// never shares its parent's. A sub-agent cannot have sub-agents
+// (§10.2.2), and an agent whose tokens come from elsewhere cannot issue
+// them — its provider does.
+func (a *Agent) IssueSubAgentToken(discriminator string, pub crypto.PublicKey) (string, error) {
+	switch {
+	case a.ID.IsSubAgent():
+		return "", fmt.Errorf("aauth: sub-agent %s cannot have sub-agents (§10.2.2)", a.ID)
+	case a.tokenSource != nil:
+		return "", errors.New("aauth: an agent whose tokens are issued elsewhere cannot issue sub-agent tokens; its agent provider does")
+	}
+	sub, err := a.ID.SubAgent(discriminator)
+	if err != nil {
+		return "", err
+	}
+	jwk, err := NewJWK(pub)
+	if err != nil {
+		return "", fmt.Errorf("aauth: sub-agent key: %w", err)
+	}
+	return a.mint(sub, a.ID.String(), jwk, time.Now())
 }
 
-func (a *Agent) mint(discriminator string, now time.Time) (string, error) {
+// NewSubAgent creates a sub-agent of this self-hosted agent (draft -11
+// §10.2): its identifier is this one's with "+discriminator", it holds its
+// own key (generated, or supplied with [WithKey] / [WithKeyAlgorithm]),
+// and its tokens are issued on demand by this agent with
+// [Agent.IssueSubAgentToken]. Only the issuing process needs this agent's
+// key; a sub-agent in another process receives its token out of band and
+// uses [WithTokenSource].
+//
+// A sub-agent MUST NOT call the PS itself. Its parent obtains its person
+// and auth tokens (§10.2.3): give the sub-agent a [Transport] whose PS is
+// the parent's [PSClient] — NewTransport(sub, parentPS) — and the
+// transport sends the sub-agent's token as subagent_token in requests the
+// parent signs.
+func (a *Agent) NewSubAgent(discriminator string, opts ...AgentOption) (*Agent, error) {
+	id, err := a.ID.SubAgent(discriminator)
+	if err != nil {
+		return nil, err
+	}
+	sub, err := NewAgent(id, append([]AgentOption{WithIssuer(a.Issuer), WithPersonServer(a.PS), WithTokenTTL(a.TokenTTL)}, opts...)...)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := a.IssueSubAgentToken(discriminator, sub.Key.Public()); err != nil {
+		return nil, err
+	}
+	pub := sub.Key.Public()
+	sub.tokenSource = func() (string, error) { return a.IssueSubAgentToken(discriminator, pub) }
+	return sub, nil
+}
+
+// mint signs an agent token for sub, binding jwk, with parent_agent set
+// for a sub-agent.
+func (a *Agent) mint(sub AgentIdentifier, parent string, jwk JWK, now time.Time) (string, error) {
 	ttl := a.TokenTTL
 	if max := time.Duration(MaxAgentTokenTTLSeconds) * time.Second; ttl <= 0 || ttl > max {
 		ttl = max
@@ -135,16 +205,6 @@ func (a *Agent) mint(discriminator string, now time.Time) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	sub := a.ID
-	parent := ""
-	if discriminator != "" {
-		sub, err = a.ID.SubAgent(discriminator)
-		if err != nil {
-			return "", err
-		}
-		parent = a.ID.String()
-	}
-	jwk := a.JWK()
 	claims := AgentClaims{
 		DWK:         WellKnownAgent,
 		PS:          a.PS,
@@ -158,7 +218,7 @@ func (a *Agent) mint(discriminator string, now time.Time) (string, error) {
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
 	}
-	return MintAgentToken(claims, a.Key, jwk.Kid)
+	return MintAgentToken(claims, a.Key, a.JWK().Kid)
 }
 
 func randomJTI() (string, error) {

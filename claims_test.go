@@ -264,8 +264,10 @@ func TestWriteTokenError(t *testing.T) {
 
 func TestVerifySubagentToken(t *testing.T) {
 	ctx := context.Background()
-	opts := VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}}
 	parent := testAgent(t, WithIssuer("https://agent.example"))
+	// The provider key of each issuer below is the parent's key.
+	opts := VerifyAgentTokenOptions{Resolver: StaticResolver{"https://agent.example": parent.JWKS(), "https://other.example": parent.JWKS()}}
+	subKey := testAgent(t).Key.Public()
 	ptok, err := parent.MintToken()
 	if err != nil {
 		t.Fatal(err)
@@ -274,7 +276,7 @@ func TestVerifySubagentToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subTok, err := parent.MintSubAgentToken("worker1")
+	subTok, err := parent.IssueSubAgentToken("worker1", subKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +293,7 @@ func TestVerifySubagentToken(t *testing.T) {
 	}
 	// A sub-agent token from another agent provider (iss differs).
 	other := &Agent{ID: parent.ID, Issuer: "https://other.example", Key: parent.Key, TokenTTL: time.Hour}
-	otherTok, err := other.MintSubAgentToken("worker1")
+	otherTok, err := other.IssueSubAgentToken("worker1", subKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +305,7 @@ func TestVerifySubagentToken(t *testing.T) {
 	// parent_agent names someone else.
 	strangerID, _ := ParseAgentIdentifier("aauth:stranger@agent.example")
 	stranger := &Agent{ID: strangerID, Issuer: parent.Issuer, Key: parent.Key, TokenTTL: time.Hour}
-	strangerSub, err := stranger.MintSubAgentToken("w")
+	strangerSub, err := stranger.IssueSubAgentToken("w", subKey)
 	if err != nil {
 		t.Fatal(err)
 	}

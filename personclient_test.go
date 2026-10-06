@@ -10,8 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // personPS is a Person Server serving the person token endpoint (§7.1).
@@ -77,7 +75,9 @@ func newPersonPS(t *testing.T) *personPS {
 			MissionS256: req.MissionS256, TTL: p.ttl, InsecureSkipIdentifierCheck: true,
 		}
 		if req.SubagentToken != "" {
-			sub, err := VerifySubagentToken(r.Context(), req.SubagentToken, agent, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
+			// A self-hosted parent is its sub-agents' provider: its key
+			// signs their tokens.
+			sub, err := VerifySubagentToken(r.Context(), req.SubagentToken, agent, VerifyAgentTokenOptions{Resolver: StaticResolver{agent.Issuer: {Keys: []JWK{*agent.Cnf.JWK}}}})
 			if err != nil {
 				WriteTokenError(rw, err)
 				return
@@ -260,16 +260,12 @@ func TestPersonTokenForSubAgent(t *testing.T) {
 	// (§10.2.3); the cache keys on that key.
 	ps := newPersonPS(t)
 	parent := testAgent(t)
-	subKey := testAgent(t)
-	subID, _ := parent.ID.SubAgent("worker")
-	subJWK := subKey.JWK()
-	now := time.Now()
-	subTok, err := MintAgentToken(AgentClaims{
-		DWK: WellKnownAgent, ParentAgent: parent.ID.String(), Cnf: Cnf{JWK: &subJWK},
-		RegisteredClaims: jwt.RegisteredClaims{
-			Subject: subID.String(), ID: "sub-1", IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
-		},
-	}, subKey.Key, "") // self-signed under SelfSignedResolver; iss matches the parent's (empty)
+	sub, err := parent.NewSubAgent("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subKey := sub
+	subTok, err := sub.MintToken()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,8 +3,10 @@ package aauth
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,17 +14,49 @@ import (
 )
 
 func TestRouteDownstream(t *testing.T) {
-	const raw = "eyJ.upstream.token"
+	ctx := context.Background()
+	ps, as, caller := testAgent(t), testAgent(t), testAgent(t)
+	const bookingID, asURL = "https://booking.example", "https://as.example"
+	now := time.Now()
 	// An auth token routes by ps, never by iss (an AS in four-party).
-	auth := &AuthClaims{PS: "https://ps.example", MissionS256: "m1", RegisteredClaims: jwt.RegisteredClaims{Issuer: "https://as.example"}}
+	raw := mintTestAuth(t, as, caller, asURL, bookingID, now, func(c *AuthClaims) {
+		c.DWK, c.PS, c.MissionS256 = WellKnownAccess, testPS, "m1"
+	})
+	auth, err := VerifyUpstreamToken(ctx, raw, UpstreamVerifyOptions{
+		TokenVerifyOptions: TokenVerifyOptions{Resolver: StaticResolver{asURL: as.JWKS()}},
+		Intermediary:       &AgentClaims{RegisteredClaims: jwt.RegisteredClaims{Issuer: bookingID}},
+		PS:                 testPS, AtAS: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	r, err := RouteDownstream(auth, raw)
-	if err != nil || r.PersonServer != "https://ps.example" || r.UpstreamToken != raw || r.MissionS256 != "m1" {
+	if err != nil || r.PersonServer != testPS || r.UpstreamToken != raw || r.MissionS256 != "m1" || !r.UpstreamExpiresAt.Equal(now.Add(time.Hour).Truncate(time.Second)) {
 		t.Fatalf("auth token route: %+v, %v", r, err)
 	}
+	// The raw token must be the verified one.
+	other := mintTestAuth(t, as, caller, asURL, bookingID, now, func(c *AuthClaims) { c.ID = "other"; c.PS = testPS })
+	if _, err := RouteDownstream(auth, other); err == nil {
+		t.Error("routed with a different raw token")
+	}
 	// A person token routes by iss.
-	person := &PersonClaims{RegisteredClaims: jwt.RegisteredClaims{Issuer: "https://ps.example"}}
-	if r, err = RouteDownstream(person, raw); err != nil || r.PersonServer != "https://ps.example" || r.MissionS256 != "" {
+	callerJWK := caller.JWK()
+	personRaw, person, err := IssuePersonToken(PersonTokenParams{
+		Issuer: testPS, Resource: bookingID, Subject: "s1",
+		Agent: &AgentClaims{Cnf: Cnf{JWK: &callerJWK}, RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour))}},
+	}, ps.Key, ps.JWK().Kid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err = RouteDownstream(person, personRaw); err != nil || r.PersonServer != testPS || r.MissionS256 != "" {
 		t.Fatalf("person token route: %+v, %v", r, err)
+	}
+	// The intermediary must be its own agent provider (§10.1.1.1).
+	if _, err := r.Transport(testAgent(t, WithIssuer(bookingID))); err != nil {
+		t.Fatalf("own provider: %v", err)
+	}
+	if _, err := r.Transport(testAgent(t, WithIssuer("https://agents.example"))); err == nil {
+		t.Error("an intermediary under another agent provider was accepted")
 	}
 	var typedNil *AuthClaims
 	for name, up := range map[string]PresentedToken{"nil": nil, "typed nil": typedNil, "no ps": &AuthClaims{}} {
@@ -37,20 +71,56 @@ func TestRouteDownstream(t *testing.T) {
 
 // TestCallChainingEndToEnd runs §10.1.1: asst holds an auth token for
 // booking; booking, acting as an agent that is its own agent provider,
-// routes by the upstream token to the person's PS, which verifies the
-// upstream token (§9.4.5) and issues a downstream auth token for payments
-// with payments' own directed sub.
+// routes by the upstream token to the person's PS, obtains a person token
+// for payments with upstream_token, presents it, and redeems payments'
+// resource token at the same PS with the person token as presented_token
+// and the upstream token as upstream_token. Payments sees its own
+// directed sub, and no downstream token outlives the upstream token.
 func TestCallChainingEndToEnd(t *testing.T) {
-	const bookingID = "https://booking.example" // booking's resource identifier
 	asst := testAgent(t)
-	booking := testAgent(t, WithIssuer(bookingID))
 	psID, _ := ParseAgentIdentifier("aauth:ps@ps.example")
 	psKey, _ := NewAgent(psID)
+	payKey := testAgent(t)
 
-	var psURL, paymentsURL string
-	var sawUpstream PresentedToken
+	var psURL, paymentsURL, bookingURL string
+	var upstreamSeen atomic.Int32
+	resolver := func() StaticResolver { return StaticResolver{psURL: psKey.JWKS(), paymentsURL: payKey.JWKS()} }
+	verifyUpstream := func(r *http.Request, caller *AgentClaims, raw string) (PresentedToken, error) {
+		upstreamSeen.Add(1)
+		return VerifyUpstreamToken(r.Context(), raw, UpstreamVerifyOptions{
+			TokenVerifyOptions: localOpts(resolver()), Intermediary: caller, PS: psURL,
+		})
+	}
 
 	psMux := http.NewServeMux()
+	psMux.HandleFunc("POST /person", func(rw http.ResponseWriter, r *http.Request) {
+		caller, err := VerifyAndExtractAgent(r.Context(), r, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
+		if err != nil {
+			WriteSignatureFailure(rw, err)
+			return
+		}
+		var preq PersonTokenRequest
+		if err := json.NewDecoder(r.Body).Decode(&preq); err != nil || preq.MissionS256 != "" {
+			WriteTokenError(rw, &TokenError{Code: TokenErrInvalidRequest, Err: err})
+			return
+		}
+		up, err := verifyUpstream(r, caller, preq.UpstreamToken)
+		if err != nil {
+			WriteTokenError(rw, err)
+			return
+		}
+		// The person the upstream token was issued for, with payments'
+		// directed sub (§10.1.1.2); bounded by the upstream token.
+		tok, pc, err := IssuePersonToken(PersonTokenParams{
+			Issuer: psURL, Resource: preq.Resource, Subject: "payments-sub-for-alice", Agent: caller,
+			UpstreamExpiresAt: up.(*AuthClaims).ExpiresAt.Time, InsecureSkipIdentifierCheck: true,
+		}, psKey.Key, psKey.JWK().Kid)
+		if err != nil {
+			WriteTokenError(rw, err)
+			return
+		}
+		writeJSON(t, rw, PersonTokenResponse{PersonToken: tok, ExpiresIn: int64(time.Until(pc.ExpiresAt.Time).Seconds())})
+	})
 	psMux.HandleFunc("POST /token", func(rw http.ResponseWriter, r *http.Request) {
 		caller, err := VerifyAndExtractAgent(r.Context(), r, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
 		if err != nil {
@@ -62,79 +132,100 @@ func TestCallChainingEndToEnd(t *testing.T) {
 			WriteTokenError(rw, &TokenError{Code: TokenErrInvalidRequest, Err: err})
 			return
 		}
-		up, err := VerifyUpstreamToken(r.Context(), treq.UpstreamToken, UpstreamVerifyOptions{
-			TokenVerifyOptions: localOpts(StaticResolver{psURL: psKey.JWKS()}),
-			Intermediary:       caller,
-			PS:                 psURL,
+		up, err := verifyUpstream(r, caller, treq.UpstreamToken)
+		if err != nil {
+			WriteTokenError(rw, err)
+			return
+		}
+		rc, presented, err := VerifyResourceToken(r.Context(), treq.ResourceToken, ResourceTokenVerifyOptions{
+			TokenVerifyOptions: localOpts(resolver()), Audience: psURL, PS: psURL,
+			AgentJKT: caller.Cnf.JWK.Thumbprint(), PresentedToken: treq.PresentedToken,
 		})
 		if err != nil {
 			WriteTokenError(rw, err)
 			return
 		}
-		sawUpstream = up
-		// The downstream sub is payments' directed identifier, not the
-		// upstream sub (§10.1.1.2).
-		tok := mustMintAuth(t, psKey, psURL, paymentsURL, "payments-sub-for-alice", caller.Cnf.JWK, "charge")
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(AuthTokenResponse{AuthToken: tok, ExpiresIn: 3600})
+		tok, ac, err := IssueAuthToken(AuthTokenParams{
+			Issuer: psURL, Resource: rc, Presented: presented, Agent: caller, Scope: rc.Scope,
+			UpstreamExpiresAt: up.(*AuthClaims).ExpiresAt.Time,
+		}, psKey.Key, psKey.JWK().Kid)
+		if err != nil {
+			WriteTokenError(rw, err)
+			return
+		}
+		writeJSON(t, rw, AuthTokenResponse{AuthToken: tok, ExpiresIn: int64(time.Until(ac.ExpiresAt.Time).Seconds())})
 	})
 	ps := httptest.NewServer(psMux)
 	t.Cleanup(ps.Close)
 	psURL = ps.URL
 
+	w := &threePartyWorld{psAgent: psKey, resourceKey: payKey}
 	payments := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		claims, err := VerifyAndExtractAuth(r.Context(), r, paymentsURL, AuthTokenVerifyOptions{TokenVerifyOptions: localOpts(StaticResolver{psURL: psKey.JWKS()})})
-		if err != nil {
-			WriteSignatureFailure(rw, err)
-			return
-		}
-		writeBody(t, rw, "%s", claims.Subject)
+		w.psURL, w.resourceURL = psURL, paymentsURL
+		w.serveResource(t, func() string { return paymentsURL }, "charge", nil)(rw, r)
 	}))
 	t.Cleanup(payments.Close)
 	paymentsURL = payments.URL
+	bookingURL = "https://booking.example" // booking's resource identifier
+	booking := testAgent(t, WithIssuer(bookingURL))
 
-	// 1. asst holds an auth token for booking.
+	// 1. asst presents an auth token to booking, valid for 50 minutes.
 	asstJWK := asst.JWK()
-	asstAuthForBooking := mustMintAuth(t, psKey, psURL, bookingID, "booking-sub-for-alice", &asstJWK, "book")
-
-	// 2. booking verifies it (as the resource that served asst) and routes
-	// the downstream request by its ps.
-	upstream, err := VerifyAuthToken(context.Background(), asstAuthForBooking, bookingID, AuthTokenVerifyOptions{TokenVerifyOptions: localOpts(StaticResolver{psURL: psKey.JWKS()})})
-	if err != nil {
-		t.Fatal(err)
-	}
-	router, err := RouteDownstream(upstream, asstAuthForBooking)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if router.PersonServer != psURL {
-		t.Fatalf("routed to %q, want %q", router.PersonServer, psURL)
-	}
-	psc := NewPSClient(router.PersonServer, booking)
-	grant, err := psc.RequestAuthToken(context.Background(), AuthTokenRequest{
-		ResourceToken:  "stub-resource-token", // (payments would issue this via 401; elided)
-		PresentedToken: "stub-person-token",
-		UpstreamToken:  router.UpstreamToken,
+	upstreamRaw := mintTestAuth(t, psKey, asst, psURL, bookingURL, time.Now().Add(-10*time.Minute), func(c *AuthClaims) {
+		c.Cnf = Cnf{JWK: &asstJWK}
+		c.Subject = "booking-sub-for-alice"
 	})
+	// 2. booking verifies it (as the resource that served asst) and routes.
+	upstream, err := VerifyAuthToken(context.Background(), upstreamRaw, bookingURL, AuthTokenVerifyOptions{TokenVerifyOptions: localOpts(StaticResolver{psURL: psKey.JWKS()})})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ac, ok := sawUpstream.(*AuthClaims); !ok || ac.Subject != "booking-sub-for-alice" {
-		t.Fatalf("PS saw upstream %#v", sawUpstream)
+	router, err := RouteDownstream(upstream, upstreamRaw)
+	if err != nil || router.PersonServer != psURL {
+		t.Fatalf("router %+v, %v", router, err)
 	}
+	tr, err := router.Transport(booking)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr.ResourceVerify = localOpts(StaticResolver{paymentsURL: payKey.JWKS()})
 
-	// 3. booking calls payments with the downstream token.
-	res := callResource(t, booking, paymentsURL, grant.AuthToken)
-	defer closeBody(res.Body)
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("payments status %d", res.StatusCode)
+	// 3. booking calls payments: agent token → person token → auth token.
+	resp, err := (&http.Client{Transport: tr}).Get(paymentsURL + "/files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeBody(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "hello payments-sub-for-alice scope=charge" {
+		t.Fatalf("payments: %d %s", resp.StatusCode, body)
+	}
+	if upstreamSeen.Load() != 2 {
+		t.Fatalf("PS verified the upstream token %d times, want 2 (person and auth token requests)", upstreamSeen.Load())
+	}
+	// No downstream token outlives the upstream one.
+	tr.mu.Lock()
+	ct := tr.auth[paymentsURL]
+	tr.mu.Unlock()
+	if ct.exp.After(router.UpstreamExpiresAt) {
+		t.Fatalf("downstream auth token exp %v after upstream %v", ct.exp, router.UpstreamExpiresAt)
+	}
+	// Once the upstream token has expired, the intermediary stops.
+	tr2, err := router.Transport(booking)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr2.UpstreamExpiresAt = time.Now().Add(-time.Second)
+	if resp, err := (&http.Client{Transport: tr2}).Get(paymentsURL + "/files"); err == nil {
+		closeBody(resp.Body)
+		t.Fatal("chained with an expired upstream token")
 	}
 
 	// An intermediary whose agent token iss is not the upstream aud is
-	// refused (§10.1.1.1): here, a different agent provider.
+	// refused by the PS too (§10.1.1.1): here, a different agent provider.
 	other := testAgent(t, WithIssuer("https://other.example"))
-	if _, err := NewPSClient(psURL, other).RequestAuthToken(context.Background(), AuthTokenRequest{
-		ResourceToken: "stub-resource-token", PresentedToken: "stub-person-token", UpstreamToken: asstAuthForBooking,
+	if _, err := router.PSClient(other).RequestPersonToken(context.Background(), PersonTokenRequest{
+		Resource: paymentsURL, UpstreamToken: upstreamRaw,
 	}); tokenErrorCode(err) != TokenErrInvalidUpstreamToken {
 		t.Fatalf("foreign intermediary: err = %v", err)
 	}
@@ -207,28 +298,4 @@ func TestVerifyUpstreamToken(t *testing.T) {
 	if _, err := VerifyUpstreamToken(ctx, agentTok, opts()); tokenErrorCode(err) != TokenErrInvalidUpstreamToken {
 		t.Errorf("agent token: err = %v", err)
 	}
-}
-
-func mustMintAuth(t *testing.T, ps *Agent, iss, aud, sub string, cnf *JWK, scope string) string {
-	t.Helper()
-	now := time.Now()
-	jti, _ := randomJTI()
-	tok, err := MintAuthToken(AuthClaims{
-		DWK:   WellKnownPerson,
-		PS:    iss,
-		Scope: scope,
-		Cnf:   Cnf{JWK: cnf},
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    iss,
-			Subject:   sub,
-			Audience:  jwt.ClaimStrings{aud},
-			ID:        jti,
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
-		},
-	}, ps.Key, ps.JWK().Kid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return tok
 }

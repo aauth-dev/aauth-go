@@ -88,23 +88,51 @@ func TestAgentTokenRoundTrip(t *testing.T) {
 }
 
 func TestSubAgentToken(t *testing.T) {
-	a := testAgent(t)
-	tok, err := a.MintSubAgentToken("worker-7")
+	// §10.2.1, bootstrap §9.1: the parent, as its own agent provider,
+	// issues the sub-agent a token for the sub-agent's OWN key.
+	a := testAgent(t, WithIssuer("https://devbox.example"), WithPersonServer(testPS))
+	sub, err := a.NewSubAgent("worker-7")
 	if err != nil {
 		t.Fatal(err)
 	}
-	claims, err := VerifyAgentToken(context.Background(), tok, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}})
+	if sub.Thumbprint() == a.Thumbprint() {
+		t.Fatal("sub-agent shares its parent's key")
+	}
+	tok, err := sub.MintToken()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !claims.IsSubAgent() {
-		t.Fatal("sub-agent marker missing")
+	// Verifiers resolve the provider's key (the parent's), not cnf.jwk.
+	claims, err := VerifyAgentToken(context.Background(), tok, VerifyAgentTokenOptions{Resolver: StaticResolver{"https://devbox.example": a.JWKS()}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if claims.ParentAgent != a.ID.String() {
+	if _, err := VerifyAgentToken(context.Background(), tok, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}}); err == nil {
+		t.Fatal("a sub-agent token verified as self-signed")
+	}
+	switch {
+	case !claims.IsSubAgent() || claims.ParentAgent != a.ID.String():
 		t.Fatalf("parent_agent = %q, want %q", claims.ParentAgent, a.ID)
+	case claims.Subject != "aauth:claude-code+worker-7@devbox.local":
+		t.Fatalf("sub = %q", claims.Subject)
+	case claims.Issuer != a.Issuer || claims.PS != testPS:
+		t.Fatalf("iss %q ps %q, want the parent's", claims.Issuer, claims.PS)
+	case claims.Cnf.JWK.Thumbprint() != sub.Thumbprint():
+		t.Fatal("cnf.jwk is not the sub-agent's key")
 	}
-	if got, want := claims.Subject, "aauth:claude-code+worker-7@devbox.local"; got != want {
-		t.Fatalf("sub = %q, want %q", got, want)
+	// Single level (§10.2.2), and only a self-issuing agent issues them.
+	if _, err := sub.NewSubAgent("deeper"); err == nil {
+		t.Fatal("a sub-agent spawned a sub-agent")
+	}
+	if _, err := sub.IssueSubAgentToken("x", a.Key.Public()); err == nil {
+		t.Fatal("a sub-agent issued a sub-agent token")
+	}
+	hosted := testAgent(t, WithTokenSource(func() (string, error) { return tok, nil }))
+	if _, err := hosted.IssueSubAgentToken("x", a.Key.Public()); err == nil {
+		t.Fatal("an agent with a token source issued a sub-agent token")
+	}
+	if got, err := hosted.MintToken(); err != nil || got != tok {
+		t.Fatalf("token source: %v", err)
 	}
 }
 

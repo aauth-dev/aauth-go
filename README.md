@@ -94,7 +94,7 @@ The root package is the stable protocol vocabulary. Grouped by role:
 
 | Area | Key symbols |
 |---|---|
-| **Identity** | [`Agent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent), [`NewAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#NewAgent), [`Agent.MintToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.MintToken), [`Agent.MintSubAgentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.MintSubAgentToken), [`ParseAgentIdentifier`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ParseAgentIdentifier) |
+| **Identity** | [`Agent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent), [`NewAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#NewAgent), [`Agent.MintToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.MintToken), [`Agent.NewSubAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#Agent.NewSubAgent), [`ParseAgentIdentifier`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ParseAgentIdentifier) |
 | **Signing** | [`SignRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#SignRequest), [`AttachSignatureKey`](https://pkg.go.dev/github.com/aauth-dev/auth-go#AttachSignatureKey), [`VerifyRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyRequest), [`ServerSigner`](https://pkg.go.dev/github.com/aauth-dev/auth-go#ServerSigner), [`VerifyServerRequest`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyServerRequest) |
 | **Verification / trust** | [`VerifyAndExtractAgent`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAndExtractAgent), [`VerifyAgentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyAgentToken), [`KeyResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#KeyResolver) · [`JWKSResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#JWKSResolver) · [`StaticResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#StaticResolver) · [`SelfSignedResolver`](https://pkg.go.dev/github.com/aauth-dev/auth-go#SelfSignedResolver) |
 | **Person Server side** | [`IssuePersonToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssuePersonToken), [`VerifyResourceToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifyResourceToken), [`IssueAuthToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#IssueAuthToken), [`VerifySubagentToken`](https://pkg.go.dev/github.com/aauth-dev/auth-go#VerifySubagentToken), [`WriteTokenError`](https://pkg.go.dev/github.com/aauth-dev/auth-go#WriteTokenError) |
@@ -171,7 +171,8 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 | Deferred responses (202 / `Location` / `Retry-After` / `Prefer: wait`, 429 backoff) | ✅ |
 | Audit endpoint (§7.8, `mission_s256` REQUIRED) + mission status errors with `termination_reason` (§8.8) | ✅ |
 | Clarification chat (§7.5): question → answer / updated-request (with the REQUIRED `presented_token`, §7.5.2.2) / cancel | ✅ |
-| Call chaining (§10.1.1): routing by the upstream token's PS, upstream token verification; downstream person-token step and intermediary flow | 🟡 |
+| Call chaining (§10.1.1): routing by the upstream token's PS (`RouteDownstream`), intermediary `Transport` (`ChainRouter.Transport`: person token with `upstream_token`, then auth token with `presented_token` + `upstream_token`, own-agent-provider check, downstream exp ≤ upstream), upstream token verification (§9.4.5) | ✅ |
+| Sub-agents (§10.2): own key, token issued by the parent's provider (`Agent.NewSubAgent`, `IssueSubAgentToken`, `WithTokenSource`), single level, parent-mediated person and auth tokens with `subagent_token` (`NewTransport(sub, parentPS)`) | ✅ |
 | PS interaction endpoint (§7.6): `interaction` / `payment` relay and `question`, deferred polling, `interaction_unavailable` fallback (§11.6.3.2), `ProblemError` for RFC 9457 errors | ✅ |
 | Interaction chaining (§10.1.2) | ✅ |
 | Interaction codes (Crockford base32) | ✅ |
@@ -193,9 +194,12 @@ Legend: ✅ implemented & tested · 🟡 partial · ⬜ planned · ⛔ out of sc
 - **The RFC 9421 + Signature-Key layer is isolated** in `httpsig.go` — the
   reference implementations externalize it too, so a signature-key draft bump
   stays contained.
-- **Sub-agent authorization** is a policy hook (`IsSubAgent`,
-  `ErrSubAgentDirect`), not hard-coded — the PS decides how to enforce
-  "the parent requests on behalf of the sub-agent."
+- **Sub-agents hold their own keys.** `Agent.NewSubAgent` generates the
+  sub-agent's key and issues its tokens from the parent (its self-hosted
+  provider), so verifiers resolve the provider's key, not `cnf.jwk`. The
+  parent mediates authorization: a sub-agent's `Transport` uses the parent's
+  `PSClient`, which signs PS requests and sends `subagent_token`; a sub-agent
+  calling the PS directly gets `ErrSubAgentDirect`.
 - **Planned package split** mirrors the reference TS monorepo: `agent/`,
   `server/`, `keys/` (two-key minting, hardware backends), with the root
   package staying the stable protocol vocabulary.

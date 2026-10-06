@@ -1,6 +1,7 @@
 package aauth
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -484,5 +485,48 @@ func TestTransportDropsRevokedPersonToken(t *testing.T) {
 	closeBody(resp.Body)
 	if resp.StatusCode != http.StatusOK || w.personRequests.Load() != 2 {
 		t.Fatalf("status %d, person token requests %d (want 200 and 2)", resp.StatusCode, w.personRequests.Load())
+	}
+}
+
+func TestTransportSubAgentParentMediated(t *testing.T) {
+	// §10.2.3: the sub-agent signs resource requests with its own key; its
+	// parent's PS client signs the person and auth token requests, which
+	// carry the sub-agent's token as subagent_token, so both tokens bind
+	// the sub-agent's key.
+	w := newThreePartyWorld(t)
+	w.agentResolver = StaticResolver{w.agent.Issuer: w.agent.JWKS()} // the parent is the provider
+	sub, err := w.agent.NewSubAgent("worker1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := NewTransport(sub, NewPSClient(w.psURL, w.agent))
+	tr.ResourceVerify = localOpts(w.resolver())
+	tr.AuthVerify = localOpts(w.resolver())
+	resp, err := (&http.Client{Transport: tr}).Get(w.resourceURL + "/files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeBody(resp.Body)
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(b) != "hello person-1 scope=files:read" {
+		t.Fatalf("status %d: %s", resp.StatusCode, b)
+	}
+	if w.subagents.Load() != 2 {
+		t.Fatalf("subagent_token carried on %d PS requests, want 2", w.subagents.Load())
+	}
+	tr.mu.Lock()
+	authTok := tr.auth[w.resourceURL].token
+	tr.mu.Unlock()
+	ac, err := VerifyAuthToken(context.Background(), authTok, w.resourceURL, AuthTokenVerifyOptions{TokenVerifyOptions: localOpts(w.resolver())})
+	if err != nil || ac.Cnf.JWK.Thumbprint() != sub.Thumbprint() {
+		t.Fatalf("auth token not bound to the sub-agent's key: %v", err)
+	}
+
+	// A sub-agent never calls the PS with its own client (§10.2.2).
+	direct := NewTransport(sub, NewPSClient(w.psURL, sub))
+	direct.ResourceVerify = localOpts(w.resolver())
+	if resp, err := (&http.Client{Transport: direct}).Get(w.resourceURL + "/files"); err == nil {
+		closeBody(resp.Body)
+		t.Fatal("sub-agent obtained tokens directly")
 	}
 }

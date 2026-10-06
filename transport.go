@@ -52,6 +52,12 @@ import (
 //   - on 401 expired_jwt or revoked_jwt for a cached person or auth token,
 //     drops it and falls back to the next credential (§11.12.5).
 //
+// A sub-agent's Transport has the sub-agent as Agent and its parent's
+// [PSClient] as PS (§10.2.3): the sub-agent signs its own requests to
+// resources with its own key, while the parent signs the PS requests and
+// the transport adds the sub-agent's token as subagent_token, so the
+// person and auth tokens bind the sub-agent's key.
+//
 // Request bodies are buffered in memory so retries can re-sign and resend;
 // bound with MaxBodyBytes.
 type Transport struct {
@@ -63,8 +69,18 @@ type Transport struct {
 	// requirement as an error, §6.4).
 	PS *PSClient
 	// MissionS256, when set, is the mission person tokens are requested
-	// under (§7.1, §8); it flows into resource tokens and auth tokens.
+	// under (§7.1, §8); it flows into resource tokens and auth tokens. It
+	// is not sent with UpstreamToken, which carries the mission itself.
 	MissionS256 string
+	// UpstreamToken, for an intermediary in call chaining (§10.1.1), is the
+	// person or auth token the calling agent presented to it. It is sent
+	// as upstream_token in the person and auth token requests to PS — the
+	// person server the upstream token names — so the tokens are issued
+	// for that person. UpstreamExpiresAt is its exp: no downstream token
+	// outlives it, and once it passes the intermediary needs a later token
+	// from the calling agent. See [ChainRouter.Transport].
+	UpstreamToken     string
+	UpstreamExpiresAt time.Time
 	// Base is the underlying RoundTripper (default http.DefaultTransport).
 	Base http.RoundTripper
 	// ResourceVerify verifies the signature of resource tokens in
@@ -225,13 +241,22 @@ func (t *Transport) authorize(ctx context.Context, resource, resourceToken, pres
 	if err != nil {
 		return "", fmt.Errorf("aauth: challenge from %s: %w", resource, err)
 	}
+	subagent, err := t.subagentToken()
+	if err != nil {
+		return "", err
+	}
 	grant, err := t.PS.RequestAuthToken(ctx, AuthTokenRequest{
 		ResourceToken:     resourceToken,
 		PresentedToken:    presented,
+		UpstreamToken:     t.UpstreamToken,
+		SubagentToken:     subagent,
 		TokenRequestHints: TokenRequestHints{LoginHint: rc.LoginHint},
 	})
 	if err != nil {
 		return "", err
+	}
+	if err := t.checkUpstreamBound(grant.AuthToken); err != nil {
+		return "", fmt.Errorf("aauth: auth token for %s: %w", resource, err)
 	}
 	if _, err := VerifyAuthTokenResponse(ctx, grant.AuthToken, AuthResponseVerifyOptions{
 		TokenVerifyOptions: t.AuthVerify, Resource: rc, Agent: t.Agent, Presented: presented,
@@ -243,9 +268,53 @@ func (t *Transport) authorize(ctx context.Context, resource, resourceToken, pres
 	return grant.AuthToken, nil
 }
 
-// personToken obtains a person token for resource through the PS cache.
+// personToken obtains a person token for resource through the PS cache:
+// under the mission, or for the upstream token's person in call chaining,
+// and for a sub-agent through its parent.
 func (t *Transport) personToken(ctx context.Context, resource string) (string, error) {
-	return t.PS.PersonToken(ctx, PersonTokenRequest{Resource: resource, MissionS256: t.MissionS256})
+	req := PersonTokenRequest{Resource: resource, MissionS256: t.MissionS256, UpstreamToken: t.UpstreamToken}
+	if t.UpstreamToken != "" {
+		req.MissionS256 = "" // the upstream token carries the mission (§7.1)
+	}
+	var err error
+	if req.SubagentToken, err = t.subagentToken(); err != nil {
+		return "", err
+	}
+	tok, err := t.PS.PersonToken(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if err := t.checkUpstreamBound(tok); err != nil {
+		return "", err
+	}
+	return tok, nil
+}
+
+// subagentToken is the agent's own token when it is a sub-agent — sent as
+// subagent_token by its parent's PS client (§10.2.3) — else "".
+func (t *Transport) subagentToken() (string, error) {
+	if !t.Agent.ID.IsSubAgent() {
+		return "", nil
+	}
+	if t.PS.Agent == t.Agent {
+		return "", ErrSubAgentDirect
+	}
+	return t.Agent.MintToken()
+}
+
+// checkUpstreamBound fails when the upstream token has expired, or when
+// token — a downstream person or auth token — outlives it (§10.1.1).
+func (t *Transport) checkUpstreamBound(token string) error {
+	if t.UpstreamExpiresAt.IsZero() {
+		return nil
+	}
+	if !time.Now().Before(t.UpstreamExpiresAt) {
+		return fmt.Errorf("%w: the upstream token expired; use a later token from the calling agent (§10.1.1)", ErrExpired)
+	}
+	if exp := tokenExpiry(token, 0); exp.After(t.UpstreamExpiresAt) {
+		return fmt.Errorf("%w: downstream token outlives the upstream token", ErrUnexpectedToken)
+	}
+	return nil
 }
 
 // isPresentable reports whether token is a person token or an auth token —
