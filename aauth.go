@@ -1,5 +1,5 @@
 // Package aauth implements the AAuth protocol
-// (draft-hardt-oauth-aauth-protocol-09): agent identity and authorization
+// (draft-hardt-oauth-aauth-protocol-11): agent identity and authorization
 // across trust domains, without shared secrets or per-server pre-registration.
 // Every agent gets its own signing key (Ed25519 by default, or ES256 — any
 // crypto.Signer, so hardware-backed keys work) and a self-describing token
@@ -12,7 +12,7 @@
 //   - Identity — an agent proves who it is on every request. See [Agent] and
 //     [Agent.MintToken] for minting an aa-agent+jwt, [SignRequest] and
 //     [VerifyAndExtractAgent] for the RFC 9421 HTTP message-signature profile
-//     over the Signature-Key carrier (draft-hardt-httpbis-signature-key-04).
+//     over the Signature-Key carrier (draft-hardt-httpbis-signature-key-09).
 //   - Person identity — a Person Server identifies the person an agent acts
 //     for to one resource with a person token (draft -11 §7.1). See
 //     [IssuePersonToken] (PS side) and [VerifyAndExtractPerson] (resource
@@ -35,11 +35,24 @@
 // # Deployment shapes
 //
 // The self-hosted / local-agent shape is a first-class target: the agent is
-// its own agent provider (draft-hardt-aauth-bootstrap-01 §4.3), which is what
+// its own agent provider (draft-hardt-aauth-bootstrap-02 §4.3), which is what
 // autonomous coding agents on developer machines are. Verification trust is
 // pluggable via [KeyResolver]: [JWKSResolver] for public discovery,
 // [StaticResolver] for pinned keys (offline / air-gapped), and
 // [SelfSignedResolver] for local agents.
+//
+// # Server roles
+//
+// The root package is the protocol vocabulary shared by every role. The
+// hosted server roles are subpackages, each an http.Handler over
+// caller-supplied storage and policy interfaces: personserver (Person
+// Server), accessserver (Access Server, and PS-AS federation), and
+// agentprovider (hosted agent provider). Each consults an optional
+// [Limiter]; the ratelimit package provides an in-memory one for a single
+// instance.
+//
+// The drafts implemented are named by [ProtocolDraft], [SignatureKeyDraft],
+// and [BootstrapDraft].
 //
 // This is, to our knowledge, the first Go implementation of the protocol.
 package aauth
@@ -47,6 +60,20 @@ package aauth
 import (
 	"errors"
 	"io"
+)
+
+// The Internet-Drafts this package implements. Each draft revision may
+// change the wire format; these name the revisions the code and its golden
+// vectors track.
+const (
+	// ProtocolDraft is the AAuth protocol draft implemented.
+	ProtocolDraft = "draft-hardt-oauth-aauth-protocol-11"
+	// SignatureKeyDraft is the HTTP Signature Keys draft implemented: the
+	// Signature-Key header, its schemes, and the Signature-Error codes.
+	SignatureKeyDraft = "draft-hardt-httpbis-signature-key-09"
+	// BootstrapDraft is the AAuth bootstrap draft implemented: self-hosted
+	// agents, agent provider enrollment, and refresh patterns.
+	BootstrapDraft = "draft-hardt-aauth-bootstrap-02"
 )
 
 // JWT typ header values (draft -11 §5.3.1, §6.7.1, §7.1.2, §9.4.1). A
@@ -58,7 +85,7 @@ const (
 	TypAuth     = "aa-auth+jwt"
 )
 
-// Well-known metadata document names (draft -09 §4; used as the dwk claim
+// Well-known metadata document names (draft -11 §11.2; used as the dwk claim
 // and as /.well-known/{name} paths).
 const (
 	WellKnownAgent    = "aauth-agent.json"
@@ -87,7 +114,7 @@ const (
 // across Signature-Input, Signature, and Signature-Key (signature-key §3).
 const DefaultSignatureLabel = "sig"
 
-// Recommended lifetimes (draft -09 §5.2.2: agent tokens SHOULD NOT exceed 24h).
+// Recommended lifetimes (draft -11 §5.3.1: agent tokens SHOULD NOT exceed 24h).
 const (
 	MaxAgentTokenTTLSeconds = 24 * 60 * 60
 )
@@ -135,10 +162,10 @@ var (
 	// ErrMissingClaim means a required JWT claim was absent.
 	ErrMissingClaim = errors.New("aauth: required claim missing")
 	// ErrSubAgentDirect means a sub-agent tried to request authorization
-	// itself; its parent must request on its behalf (draft -09 §10.2).
+	// itself; its parent must request on its behalf (draft -11 §10.2.3).
 	ErrSubAgentDirect = errors.New("aauth: sub-agent must not request authorization directly")
 	// ErrUnknownAction means a clarification POST had a missing or
-	// unrecognized action member (draft -09 §7.3.2).
+	// unrecognized action member (draft -11 §7.5.2).
 	ErrUnknownAction = errors.New("aauth: missing or unrecognized action")
 )
 
