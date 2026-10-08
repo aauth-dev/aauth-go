@@ -1,0 +1,54 @@
+site_name: aauth-go
+site_description: A Go implementation of the AAuth protocol
+repo_url: https://github.com/aauth-dev/aauth-go
+repo_name: aauth-dev/aauth-go
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: .
+      check_paths: true
+
+nav:
+  - Home: index.md
+  - User guide:
+      - guides/index.md
+      - Getting started: guides/getting-started.md
+      - Agent: guides/agent.md
+      - Resource: guides/resource.md
+      - Hosted AP, PS, and AS: guides/servers.md
+      - Design and security notes: guides/design-and-security.md
+      - Testing: guides/testing.md
+      - Migrating from v0.1: guides/migrating-from-v0.1.md
+  - Specifications:
+      - specs/index.md
+      - Protocol coverage: specs/protocol-coverage.md
+  - Release notes:
+      - releases/index.md
+      - v0.2.0: releases/v0.2.0.md
+      - v0.1.1: releases/v0.1.1.md
+      - v0.1.0: releases/v0.1.0.md

@@ -16,3 +16,6 @@ dist/
 # local env
 .env
 .env.*
+
+# mkdocs build output
+site/
