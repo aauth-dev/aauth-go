@@ -49,6 +49,31 @@ func TestJWKValidate(t *testing.T) {
 	}
 }
 
+// TestJWKMissingCrv: crv is REQUIRED for OKP and EC keys, so a JWK without
+// it is rejected by Validate and by PublicKey (the JWKS resolver's path),
+// for both algorithms.
+func TestJWKMissingCrv(t *testing.T) {
+	for _, alg := range []string{AlgEd25519, AlgES256} {
+		t.Run(alg, func(t *testing.T) {
+			key, err := GenerateKey(alg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			j, err := NewJWK(key.Public())
+			if err != nil {
+				t.Fatal(err)
+			}
+			j.Crv = ""
+			if err := j.Validate(); !errors.Is(err, ErrInvalidKey) {
+				t.Fatalf("Validate = %v, want %v", err, ErrInvalidKey)
+			}
+			if _, err := j.PublicKey(); !errors.Is(err, ErrInvalidKey) {
+				t.Fatalf("PublicKey = %v, want %v", err, ErrInvalidKey)
+			}
+		})
+	}
+}
+
 func TestJWKPublicKeyBadX(t *testing.T) {
 	j := testAgent(t).JWK()
 	j.X = "AAAA"

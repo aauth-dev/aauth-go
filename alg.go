@@ -121,7 +121,9 @@ func validateKeyAlg(j JWK) error {
 	if !ok {
 		return fmt.Errorf("%w: %q", ErrUnsupportedAlgorithm, j.Alg)
 	}
-	if j.Kty != want.kty || (j.Crv != "" && j.Crv != want.crv) {
+	// crv is REQUIRED for OKP (RFC 8037 §2) and EC (RFC 7518 §6.2.1.1)
+	// keys, so a missing crv disagrees with alg like a wrong one.
+	if j.Kty != want.kty || j.Crv != want.crv {
 		return fmt.Errorf("%w: kty=%q crv=%q disagree with alg %q", ErrInvalidKey, j.Kty, j.Crv, j.Alg)
 	}
 	return nil
