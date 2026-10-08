@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	aauth "github.com/aauth-dev/auth-go"
 )
@@ -114,6 +115,25 @@ func Example_resource() {
 	// addresses, bounded timeouts): token issuers are attacker-chosen URLs.
 	verify := aauth.TokenVerifyOptions{Resolver: aauth.NewJWKSResolver(http.DefaultClient)}
 
+	// A valid signature proves the issuer signed the claims, not that the
+	// subject may use this resource. The resource keeps its own record of
+	// the people it serves, keyed by (iss, sub): sub is unique only within
+	// its issuer, so records from different issuers never match
+	// (§9.4.3.2). This one enrolls people on first use, but only from the
+	// person and access servers it has chosen to trust.
+	trusted := map[string]bool{"https://ps.example": true, "https://as.example": true}
+	var mu sync.Mutex
+	people := map[[2]string]bool{}
+	checkSubject := func(_ context.Context, iss, sub string) error {
+		if !trusted[iss] {
+			return fmt.Errorf("%w: %s is not an issuer this resource accepts", aauth.ErrInvalidToken, iss)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		people[[2]string{iss, sub}] = true
+		return nil
+	}
+
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		tok, err := aauth.ParseSignatureKey(r)
 		if err != nil {
@@ -127,7 +147,7 @@ func Example_resource() {
 		}
 		switch typ {
 		case aauth.TypAuth:
-			claims, err := aauth.VerifyAndExtractAuth(r.Context(), r, self, aauth.AuthTokenVerifyOptions{TokenVerifyOptions: verify})
+			claims, err := aauth.VerifyAndExtractAuth(r.Context(), r, self, aauth.AuthTokenVerifyOptions{TokenVerifyOptions: verify, CheckSubject: checkSubject})
 			if err != nil {
 				aauth.WriteSignatureFailure(w, err)
 				return
