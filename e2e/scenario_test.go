@@ -35,6 +35,7 @@ func runScenario(t *testing.T, d *deployment) {
 	}
 
 	step("three-party access at A", func(t *testing.T) {
+		t.Log("The agent calls A with its agent token and is challenged for a person token. The PS defers a new agent to the person; the application approves as alice, binding the agent to her. A then challenges for an auth token with a resource token; the agent redeems it at the PS, and A serves it.")
 		// The person token waits for Alice's approval, which binds the agent
 		// to her; the PS then issues the auth token.
 		body, err := d.get(d.transport(""), d.resA.url+"/files")
@@ -50,6 +51,7 @@ func runScenario(t *testing.T, d *deployment) {
 	})
 
 	step("propose a mission", func(t *testing.T) {
+		t.Log("The agent proposes a mission; the PS approves it and the agent holds its mission_s256.")
 		m, err := d.psc.ProposeMission(ctx, aauth.MissionProposal{Description: "# Reconcile\n\nReconcile the ledger with the files."})
 		if err != nil {
 			t.Fatal(err)
@@ -58,12 +60,14 @@ func runScenario(t *testing.T, d *deployment) {
 	})
 
 	step("B refuses a request outside a mission", func(t *testing.T) {
+		t.Log("B uses an access server whose policy requires a mission. Without one the AS denies, the PS relays the refusal, and B is not served.")
 		if _, err := d.get(d.transport(""), d.resB.url+"/ledger"); err == nil {
 			t.Fatal("B served without a mission")
 		}
 	})
 
 	step("access at B under the mission", func(t *testing.T) {
+		t.Log("Under the mission the PS federates the resource token to the access server (in-process when collapsed, over HTTP to the AS's own origin when four-party). The AS defers to the ledger owner, who approves, and the agent receives the AS's auth token for B.")
 		// The PS federates to the access server, whose deferred approval the
 		// ledger owner resolves; the agent receives the AS's auth token.
 		body, err := d.get(d.transport(mission), d.resB.url+"/ledger")
@@ -76,6 +80,7 @@ func runScenario(t *testing.T, d *deployment) {
 	})
 
 	step("audit, update, and complete the mission", func(t *testing.T) {
+		t.Log("The agent records an audit entry, updates the mission, and completes it; completion waits for the person's review. The mission log holds each step.")
 		if err := d.psc.Audit(ctx, aauth.AuditRequest{MissionS256: mission, Action: "Reconcile", Result: map[string]any{"rows": 12}}); err != nil {
 			t.Fatal(err)
 		}
@@ -105,6 +110,7 @@ func runScenario(t *testing.T, d *deployment) {
 	})
 
 	step("revoking the agent token cascades to both resources", func(t *testing.T) {
+		t.Log("The agent provider revokes the agent token at the PS. The PS revokes what it issued at A and B and the person token it presented to the AS; the AS revokes its own auth token at B.")
 		// The agent provider revokes the agent token at the PS; the PS
 		// revokes what it issued to the agent at A and B, and the person
 		// token it presented to the AS, which revokes the AS's own token.
@@ -137,6 +143,7 @@ func runScenario(t *testing.T, d *deployment) {
 	})
 
 	step("the revoked agent obtains nothing new", func(t *testing.T) {
+		t.Log("The revoked agent is refused: A rejects the cached tokens and the PS rejects the agent token.")
 		// A refuses the cached tokens and the PS refuses the agent token.
 		if _, err := d.get(d.transport(""), d.resA.url+"/files"); err == nil {
 			t.Fatal("revoked agent still served")
