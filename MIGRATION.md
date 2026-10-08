@@ -12,6 +12,7 @@ migrate. See the [changelog](CHANGELOG.md) for additions.
 
 ## Contents
 
+- [Module path](#module-path)
 - [Keys and algorithms](#keys-and-algorithms) (1–8)
 - [Signatures and Signature-Error](#signatures-and-signature-error) (9–15)
 - [Identifiers and common token rules](#identifiers-and-common-token-rules) (16–18)
@@ -21,6 +22,27 @@ migrate. See the [changelog](CHANGELOG.md) for additions.
 - [Missions](#missions) (33–36)
 - [Transport](#transport) (37–38)
 - [Delegation](#delegation) (39–40)
+
+## Module path
+
+The repository was renamed from `auth-go` to `aauth-go`, and v0.2 has the
+module path `github.com/aauth-dev/aauth-go`. Update imports and `go.mod`:
+
+```go
+// v0.1
+import aauth "github.com/aauth-dev/auth-go"
+
+// v0.2
+import aauth "github.com/aauth-dev/aauth-go"
+```
+
+```sh
+go get github.com/aauth-dev/aauth-go@v0.2.0
+```
+
+Subpackages move the same way, for example
+`github.com/aauth-dev/aauth-go/personserver`. v0.1 releases remain available
+under the old path.
 
 ## Keys and algorithms
 
