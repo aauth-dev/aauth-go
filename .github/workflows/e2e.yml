@@ -26,7 +26,9 @@ jobs:
         with:
           go-version: stable
       - name: TestCollapsedDeployment
-        run: .github/scripts/e2e.sh TestCollapsedDeployment "Collapsed: agent provider, person server, and access server on one origin (in-process federation, §9.3.3)"
+        run: |
+          .github/scripts/e2e.sh TestCollapsedDeployment \
+            "Collapsed: agent provider, person server, and access server on one origin (in-process federation, §9.3.3)"
 
   four-party:
     name: e2e four-party (AS on its own origin)
@@ -37,4 +39,6 @@ jobs:
         with:
           go-version: stable
       - name: TestFourPartyDeployment
-        run: .github/scripts/e2e.sh TestFourPartyDeployment "Four-party: access server on its own origin (federation over HTTP, §9.1)"
+        run: |
+          .github/scripts/e2e.sh TestFourPartyDeployment \
+            "Four-party: access server on its own origin (federation over HTTP, §9.1)"
