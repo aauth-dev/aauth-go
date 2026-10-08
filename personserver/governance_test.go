@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 // governance configures every governance endpoint, delegating each

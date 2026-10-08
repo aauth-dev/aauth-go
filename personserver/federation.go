@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 // Four-party federation (draft -11 §9.1, §9.3). When a resource token's

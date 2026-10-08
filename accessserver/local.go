@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/aauth-dev/auth-go/personserver"
+	"github.com/aauth-dev/aauth-go/personserver"
 )
 
 // PS-AS collapse (draft -11 §9.3.3): when the agent's PS and the

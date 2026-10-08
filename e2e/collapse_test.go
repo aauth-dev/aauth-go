@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
-	"github.com/aauth-dev/auth-go/accessserver"
-	"github.com/aauth-dev/auth-go/agentprovider"
-	"github.com/aauth-dev/auth-go/personserver"
+	aauth "github.com/aauth-dev/aauth-go"
+	"github.com/aauth-dev/aauth-go/accessserver"
+	"github.com/aauth-dev/aauth-go/agentprovider"
+	"github.com/aauth-dev/aauth-go/personserver"
 )
 
 // resource is a protected API on its own origin, built from the library's

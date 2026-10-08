@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"sync"
 
-	aauth "github.com/aauth-dev/auth-go"
-	"github.com/aauth-dev/auth-go/personserver"
+	aauth "github.com/aauth-dev/aauth-go"
+	"github.com/aauth-dev/aauth-go/personserver"
 )
 
 // Client is the PS side of PS-AS federation over HTTP (draft -11

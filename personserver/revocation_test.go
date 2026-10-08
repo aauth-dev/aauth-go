@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 type revCall struct{ recipient, dwk, jti string }

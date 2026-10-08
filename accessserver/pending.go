@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
-	"github.com/aauth-dev/auth-go/interactioncode"
+	aauth "github.com/aauth-dev/aauth-go"
+	"github.com/aauth-dev/aauth-go/interactioncode"
 	"github.com/golang-jwt/jwt/v5"
 )
 
