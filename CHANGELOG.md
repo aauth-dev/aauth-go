@@ -119,6 +119,17 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
   returned as a `*MissionStatusError` instead of a `*TokenError`.
 - A person server no longer accepts approval of a request already waiting on
   an access server.
+- An auth token issued while its grant was being revoked could be recorded
+  after the revocation cascade had run, and stay usable until it expired.
+  `RecordAuthToken` now refuses, atomically with `Revoke`, to record an auth
+  token against a revoked presented token (access server) or root person
+  token or terminated mission (person server). The token endpoints answer
+  `revoked_presented_token` or `mission_terminated`.
+- JWKs for `Ed25519` and `ES256` must carry `crv`.
+- Every AAuth token must carry `jti`, and `RouteDownstream` refuses claims
+  without one.
+- `Audit` and `RequestPermission` return `*ProblemError` for problem
+  responses other than a mission status error.
 
 ### Security
 
@@ -128,8 +139,10 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
   refetch rate and entry count.
 - Rate limits on interaction code attempts, polling, revocations, issuance,
   and new resources per agent through `Limiter`.
-- Discovery uses the caller's `http.Client`; deployments should supply one
-  that applies egress admission (see the README security notes).
+- Discovery, revocation delivery, and federation use `DiscoveryClient` when
+  no client is configured. It allows only https and public unicast
+  destinations, including on redirects, and refusals wrap
+  `ErrDisallowedDestination` (see the README security notes).
 
 ## [0.1.1] - 2026-07-17
 

@@ -116,7 +116,8 @@ edPub, ok := pub.(ed25519.PublicKey)
 
 Tokens and keys are minted with the fully-specified `Ed25519` algorithm.
 Tokens or keys using `EdDSA`, `none`, a symmetric algorithm, or no `alg` are
-rejected, as are keys whose `kty`/`crv` disagree with `alg`. Republish any
+rejected, as are keys whose `kty`/`crv` disagree with `alg` or that omit
+`crv`. Republish any
 hand-written JWKS with `"alg": "Ed25519"` (or `"ES256"`); `aauth.NewJWK` and
 `Agent.JWKS` produce conforming keys.
 
@@ -244,10 +245,15 @@ not lowercase A-label host names (no scheme, port, or path). Failures wrap
 
 `iat` is required, `exp` has no skew tolerance, `iss` must be a server
 identifier (https, host only, lowercase), `typ` and `dwk` are checked first,
-and person and auth tokens may not live longer than one hour. Agent tokens
-verified with `RequireProviderClaims` also require server-identifier `iss`
-and `ps`. For local development against `http://127.0.0.1:port` servers, set
+person and auth tokens may not live longer than one hour, and every token
+must carry `jti`. Agent tokens verified with `RequireProviderClaims` also
+require server-identifier `iss` and `ps`. For local development against `http://127.0.0.1:port` servers, set
 `InsecureSkipIdentifierCheck` in the verify options; never in production.
+
+Discovery with no client configured now uses `aauth.DiscoveryClient`,
+which reaches only public https destinations. Against local servers, pass a
+client to `NewJWKSResolver`, `FetchMetadata`, `RevocationClient`, and each
+server's `Config.HTTPClient`.
 
 ### 18. Metadata documents must carry a matching `issuer`
 
