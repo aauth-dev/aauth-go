@@ -56,7 +56,7 @@ interactive tour of the protocol, see
 go get github.com/aauth-dev/auth-go
 ```
 
-Requires Go 1.26 or later. The full API reference is on
+Requires Go 1.27 or later. The full API reference is on
 **[pkg.go.dev](https://pkg.go.dev/github.com/aauth-dev/auth-go)**.
 
 ```go

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/dunglas/httpsfv"
-	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v4/jwa"
 	"github.com/yaronf/httpsign"
 )
 
@@ -224,9 +224,9 @@ func newHTTPSigner(key crypto.Signer, cfg *httpsign.SignConfig, fields httpsign.
 	}
 	switch alg {
 	case AlgEd25519:
-		return httpsign.NewJWSSignerV3(jwa.EdDSA(), key, cfg, fields)
+		return httpsign.NewJWSSigner(jwa.EdDSA(), key, cfg, fields)
 	default: // AlgES256; AlgForPublicKey admits nothing else
-		return httpsign.NewJWSSignerV3(jwa.ES256(), key, cfg, fields)
+		return httpsign.NewJWSSigner(jwa.ES256(), key, cfg, fields)
 	}
 }
 
