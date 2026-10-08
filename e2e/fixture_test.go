@@ -36,14 +36,14 @@ type resource struct {
 	revoked map[[2]string]bool
 }
 
-func newResource(t *testing.T, name, scope string, audience func() string) *resource {
+func newResource(t *testing.T, name, scope string, audience func() string, hc *http.Client) *resource {
 	t.Helper()
 	key, err := aauth.NewAgent(aauth.AgentIdentifier{Name: name, Domain: "resources.example"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := &resource{t: t, key: key, scope: scope, audience: audience, revoked: map[[2]string]bool{},
-		resolver: aauth.NewJWKSResolver(http.DefaultClient)}
+		resolver: aauth.NewJWKSResolver(hc)}
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	r.url = srv.URL
@@ -239,8 +239,8 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 		d.asURL = asSrv.URL
 	}
 
-	d.resA = newResource(t, "files", "files:read", func() string { return d.psURL })
-	d.resB = newResource(t, "ledger", "ledger:read", func() string { return d.asURL })
+	d.resA = newResource(t, "files", "files:read", func() string { return d.psURL }, d.client("A"))
+	d.resB = newResource(t, "ledger", "ledger:read", func() string { return d.asURL }, d.client("B"))
 
 	// The agent provider.
 	apKey, err := aauth.GenerateKey(aauth.AlgEd25519)
@@ -248,7 +248,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 		t.Fatal(err)
 	}
 	d.ap, err = agentprovider.New(agentprovider.Config{
-		HTTPClient: http.DefaultClient,
+		HTTPClient: d.client("AP"),
 		Issuer:     d.psURL, Domain: "agents.example", Key: apKey, Registrar: d.sessions,
 		OnIssue: func(_ context.Context, it agentprovider.IssuedToken) {
 			d.sessions.mu.Lock()
@@ -261,15 +261,15 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 	}
 
 	// The access server: resource B's policy.
-	discovery := aauth.NewJWKSResolver(http.DefaultClient)
+	asDiscovery := aauth.NewJWKSResolver(d.client("AS"))
 	asKey, err := aauth.GenerateKey(aauth.AlgES256)
 	if err != nil {
 		t.Fatal(err)
 	}
 	d.as, err = accessserver.New(accessserver.Config{
-		HTTPClient: http.DefaultClient,
+		HTTPClient: d.client("AS"),
 		Issuer:     d.asURL, Key: asKey, Store: accessserver.NewMemoryStore(),
-		AgentResolver: discovery, TokenResolver: discovery, ServerResolver: discovery,
+		AgentResolver: asDiscovery, TokenResolver: asDiscovery, ServerResolver: asDiscovery,
 		Resources: func(r string) bool { return r == d.resB.url },
 		Authorizer: accessserver.AuthorizerFunc(func(_ context.Context, r *accessserver.AuthorizationRequest) (accessserver.Decision, error) {
 			if r.Resource.MissionS256 == "" {
@@ -300,7 +300,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 		t.Fatal(err)
 	}
 	cfg := personserver.Config{
-		HTTPClient: http.DefaultClient,
+		HTTPClient: d.client("PS"),
 		Issuer:     d.psURL, Key: psKey, SubjectKey: bytes.Repeat([]byte{42}, 32), Store: d.psStore,
 		Decider: personserver.DeciderFunc(func(_ context.Context, r *personserver.TokenRequest) (personserver.Decision, error) {
 			if r.Person == "" {
@@ -344,7 +344,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 	if tp == collapsed {
 		fed.f = d.as.Local(d.psURL)
 	} else {
-		c := accessserver.NewClient(d.ps.Signer(), http.DefaultClient)
+		c := accessserver.NewClient(d.ps.Signer(), d.client("PS"))
 		c.PreferWaitSeconds = 1
 		fed.f = c
 	}
@@ -357,12 +357,13 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 	if err != nil {
 		t.Fatal(err)
 	}
-	apc := &agentprovider.Client{BaseURL: d.psURL, HTTPClient: &http.Client{Transport: withSession{"7"}}}
+	agentHTTP := d.client("agent")
+	apc := &agentprovider.Client{BaseURL: d.psURL, HTTPClient: &http.Client{Transport: withSession{id: "7", base: agentHTTP.Transport}}}
 	first, err := apc.Issue(ctx, key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ac, err := aauth.VerifyAgentToken(ctx, first.AgentToken, aauth.VerifyAgentTokenOptions{Resolver: aauth.NewJWKSResolver(http.DefaultClient)})
+	ac, err := aauth.VerifyAgentToken(ctx, first.AgentToken, aauth.VerifyAgentTokenOptions{Resolver: aauth.NewJWKSResolver(agentHTTP)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,11 +378,12 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 		t.Fatal(err)
 	}
 	d.psc = aauth.NewPSClient(d.psURL, d.agent)
+	d.psc.HTTPClient = agentHTTP
 	d.psc.PreferWaitSeconds = 5
 	if _, err := d.psc.Discover(ctx); err != nil {
 		t.Fatal(err)
 	}
-	d.verify = aauth.TokenVerifyOptions{Resolver: discovery, InsecureSkipIdentifierCheck: true}
+	d.verify = aauth.TokenVerifyOptions{Resolver: aauth.NewJWKSResolver(agentHTTP), InsecureSkipIdentifierCheck: true}
 	return d
 }
 
@@ -389,6 +391,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 func (d *deployment) transport(mission string) *aauth.Transport {
 	tr := aauth.NewTransport(d.agent, d.psc)
 	tr.ResourceVerify, tr.AuthVerify, tr.MissionS256 = d.verify, d.verify, mission
+	tr.Base = d.client("agent").Transport
 	return tr
 }
 
@@ -441,10 +444,16 @@ func (ws *workSessions) AuthorizeSubagent(context.Context, *agentprovider.Subage
 // psIssuer is the collocated PS: the origin the request reached.
 func psIssuer(r *http.Request) string { return "http://" + r.Host }
 
-type withSession struct{ id string }
+type withSession struct {
+	id   string
+	base http.RoundTripper // nil: http.DefaultTransport
+}
 
 func (s withSession) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
 	r.Header.Set("X-Work-Session", s.id)
+	if s.base != nil {
+		return s.base.RoundTrip(r)
+	}
 	return http.DefaultTransport.RoundTrip(r)
 }
