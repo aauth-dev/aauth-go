@@ -42,6 +42,28 @@ Run one topology, with the steps listed:
 go test -race -v -run TestFourPartyDeployment ./e2e
 ```
 
+Each step logs a plain-English summary of its flow. To also see every HTTP
+exchange between the agent, resources, and servers, set `AAUTH_E2E_TRACE=1`:
+
+```bash
+AAUTH_E2E_TRACE=1 go test -v -run TestFourPartyDeployment ./e2e
+```
+
+```text
+trace: agent     GET B/ledger -> 401  AAuth-Requirement: requirement=person-token
+trace: agent     POST AP+PS/ps/person -> 200
+trace: agent     GET B/ledger -> 401  AAuth-Requirement: requirement=auth-token; resource-token="eyJhbGci…"
+trace: PS        POST AS/as/token -> 200
+trace: agent     POST AP+PS/ps/token -> 200
+trace: agent     GET B/ledger -> 200
+```
+
+Parties are named by role (`agent`, `AP+PS`, `AS`, resources `A` and `B`);
+metadata and key-set fetches are marked `(discovery)`. The
+[`e2e` workflow](https://github.com/aauth-dev/aauth-go/blob/main/.github/workflows/e2e.yml) runs the two topologies as
+separate jobs with the trace on, and each job's summary lists its steps, so
+the Actions logs show which flow each job exercises.
+
 The fixture (`newDeployment` in `e2e/fixture_test.go`) shows how to wire the
 servers and seed policy; the approvals a hosting application's UI would make
 run in the `Notify` hooks.
