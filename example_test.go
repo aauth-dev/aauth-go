@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"sync"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 // Example shows the two ends of the cooperative permission flow: an agent

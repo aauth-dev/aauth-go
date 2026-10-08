@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
-	"github.com/aauth-dev/auth-go/accessserver"
-	"github.com/aauth-dev/auth-go/agentprovider"
-	"github.com/aauth-dev/auth-go/personserver"
-	"github.com/aauth-dev/auth-go/ratelimit"
+	aauth "github.com/aauth-dev/aauth-go"
+	"github.com/aauth-dev/aauth-go/accessserver"
+	"github.com/aauth-dev/aauth-go/agentprovider"
+	"github.com/aauth-dev/aauth-go/personserver"
+	"github.com/aauth-dev/aauth-go/ratelimit"
 )
 
 // Example_collapsedDeployment hosts an agent provider, a person server,

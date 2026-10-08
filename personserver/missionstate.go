@@ -9,7 +9,7 @@ import (
 	"errors"
 	"net/http"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 // Mission state checks shared by every endpoint that takes a mission_s256

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 // DefaultMaxKeys bounds the number of keys a TokenBucket tracks. Keys

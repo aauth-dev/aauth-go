@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 // Paths are the URL paths the PS serves, relative to its issuer. The

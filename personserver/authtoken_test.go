@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 // get performs a GET through the agent transport and returns the body.

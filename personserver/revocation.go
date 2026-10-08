@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 // Token revocation at the PS (draft -11 §11.12). The PS is a revocation

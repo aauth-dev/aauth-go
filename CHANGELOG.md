@@ -67,6 +67,9 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
 
 ### Changed
 
+- **Breaking:** the module path is `github.com/aauth-dev/aauth-go`, following
+  the repository's rename from `auth-go`; update imports and `go.mod` (see
+  the [migration guide](MIGRATION.md#module-path)).
 - **Breaking:** requires Go 1.26 or later (was 1.24), the oldest Go
   release still supported upstream; `golang.org/x/sys` and
   `lestrrat-go/jwx/v3` v3.3 need it. Dependencies are updated to their
@@ -159,6 +162,6 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
   the agent `Transport`, permission and audit endpoints, call chaining,
   clarification chat, and interaction chaining.
 
-[0.2.0]: https://github.com/aauth-dev/auth-go/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/aauth-dev/auth-go/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/aauth-dev/auth-go/releases/tag/v0.1.0
+[0.2.0]: https://github.com/aauth-dev/aauth-go/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/aauth-dev/aauth-go/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/aauth-dev/aauth-go/releases/tag/v0.1.0

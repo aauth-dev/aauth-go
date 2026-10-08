@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 func TestNewValidatesConfig(t *testing.T) {

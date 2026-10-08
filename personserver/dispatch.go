@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	aauth "github.com/aauth-dev/auth-go"
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 // dispatch acts on decision d for a request whose pending form is p: an

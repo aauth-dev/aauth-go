@@ -1,4 +1,4 @@
-module github.com/aauth-dev/auth-go
+module github.com/aauth-dev/aauth-go
 
 go 1.26.0
 

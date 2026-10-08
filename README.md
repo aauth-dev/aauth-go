@@ -1,11 +1,11 @@
-# auth-go
+# aauth-go
 
-[![test](https://github.com/aauth-dev/auth-go/actions/workflows/test.yml/badge.svg)](https://github.com/aauth-dev/auth-go/actions/workflows/test.yml)
-[![lint](https://github.com/aauth-dev/auth-go/actions/workflows/lint.yml/badge.svg)](https://github.com/aauth-dev/auth-go/actions/workflows/lint.yml)
-[![govulncheck](https://github.com/aauth-dev/auth-go/actions/workflows/govulncheck.yml/badge.svg)](https://github.com/aauth-dev/auth-go/actions/workflows/govulncheck.yml)
+[![test](https://github.com/aauth-dev/aauth-go/actions/workflows/test.yml/badge.svg)](https://github.com/aauth-dev/aauth-go/actions/workflows/test.yml)
+[![lint](https://github.com/aauth-dev/aauth-go/actions/workflows/lint.yml/badge.svg)](https://github.com/aauth-dev/aauth-go/actions/workflows/lint.yml)
+[![govulncheck](https://github.com/aauth-dev/aauth-go/actions/workflows/govulncheck.yml/badge.svg)](https://github.com/aauth-dev/aauth-go/actions/workflows/govulncheck.yml)
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/aauth-dev/auth-go.svg)](https://pkg.go.dev/github.com/aauth-dev/auth-go)
-[![Go Report Card](https://goreportcard.com/badge/github.com/aauth-dev/auth-go)](https://goreportcard.com/report/github.com/aauth-dev/auth-go)
+[![Go Reference](https://pkg.go.dev/badge/github.com/aauth-dev/aauth-go.svg)](https://pkg.go.dev/github.com/aauth-dev/aauth-go)
+[![Go Report Card](https://goreportcard.com/badge/github.com/aauth-dev/aauth-go)](https://goreportcard.com/report/github.com/aauth-dev/aauth-go)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Go implementation of the **AAuth protocol**: agent identity and
@@ -53,26 +53,26 @@ interactive tour of the protocol, see
 ## Install
 
 ```bash
-go get github.com/aauth-dev/auth-go
+go get github.com/aauth-dev/aauth-go
 ```
 
 Requires Go 1.26 or later. The full API reference is on
-**[pkg.go.dev](https://pkg.go.dev/github.com/aauth-dev/auth-go)**.
+**[pkg.go.dev](https://pkg.go.dev/github.com/aauth-dev/aauth-go)**.
 
 ```go
-import aauth "github.com/aauth-dev/auth-go"
+import aauth "github.com/aauth-dev/aauth-go"
 ```
 
 ## Packages
 
 | Package | Contents |
 |---|---|
-| [`aauth`](https://pkg.go.dev/github.com/aauth-dev/auth-go) | The protocol vocabulary shared by every role: identifiers, keys, tokens (mint, issue, verify), HTTP message signatures, metadata, requirements, deferred responses, revocation, errors, and the agent-side `PSClient` and `Transport`. Resources use it directly. |
-| [`personserver`](https://pkg.go.dev/github.com/aauth-dev/auth-go/personserver) | Person Server as an `http.Handler`: person and auth token endpoints, pending requests, missions, permission, audit, interaction, revocation, and federation to access servers. |
-| [`accessserver`](https://pkg.go.dev/github.com/aauth-dev/auth-go/accessserver) | Access Server as an `http.Handler` (AS token endpoint, revocation), plus `Client` (PS to AS over HTTP) and `Server.Local` (in-process PS-AS collapse). |
-| [`agentprovider`](https://pkg.go.dev/github.com/aauth-dev/auth-go/agentprovider) | Hosted agent provider: agent token issuance, two-key and single-key refresh, sub-agent tokens, and a `Client` with a `TokenSource` for agents. |
-| [`ratelimit`](https://pkg.go.dev/github.com/aauth-dev/auth-go/ratelimit) | In-memory token bucket implementing `aauth.Limiter` for single-instance deployments. |
-| [`interactioncode`](https://pkg.go.dev/github.com/aauth-dev/auth-go/interactioncode) | Interaction code generation and canonicalization (Crockford base32). |
+| [`aauth`](https://pkg.go.dev/github.com/aauth-dev/aauth-go) | The protocol vocabulary shared by every role: identifiers, keys, tokens (mint, issue, verify), HTTP message signatures, metadata, requirements, deferred responses, revocation, errors, and the agent-side `PSClient` and `Transport`. Resources use it directly. |
+| [`personserver`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/personserver) | Person Server as an `http.Handler`: person and auth token endpoints, pending requests, missions, permission, audit, interaction, revocation, and federation to access servers. |
+| [`accessserver`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/accessserver) | Access Server as an `http.Handler` (AS token endpoint, revocation), plus `Client` (PS to AS over HTTP) and `Server.Local` (in-process PS-AS collapse). |
+| [`agentprovider`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/agentprovider) | Hosted agent provider: agent token issuance, two-key and single-key refresh, sub-agent tokens, and a `Client` with a `TokenSource` for agents. |
+| [`ratelimit`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/ratelimit) | In-memory token bucket implementing `aauth.Limiter` for single-instance deployments. |
+| [`interactioncode`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/interactioncode) | Interaction code generation and canonicalization (Crockford base32). |
 
 ## Quick start: agent
 
@@ -195,7 +195,7 @@ The resource also serves `/.well-known/aauth-resource.json`
 needs only the agent's identity stops at `aauth.VerifyAndExtractAgent`. For
 four-party access, set `ResourceTokenParams.Audience` to the resource's
 access server. The compile-checked version is
-[`Example_resource`](https://pkg.go.dev/github.com/aauth-dev/auth-go#example-package-Resource).
+[`Example_resource`](https://pkg.go.dev/github.com/aauth-dev/aauth-go#example-package-Resource).
 
 ## Quick start: hosted AP, PS, and AS
 
@@ -253,7 +253,7 @@ person, which binds the agent. `ap.IssueAgentToken` issues tokens for agent
 keys the application has authorized. The PS routes live under `/ps/` by
 default, so agents find them with `PSClient.Discover`. The full,
 compile-checked version is
-[`Example_collapsedDeployment`](https://pkg.go.dev/github.com/aauth-dev/auth-go/personserver#example-package-CollapsedDeployment),
+[`Example_collapsedDeployment`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/personserver#example-package-CollapsedDeployment),
 and the [`e2e`](e2e) test runs the whole flow: enrollment, three-party
 access, missions, PS-AS collapse, audit, and a revocation cascade.
 

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
-	"github.com/aauth-dev/auth-go/interactioncode"
+	aauth "github.com/aauth-dev/aauth-go"
+	"github.com/aauth-dev/aauth-go/interactioncode"
 )
 
 // Deferred responses (draft -11 §11.8). When a decision is Deferred the PS

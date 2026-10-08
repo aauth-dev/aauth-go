@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	aauth "github.com/aauth-dev/auth-go"
-	"github.com/aauth-dev/auth-go/personserver"
+	aauth "github.com/aauth-dev/aauth-go"
+	"github.com/aauth-dev/aauth-go/personserver"
 	"github.com/golang-jwt/jwt/v5"
 )
 
