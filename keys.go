@@ -2,7 +2,6 @@ package aauth
 
 import (
 	"crypto"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -161,15 +160,12 @@ func decodeP256(x, y string) (*ecdsa.PublicKey, error) {
 		return nil, fmt.Errorf("%w: P-256 coordinates must be 32 bytes", ErrInvalidKey)
 	}
 	uncompressed := append(append([]byte{4}, xb...), yb...)
-	// crypto/ecdh rejects points not on the curve.
-	if _, err := ecdh.P256().NewPublicKey(uncompressed); err != nil {
+	// ParseUncompressedPublicKey rejects points not on the curve.
+	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), uncompressed)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidKey, err)
 	}
-	return &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     new(big.Int).SetBytes(xb),
-		Y:     new(big.Int).SetBytes(yb),
-	}, nil
+	return pub, nil
 }
 
 // verifyJOSE verifies a JOSE-encoded signature (see signJOSE) over msg.

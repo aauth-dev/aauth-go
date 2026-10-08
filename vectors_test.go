@@ -25,12 +25,12 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -151,11 +151,11 @@ func (p privateJWK) signer(t *testing.T) crypto.Signer {
 	case p.Kty == "OKP" && p.Crv == "Ed25519" && len(d) == ed25519.SeedSize:
 		key = ed25519.NewKeyFromSeed(d)
 	case p.Kty == "EC" && p.Crv == "P-256" && len(d) == 32:
-		pub, err := decodeP256(p.X, p.Y)
+		priv, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), d)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("vector key d: %v", err)
 		}
-		key = &ecdsa.PrivateKey{PublicKey: *pub, D: new(big.Int).SetBytes(d)}
+		key = priv
 	default:
 		t.Fatalf("unsupported vector key kty=%s crv=%s", p.Kty, p.Crv)
 	}

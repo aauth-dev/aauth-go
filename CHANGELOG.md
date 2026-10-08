@@ -67,6 +67,11 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
 
 ### Changed
 
+- **Breaking:** requires Go 1.26 or later (was 1.24), the oldest Go
+  release still supported upstream; `golang.org/x/sys` and
+  `lestrrat-go/jwx/v3` v3.3 need it. Dependencies are updated to their
+  latest releases; `yaronf/httpsign` stays on v0.5 (v0.6 moves to
+  `jwx/v4` and requires Go 1.27).
 - **Breaking:** keys are `crypto.Signer` and public keys `crypto.PublicKey`:
   `Agent.Key` replaces `Agent.Priv` and `Agent.Pub`, and `KeyResolver`,
   `JWK.PublicKey`, `SignRequest`, `VerifyRequest`, `WithKey`, and the
