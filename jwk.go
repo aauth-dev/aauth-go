@@ -1,22 +1,24 @@
 package aauth
 
 import (
+	"crypto"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
 	"fmt"
 )
 
 // JWK is a minimal JSON Web Key. Ed25519 OKP keys are the AAuth baseline
-// (draft -09 §12.7.1: EdDSA/Ed25519 MUST; P-256 SHOULD — P-256 can be added
-// without breaking this shape).
+// (draft -11 §11.3.1: Ed25519 MUST; ES256 SHOULD). Every key AAuth conveys
+// or references MUST carry a fully-specified alg (signature-key §3.3);
+// [JWK.Validate] enforces this.
 type JWK struct {
-	Kty string `json:"kty"`           // key type; "OKP" for Ed25519
-	Crv string `json:"crv,omitempty"` // curve; "Ed25519"
-	X   string `json:"x,omitempty"`   // base64url-encoded public key
+	Kty string `json:"kty"`           // key type; "OKP" (Ed25519) or "EC" (P-256)
+	Crv string `json:"crv,omitempty"` // curve; "Ed25519" or "P-256"
+	X   string `json:"x,omitempty"`   // base64url public key (OKP) or x coordinate (EC)
+	Y   string `json:"y,omitempty"`   // base64url y coordinate (EC only)
 	Kid string `json:"kid,omitempty"` // key id; the RFC 7638 thumbprint
-	Alg string `json:"alg,omitempty"` // algorithm; "EdDSA"
+	Alg string `json:"alg,omitempty"` // fully-specified algorithm; "Ed25519" or "ES256"
 	Use string `json:"use,omitempty"` // intended use; "sig"
 }
 
@@ -33,32 +35,52 @@ func NewEd25519JWK(pub ed25519.PublicKey) JWK {
 		Kty: "OKP",
 		Crv: "Ed25519",
 		X:   base64.RawURLEncoding.EncodeToString(pub),
-		Alg: "EdDSA",
+		Alg: AlgEd25519,
 		Use: "sig",
 	}
 	j.Kid = j.Thumbprint()
 	return j
 }
 
-// Thumbprint computes the RFC 7638 thumbprint (RFC 8037 §2 member set for
-// OKP: crv, kty, x — lexicographic, no whitespace), base64url-encoded.
+// Thumbprint computes the RFC 7638 thumbprint over the required members in
+// lexicographic order with no whitespace — crv, kty, x for OKP (RFC 8037
+// §2); crv, kty, x, y for EC (RFC 7638 §3.2) — base64url-encoded.
 func (j JWK) Thumbprint() string {
-	canonical := fmt.Sprintf(`{"crv":%q,"kty":%q,"x":%q}`, j.Crv, j.Kty, j.X)
+	var canonical string
+	if j.Kty == "EC" {
+		canonical = fmt.Sprintf(`{"crv":%q,"kty":%q,"x":%q,"y":%q}`, j.Crv, j.Kty, j.X, j.Y)
+	} else {
+		canonical = fmt.Sprintf(`{"crv":%q,"kty":%q,"x":%q}`, j.Crv, j.Kty, j.X)
+	}
 	sum := sha256.Sum256([]byte(canonical))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// PublicKey decodes the JWK to an Ed25519 public key.
-func (j JWK) PublicKey() (ed25519.PublicKey, error) {
-	if j.Kty != "OKP" || j.Crv != "Ed25519" {
-		return nil, fmt.Errorf("aauth: unsupported JWK type kty=%s crv=%s", j.Kty, j.Crv)
+// Validate applies the Algorithm Determination rules (signature-key §3.3;
+// draft -11 §11.3.1): alg MUST be present and fully specified — the
+// polymorphic "EdDSA", "none", and symmetric algorithms are rejected with
+// [ErrUnsupportedAlgorithm] — and kty/crv MUST agree with alg, else
+// [ErrInvalidKey].
+func (j JWK) Validate() error { return validateKeyAlg(j) }
+
+// PublicKey validates the JWK (see [JWK.Validate]) and decodes it to a
+// crypto.PublicKey: an ed25519.PublicKey for alg Ed25519, or a P-256
+// *ecdsa.PublicKey for alg ES256. Decoding failures, including an EC point
+// not on the curve, are [ErrInvalidKey].
+func (j JWK) PublicKey() (crypto.PublicKey, error) {
+	if err := j.Validate(); err != nil {
+		return nil, err
+	}
+	switch j.Alg {
+	case AlgES256:
+		return decodeP256(j.X, j.Y)
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(j.X)
 	if err != nil {
-		return nil, fmt.Errorf("aauth: JWK x decode: %w", err)
+		return nil, fmt.Errorf("%w: JWK x decode: %w", ErrInvalidKey, err)
 	}
 	if len(raw) != ed25519.PublicKeySize {
-		return nil, errors.New("aauth: JWK x has wrong length for Ed25519")
+		return nil, fmt.Errorf("%w: JWK x has wrong length for Ed25519", ErrInvalidKey)
 	}
 	return ed25519.PublicKey(raw), nil
 }

@@ -1,0 +1,69 @@
+{
+  "description": "Signature-Key request header members (an RFC 9651 Dictionary keyed by signature label; the member is a Token naming the scheme, with parameters). error is the Signature-Error code an AAuth verifier, which accepts only the jwt scheme from agents, answers.",
+  "spec": "draft-hardt-httpbis-signature-key-09 \u00a73, \u00a73.6, \u00a73.8; draft-hardt-oauth-aauth-protocol \u00a711.3.2, \u00a711.3.4",
+  "kind": "signature-key",
+  "cases": [
+    {
+      "header": "sig=jwt;jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\"",
+      "scheme": "jwt",
+      "params": {
+        "jwt": "eyJhbGciOiJFZDI1NTE5In0.e30.c2ln"
+      }
+    },
+    {
+      "header": "sig=jwt; jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\"",
+      "scheme": "jwt",
+      "params": {
+        "jwt": "eyJhbGciOiJFZDI1NTE5In0.e30.c2ln"
+      }
+    },
+    {
+      "header": "sig1=hwk;kty=\"OKP\", sig=jwt;jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\";cache",
+      "scheme": "jwt",
+      "params": {
+        "jwt": "eyJhbGciOiJFZDI1NTE5In0.e30.c2ln"
+      }
+    },
+    {
+      "header": "sig=jwks_uri;id=\"https://ps.example\";dwk=\"aauth-person.json\";kid=\"key-1\"",
+      "scheme": "jwks_uri",
+      "params": {
+        "id": "https://ps.example",
+        "dwk": "aauth-person.json",
+        "kid": "key-1"
+      },
+      "error": "unsupported_scheme"
+    },
+    {
+      "header": "sig=hwk;kty=\"OKP\";crv=\"Ed25519\";x=\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\";alg=\"Ed25519\"",
+      "scheme": "hwk",
+      "params": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+        "alg": "Ed25519"
+      },
+      "error": "unsupported_scheme"
+    },
+    {
+      "header": "sig=x-unregistered",
+      "scheme": "x-unregistered",
+      "params": {},
+      "error": "unsupported_scheme"
+    },
+    {
+      "header": "sig1=jwt;jwt=\"eyJhbGciOiJFZDI1NTE5In0.e30.c2ln\"",
+      "error": "invalid_signature"
+    },
+    {
+      "header": "sig=\"jwt\";jwt=\"x\"",
+      "error": "invalid_signature"
+    },
+    {
+      "header": "sig=jwt",
+      "scheme": "jwt",
+      "params": {},
+      "error": "invalid_signature"
+    }
+  ]
+}

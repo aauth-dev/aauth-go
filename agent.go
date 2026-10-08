@@ -1,9 +1,10 @@
 package aauth
 
 import (
-	"crypto/ed25519"
+	"crypto"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,7 +13,7 @@ import (
 
 // Agent is a self-hosted agent: it acts as its own agent provider and
 // self-issues agent tokens signed by its published key
-// (draft-hardt-aauth-bootstrap-01 §4.3). One key serves both as the AP
+// (draft-hardt-aauth-bootstrap-02 §4.3). One key serves both as the AP
 // signing key and as the cnf.jwk HTTP-signing key.
 type Agent struct {
 	// ID is the agent identifier (the token's sub), stable across rotations.
@@ -23,25 +24,40 @@ type Agent struct {
 	Issuer string
 	// PS is the agent's Person Server URL (optional ps claim).
 	PS string
-	// TokenTTL bounds minted tokens; capped at 24h per draft -09 §5.2.2.
+	// TokenTTL bounds minted tokens; capped at 24h per draft -11 §5.3.1.
 	TokenTTL time.Duration
 
-	// Priv is the agent's Ed25519 private key. It signs both self-issued
-	// agent tokens and HTTP messages; its public half appears in cnf.jwk.
-	Priv ed25519.PrivateKey
-	// Pub is the corresponding Ed25519 public key.
-	Pub ed25519.PublicKey
+	// Key is the agent's signing key. It signs both self-issued agent
+	// tokens and HTTP messages; its public half appears in cnf.jwk. Any
+	// supported crypto.Signer works (Ed25519 or P-256; see [GenerateKey]),
+	// including keys held in a platform keystore.
+	Key crypto.Signer
+
+	// keyAlg selects the algorithm NewAgent generates a key for.
+	keyAlg string
+	// tokenSource, when set, supplies agent tokens issued by another party
+	// (a sub-agent's parent, a hosted agent provider) instead of
+	// self-issuing them.
+	tokenSource func() (string, error)
 }
 
-// NewAgent generates a fresh Ed25519 keypair for the given identifier.
+// NewAgent creates an agent for the given identifier. Unless [WithKey]
+// supplies a key, it generates a fresh one — Ed25519 by default, or the
+// algorithm chosen with [WithKeyAlgorithm].
 func NewAgent(id AgentIdentifier, opts ...AgentOption) (*Agent, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	a := &Agent{ID: id, TokenTTL: time.Hour, Priv: priv, Pub: pub}
+	a := &Agent{ID: id, TokenTTL: time.Hour, keyAlg: AlgEd25519}
 	for _, o := range opts {
 		o(a)
+	}
+	if a.Key == nil {
+		key, err := GenerateKey(a.keyAlg)
+		if err != nil {
+			return nil, err
+		}
+		a.Key = key
+	}
+	if _, err := AlgForPublicKey(a.Key.Public()); err != nil {
+		return nil, err
 	}
 	return a, nil
 }
@@ -55,19 +71,51 @@ func WithIssuer(iss string) AgentOption { return func(a *Agent) { a.Issuer = iss
 // WithPersonServer sets the ps claim.
 func WithPersonServer(ps string) AgentOption { return func(a *Agent) { a.PS = ps } }
 
-// WithKey uses an existing Ed25519 private key instead of generating one.
-func WithKey(priv ed25519.PrivateKey) AgentOption {
-	return func(a *Agent) {
-		a.Priv = priv
-		a.Pub = priv.Public().(ed25519.PublicKey)
-	}
+// WithKey uses an existing signing key instead of generating one: an
+// ed25519.PrivateKey, a P-256 *ecdsa.PrivateKey, or any crypto.Signer with
+// such a public key (for example a hardware-backed key).
+func WithKey(key crypto.Signer) AgentOption {
+	return func(a *Agent) { a.Key = key }
+}
+
+// WithKeyAlgorithm selects the algorithm of the key NewAgent generates
+// ([AlgEd25519], the default, or [AlgES256]). It has no effect with WithKey.
+func WithKeyAlgorithm(alg string) AgentOption { return func(a *Agent) { a.keyAlg = alg } }
+
+// WithTokenSource makes the agent present tokens issued elsewhere instead
+// of self-issuing them: fn returns a current agent token whose cnf.jwk is
+// the agent's Key — for example one a hosted agent provider issued, or a
+// sub-agent token handed to a worker process (bootstrap §9). fn is called
+// once per token the agent presents and should cache.
+func WithTokenSource(fn func() (string, error)) AgentOption {
+	return func(a *Agent) { a.tokenSource = fn }
 }
 
 // WithTokenTTL overrides the minted-token lifetime (capped at 24h).
 func WithTokenTTL(d time.Duration) AgentOption { return func(a *Agent) { a.TokenTTL = d } }
 
+// Alg returns the fully-specified algorithm of the agent's key.
+func (a *Agent) Alg() (string, error) {
+	if a.Key == nil {
+		return "", fmt.Errorf("%w: Agent.Key is nil", ErrInvalidKey)
+	}
+	return AlgForPublicKey(a.Key.Public())
+}
+
 // JWK returns the agent's public key with Kid = RFC 7638 thumbprint.
-func (a *Agent) JWK() JWK { return NewEd25519JWK(a.Pub) }
+//
+// It panics if Key is nil or of an unsupported type — a programming error
+// that NewAgent rules out.
+func (a *Agent) JWK() JWK {
+	if a.Key == nil {
+		panic("aauth: Agent.Key is nil")
+	}
+	j, err := NewJWK(a.Key.Public())
+	if err != nil {
+		panic(fmt.Sprintf("aauth: Agent.Key: %v", err))
+	}
+	return j
+}
 
 // Thumbprint is the agent key's RFC 7638 thumbprint.
 func (a *Agent) Thumbprint() string { return a.JWK().Thumbprint() }
@@ -75,39 +123,88 @@ func (a *Agent) Thumbprint() string { return a.JWK().Thumbprint() }
 // JWKS returns the one-key set a self-hosted agent publishes at its jwks_uri.
 func (a *Agent) JWKS() JWKS { return JWKS{Keys: []JWK{a.JWK()}} }
 
-// MintToken self-issues an aa-agent+jwt with the draft -09 claim set:
-// iss, dwk, sub, jti, cnf.jwk, iat, exp (+ ps when configured).
+// MintToken returns a fresh agent token for the agent: from its token
+// source ([WithTokenSource], [Agent.NewSubAgent]) when it has one, else
+// self-issued — an aa-agent+jwt with iss, dwk, sub, jti, cnf.jwk, iat, exp
+// (+ ps when configured), signed by Key.
 func (a *Agent) MintToken() (string, error) {
-	return a.mint("", time.Now())
+	if a.tokenSource != nil {
+		return a.tokenSource()
+	}
+	return a.mint(a.ID, "", a.JWK(), time.Now())
 }
 
-// MintSubAgentToken issues a token for a short-lived worker under this agent
-// (draft -09 §10.2): sub = aauth:name+discriminator@domain, parent_agent set.
-// The sub-agent shares consent obtained by the parent but stays individually
-// identifiable for audit and revocation.
-func (a *Agent) MintSubAgentToken(discriminator string) (string, error) {
-	return a.mint(discriminator, time.Now())
+// IssueSubAgentToken issues, as this agent's own (self-hosted) agent
+// provider, an agent token for a sub-agent that holds its own key pub
+// (draft -11 §10.2.1; bootstrap §9.1): sub is this agent's identifier with
+// "+discriminator", parent_agent names this agent, iss and ps are this
+// agent's, cnf.jwk is pub, and exp does not exceed the agent's own token
+// lifetime. The sub-agent signs its requests with its own key; a sub-agent
+// never shares its parent's. A sub-agent cannot have sub-agents
+// (§10.2.2), and an agent whose tokens come from elsewhere cannot issue
+// them — its provider does.
+func (a *Agent) IssueSubAgentToken(discriminator string, pub crypto.PublicKey) (string, error) {
+	switch {
+	case a.ID.IsSubAgent():
+		return "", fmt.Errorf("aauth: sub-agent %s cannot have sub-agents (§10.2.2)", a.ID)
+	case a.tokenSource != nil:
+		return "", errors.New("aauth: an agent whose tokens are issued elsewhere cannot issue sub-agent tokens; its agent provider does")
+	}
+	sub, err := a.ID.SubAgent(discriminator)
+	if err != nil {
+		return "", err
+	}
+	jwk, err := NewJWK(pub)
+	if err != nil {
+		return "", fmt.Errorf("aauth: sub-agent key: %w", err)
+	}
+	return a.mint(sub, a.ID.String(), jwk, time.Now())
 }
 
-func (a *Agent) mint(discriminator string, now time.Time) (string, error) {
+// NewSubAgent creates a sub-agent of this self-hosted agent (draft -11
+// §10.2): its identifier is this one's with "+discriminator", it holds its
+// own key (generated, or supplied with [WithKey] / [WithKeyAlgorithm]),
+// and its tokens are issued on demand by this agent with
+// [Agent.IssueSubAgentToken]. Only the issuing process needs this agent's
+// key; a sub-agent in another process receives its token out of band and
+// uses [WithTokenSource].
+//
+// A sub-agent MUST NOT call the PS itself. Its parent obtains its person
+// and auth tokens (§10.2.3): give the sub-agent a [Transport] whose PS is
+// the parent's [PSClient] — NewTransport(sub, parentPS) — and the
+// transport sends the sub-agent's token as subagent_token in requests the
+// parent signs.
+func (a *Agent) NewSubAgent(discriminator string, opts ...AgentOption) (*Agent, error) {
+	id, err := a.ID.SubAgent(discriminator)
+	if err != nil {
+		return nil, err
+	}
+	sub, err := NewAgent(id, append([]AgentOption{WithIssuer(a.Issuer), WithPersonServer(a.PS), WithTokenTTL(a.TokenTTL)}, opts...)...)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := a.IssueSubAgentToken(discriminator, sub.Key.Public()); err != nil {
+		return nil, err
+	}
+	pub := sub.Key.Public()
+	sub.tokenSource = func() (string, error) { return a.IssueSubAgentToken(discriminator, pub) }
+	return sub, nil
+}
+
+// mint signs an agent token for sub, binding jwk, with parent_agent set
+// for a sub-agent.
+func (a *Agent) mint(sub AgentIdentifier, parent string, jwk JWK, now time.Time) (string, error) {
 	ttl := a.TokenTTL
 	if max := time.Duration(MaxAgentTokenTTLSeconds) * time.Second; ttl <= 0 || ttl > max {
 		ttl = max
+	}
+	if _, err := a.Alg(); err != nil {
+		return "", err
 	}
 	jti, err := randomJTI()
 	if err != nil {
 		return "", err
 	}
-	sub := a.ID
-	parent := ""
-	if discriminator != "" {
-		sub, err = a.ID.SubAgent(discriminator)
-		if err != nil {
-			return "", err
-		}
-		parent = a.ID.String()
-	}
-	jwk := a.JWK()
 	claims := AgentClaims{
 		DWK:         WellKnownAgent,
 		PS:          a.PS,
@@ -121,7 +218,7 @@ func (a *Agent) mint(discriminator string, now time.Time) (string, error) {
 			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
 	}
-	return MintAgentToken(claims, a.Priv, jwk.Kid)
+	return MintAgentToken(claims, a.Key, a.JWK().Kid)
 }
 
 func randomJTI() (string, error) {

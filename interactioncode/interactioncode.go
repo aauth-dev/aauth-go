@@ -1,5 +1,5 @@
 // Package interactioncode generates and canonicalizes AAuth interaction
-// codes (draft-hardt-oauth-aauth-protocol-09; format per the interaction-code
+// codes (draft-hardt-oauth-aauth-protocol-11; format per the interaction-code
 // requirements: unambiguous alphabet, minimum entropy). Mirrors
 // @aauth/interaction-code from the reference TypeScript packages.
 //

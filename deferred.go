@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Deferred responses (draft -09 §12.4): any AAuth endpoint MAY answer
+// Deferred responses (draft -11 §11.8): any AAuth endpoint MAY answer
 // 202 Accepted with a Location pending URL when it cannot resolve a request
 // immediately — the protocol's first-class "wait for the human" primitive.
 // The agent then polls the pending URL with signed GETs, honoring
@@ -41,23 +41,29 @@ type Clarification struct {
 	Options  []string // discrete answer choices, when the question has them
 }
 
-// Clarification response actions (§7.3.2).
+// Clarification response actions (draft -11 §7.5.2).
 const (
 	ActionClarificationResponse = "clarification_response"
 	ActionUpdatedRequest        = "updated_request"
 )
 
-// ClarificationReply is the agent's answer to a Clarification (§7.3.2):
+// ClarificationReply is the agent's answer to a Clarification (draft -11
+// §7.5.2):
 //
 //   - Text set → clarification_response (answer the question).
-//   - ResourceToken set → updated_request (replace the request; the new
-//     resource token MUST share iss/agent/agent_jkt with the original).
+//   - ResourceToken set → updated_request (replace the request). The
+//     PresentedToken the agent used at the resource to obtain the new
+//     resource token is REQUIRED with it; the PS verifies the pair as for
+//     an auth token request. The new resource token MUST share iss, ps,
+//     sub, agent_jkt, mission_s256, and tenant with the original, and its
+//     presented_jti MUST be PresentedToken's jti (§7.5.2.2).
 //   - Cancel true → DELETE the pending URL, withdrawing the request.
 type ClarificationReply struct {
-	Text          string // the answer, for a clarification_response
-	ResourceToken string // a replacement resource token, for an updated_request
-	Justification string // optional reason accompanying an updated_request
-	Cancel        bool   // withdraw the request (DELETE the pending URL)
+	Text           string // the answer, for a clarification_response
+	ResourceToken  string // a replacement resource token, for an updated_request
+	PresentedToken string // the token presented to obtain ResourceToken (REQUIRED with it)
+	Justification  string // optional (RECOMMENDED) reason accompanying an updated_request
+	Cancel         bool   // withdraw the request (DELETE the pending URL)
 }
 
 // DeferredOptions tunes DoDeferred.
@@ -78,6 +84,13 @@ type DeferredOptions struct {
 	// seen on a 202 (e.g. requirement=interaction; url=…; code=…) so the
 	// caller can surface the interaction to the user while polling continues.
 	OnRequirement func(Requirement)
+	// HandleRequirement, when set, is invoked like OnRequirement (once per
+	// distinct AAuth-Requirement on a 202, before the next poll) for a
+	// requirement the caller satisfies itself — for example an auth-token
+	// requirement delivered as a deferred response (draft -11 §6.5.1),
+	// after which Sign presents the auth token on the polls. An error
+	// stops polling and is returned.
+	HandleRequirement func(Requirement) error
 	// OnClarification answers a requirement=clarification 202 (§7.3): given
 	// the question, it returns the agent's reply. If nil, a clarification
 	// requirement is treated as an ordinary pending state (polling continues
@@ -85,7 +98,7 @@ type DeferredOptions struct {
 	OnClarification func(Clarification) (ClarificationReply, error)
 }
 
-// DoDeferred executes req and follows the §12.4 state machine until a
+// DoDeferred executes req and follows the §11.8.4 state machine until a
 // terminal (non-202) response. The caller owns closing the returned body.
 func DoDeferred(ctx context.Context, hc *http.Client, req *http.Request, opts DeferredOptions) (*http.Response, error) {
 	if hc == nil {
@@ -98,7 +111,7 @@ func DoDeferred(ctx context.Context, hc *http.Client, req *http.Request, opts De
 	return FollowDeferred(ctx, hc, req.URL, res, opts)
 }
 
-// FollowDeferred continues the §12.4 state machine from an already-received
+// FollowDeferred continues the §11.8.4 state machine from an already-received
 // response: if res is not a 202 it is returned unchanged; otherwise the
 // pending URL is polled until a terminal response arrives. reqURL is the URL
 // the original request was sent to (for same-origin Location resolution).
@@ -114,11 +127,19 @@ func FollowDeferred(ctx context.Context, hc *http.Client, reqURL *url.URL, res *
 	lastReq := ""
 
 	for res.StatusCode == http.StatusAccepted {
-		if opts.OnRequirement != nil {
-			if rh := res.Header.Get(HeaderRequirement); rh != "" && rh != lastReq {
-				lastReq = rh
-				if parsed, perr := ParseRequirement(rh); perr == nil {
+		if rh := res.Header.Get(HeaderRequirement); rh != "" && rh != lastReq {
+			lastReq = rh
+			// A requirement this agent cannot parse is not surfaced; the
+			// 202 is still followed as an ordinary pending state.
+			if parsed, perr := ParseRequirement(rh); perr == nil {
+				if opts.OnRequirement != nil {
 					opts.OnRequirement(parsed)
+				}
+				if opts.HandleRequirement != nil {
+					if err := opts.HandleRequirement(parsed); err != nil {
+						drainBody(res.Body)
+						return nil, err
+					}
 				}
 			}
 		}
@@ -167,9 +188,9 @@ func FollowDeferred(ctx context.Context, hc *http.Client, reqURL *url.URL, res *
 			return nil, err
 		}
 		if res.StatusCode == http.StatusTooManyRequests {
-			// Linear backoff: increase interval by 5s (spec §12.4.3).
+			// Linear backoff: increase interval by 5s (§11.8.3).
 			backoff += 5 * time.Second
-			res.Body.Close()
+			closeBody(res.Body)
 			res = &http.Response{StatusCode: http.StatusAccepted, Header: http.Header{}, Body: http.NoBody}
 			// Reuse the same pending URL on the next iteration.
 			res.Header.Set(HeaderLocation, pendingURL.String())
@@ -227,15 +248,18 @@ func answerClarification(ctx context.Context, hc *http.Client, pendingURL *url.U
 		return res, nil
 	}
 
-	var payload map[string]any
+	var payload ClarificationPost
 	switch {
 	case reply.ResourceToken != "":
-		payload = map[string]any{"action": ActionUpdatedRequest, "resource_token": reply.ResourceToken}
-		if reply.Justification != "" {
-			payload["justification"] = reply.Justification
+		if reply.PresentedToken == "" {
+			return nil, fmt.Errorf("aauth: updated_request: %w", ErrPresentedTokenMissing)
+		}
+		payload = ClarificationPost{
+			Action: ActionUpdatedRequest, ResourceToken: reply.ResourceToken,
+			PresentedToken: reply.PresentedToken, Justification: reply.Justification,
 		}
 	default:
-		payload = map[string]any{"action": ActionClarificationResponse, ActionClarificationResponse: reply.Text}
+		payload = ClarificationPost{Action: ActionClarificationResponse, ClarificationResponse: reply.Text}
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -257,14 +281,14 @@ func answerClarification(ctx context.Context, hc *http.Client, pendingURL *url.U
 	if err != nil {
 		return nil, err
 	}
-	res.Body.Close() // the answer is acknowledged; state advances via polling
+	closeBody(res.Body) // the answer is acknowledged; state advances via polling
 	return nil, nil
 }
 
 // readPending validates a 202 response and extracts the same-origin pending
 // URL, Retry-After (−1 when absent), and the parsed pending body.
 func readPending(reqURL *url.URL, res *http.Response) (*url.URL, time.Duration, PendingStatus, error) {
-	defer res.Body.Close()
+	defer closeBody(res.Body)
 	var ps PendingStatus
 	loc := res.Header.Get(HeaderLocation)
 	if loc == "" {
@@ -274,7 +298,7 @@ func readPending(reqURL *url.URL, res *http.Response) (*url.URL, time.Duration, 
 	if err != nil {
 		return nil, 0, ps, fmt.Errorf("aauth: 202 Location: %w", err)
 	}
-	// Location MUST be same-origin as the responding server (§12.4.2).
+	// Location MUST be same-origin as the responding server (§11.8.2).
 	if u.Scheme != reqURL.Scheme || u.Host != reqURL.Host {
 		return nil, 0, ps, fmt.Errorf("aauth: 202 Location %q not same-origin as %q", u, reqURL)
 	}
@@ -287,7 +311,7 @@ func readPending(reqURL *url.URL, res *http.Response) (*url.URL, time.Duration, 
 		retry = time.Duration(sec) * time.Second
 	}
 	// status field is informational; unrecognized statuses are pending
-	// (§12.4.2). clarification/timeout/options drive the §7.3 flow.
+	// (§11.8.2). clarification/timeout/options drive the §7.5 flow.
 	_ = json.NewDecoder(io.LimitReader(res.Body, 8192)).Decode(&ps)
 	return u, retry, ps, nil
 }

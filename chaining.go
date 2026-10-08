@@ -1,59 +1,104 @@
 package aauth
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"time"
 
-// Call chaining (draft -09 §10.1): a resource that receives an authorized
+	"github.com/golang-jwt/jwt/v5"
+)
+
+// Call chaining (draft -11 §10.1.1): a resource that receives an authorized
 // request may need to reach a downstream resource to fulfill it. It acts as
-// an agent — its own identity and key — and routes the downstream token
-// request based on the *upstream* auth token it holds, presenting that token
-// as upstream_token so the recipient can extend the authorization downstream.
+// an agent — its own agent provider, identity, and key (§10.1.1.1) — and
+// routes its downstream token requests to the person server the upstream
+// token names, presenting that token as upstream_token so the PS can issue
+// for the same person and evaluate the request against the same mission.
+// No delegation chain is carried in any token (Appendix C.1.11).
 
-// ChainRouter tells an intermediary where to send a downstream token request
-// and what to carry, derived from the upstream auth token per §10.1.1.
+// ChainRouter tells an intermediary where to send downstream token requests
+// and what to carry, derived from the upstream token per §10.1.1.
 type ChainRouter struct {
-	// Endpoint is the PS (or AS) base URL to route the downstream request to.
-	Endpoint string
-	// UpstreamToken is the raw upstream auth token to send as upstream_token.
+	// PersonServer is the PS to send the downstream person token and auth
+	// token requests to: the iss of an upstream person token, the ps of an
+	// upstream auth token. Its endpoints are discovered from its metadata.
+	PersonServer string
+	// UpstreamToken is the raw upstream token to send as upstream_token.
 	UpstreamToken string
-	// Governed reports whether a PS with mission context is in the loop
-	// (mission present, or the upstream issuer was a PS). When false, the
-	// upstream was an AS with no governance context.
-	Governed bool
+	// MissionS256 is the mission the upstream token carries, if any; the PS
+	// evaluates the downstream request against it. The intermediary does
+	// not send mission_s256 of its own (§7.1).
+	MissionS256 string
+	// UpstreamExpiresAt is the upstream token's exp. Downstream person and
+	// auth tokens expire no later; after it the intermediary uses a later
+	// token from the calling agent.
+	UpstreamExpiresAt time.Time
+	// upstreamAud is the upstream token's audience: the intermediary's
+	// resource identifier.
+	upstreamAud string
 }
 
 // RouteDownstream computes the routing for a downstream call from the
-// verified upstream auth token and its raw form (§10.1.1):
-//
-//   - mission present → route to mission.approver (the governed path; the PS
-//     sees the full delegation chain);
-//   - no mission, upstream iss is a PS → route to that PS;
-//   - no mission, upstream iss is an AS → route to that AS (no governance).
-//
-// The ps claim in the calling agent's token is NOT used — the upstream auth
-// token is authoritative. isPS reports whether a given issuer URL is a PS
-// (vs an AS); pass nil to treat every issuer as a PS (three-party default).
-func RouteDownstream(upstream *AuthClaims, rawUpstream string, isPS func(iss string) bool) (ChainRouter, error) {
-	if upstream == nil || rawUpstream == "" {
-		return ChainRouter{}, fmt.Errorf("aauth: RouteDownstream needs the upstream auth token")
+// verified upstream token — the person token or auth token the calling
+// agent presented on a request the intermediary served — and its raw form
+// (§10.1.1). The ps claim in the intermediary's own agent token is NOT used:
+// it names the intermediary's person server, not the person's.
+func RouteDownstream(upstream PresentedToken, rawUpstream string) (ChainRouter, error) {
+	if isNilPresented(upstream) || rawUpstream == "" {
+		return ChainRouter{}, errors.New("aauth: RouteDownstream needs the verified upstream token")
 	}
-	if upstream.Mission != nil && upstream.Mission.Approver != "" {
-		return ChainRouter{Endpoint: upstream.Mission.Approver, UpstreamToken: rawUpstream, Governed: true}, nil
+	v := upstream.presented()
+	if v.ps == "" {
+		return ChainRouter{}, fmt.Errorf("%w: upstream token names no person server", ErrInvalidToken)
 	}
-	if upstream.Issuer == "" {
-		return ChainRouter{}, fmt.Errorf("aauth: upstream auth token has neither mission nor iss to route from")
+	var rc jwt.RegisteredClaims
+	if _, _, err := jwt.NewParser().ParseUnverified(rawUpstream, &rc); err != nil {
+		return ChainRouter{}, fmt.Errorf("%w: upstream token: %w", ErrInvalidToken, err)
 	}
-	governed := isPS == nil || isPS(upstream.Issuer)
-	return ChainRouter{Endpoint: upstream.Issuer, UpstreamToken: rawUpstream, Governed: governed}, nil
+	if v.jti == "" || rc.ID != v.jti {
+		return ChainRouter{}, errors.New("aauth: RouteDownstream: the raw upstream token is not the verified one")
+	}
+	aud := ""
+	if len(rc.Audience) == 1 {
+		aud = rc.Audience[0]
+	}
+	return ChainRouter{
+		PersonServer: v.ps, UpstreamToken: rawUpstream, MissionS256: v.missionS256,
+		UpstreamExpiresAt: v.exp, upstreamAud: aud,
+	}, nil
 }
 
-// NextAct builds the delegation chain (§10.3) for a downstream auth token the
-// recipient (PS/AS) is about to issue to the intermediary. upstreamAgent is
-// the immediate upstream agent (the caller that presented the upstream
-// token); upstreamAct is that upstream token's own act claim, if any, which
-// becomes the nested tail.
-func NextAct(upstreamAgent string, upstreamAct *ActClaim) *ActClaim {
-	if upstreamAgent == "" {
-		return nil
+// PSClient returns a client for the person server the upstream token
+// names, acting as intermediary — the intermediary's own agent identity,
+// which signs every downstream request (§10.1.1).
+func (r ChainRouter) PSClient(intermediary *Agent) *PSClient {
+	return NewPSClient(r.PersonServer, intermediary)
+}
+
+// Transport returns a [Transport] for the intermediary's downstream calls
+// (draft -11 §10.1.1): it obtains a person token for each downstream
+// resource with the upstream token as upstream_token, presents it, and
+// redeems the resource token at the same person server with the person
+// token as presented_token and the upstream token as upstream_token, all
+// signed with the intermediary's own key. No downstream token outlives the
+// upstream token.
+//
+// The intermediary MUST be its own agent provider (§10.1.1.1): its agent
+// token's iss is its resource identifier, the upstream token's aud. A
+// different issuer is refused here, as a PS would refuse it with
+// invalid_upstream_token. Use one Transport per upstream token: its caches
+// hold tokens for that token's person.
+func (r ChainRouter) Transport(intermediary *Agent) (*Transport, error) {
+	switch {
+	case intermediary == nil:
+		return nil, errors.New("aauth: ChainRouter.Transport needs the intermediary agent")
+	case r.UpstreamToken == "" || r.PersonServer == "":
+		return nil, errors.New("aauth: ChainRouter has no upstream token; use RouteDownstream")
+	case intermediary.Issuer != r.upstreamAud:
+		return nil, fmt.Errorf("aauth: intermediary agent token iss %q is not the upstream token's aud %q; the intermediary must be its own agent provider (§10.1.1.1)", intermediary.Issuer, r.upstreamAud)
 	}
-	return &ActClaim{Agent: upstreamAgent, Act: upstreamAct}
+	tr := NewTransport(intermediary, r.PSClient(intermediary))
+	tr.UpstreamToken = r.UpstreamToken
+	tr.UpstreamExpiresAt = r.UpstreamExpiresAt
+	return tr, nil
 }
