@@ -167,6 +167,12 @@ func (m *MemoryStore) MarkPresented(_ context.Context, jti, as string) error {
 func (m *MemoryStore) RecordAuthToken(_ context.Context, r AuthTokenRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.revoked[[2]string{r.PersonIssuer, r.PersonJTI}]; ok {
+		return ErrRevoked
+	}
+	if mr, ok := m.missions[r.MissionS256]; ok && r.MissionS256 != "" && mr.Status == MissionTerminated {
+		return ErrMissionTerminated
+	}
 	k := [2]string{r.Issuer, r.JTI}
 	if _, ok := m.auths[k]; !ok {
 		m.authOrder = append(m.authOrder, k)

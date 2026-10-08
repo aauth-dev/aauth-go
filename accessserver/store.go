@@ -17,6 +17,9 @@ var (
 	ErrConflict = errors.New("accessserver: version conflict")
 	// ErrExists means a record with the key already exists.
 	ErrExists = errors.New("accessserver: already exists")
+	// ErrRevoked means the token an auth token was issued against has
+	// been revoked, so the auth token was not recorded.
+	ErrRevoked = errors.New("accessserver: presented token revoked")
 )
 
 // AuthTokenRecord is an auth token the AS issued (draft -11 §11.12.4: an
@@ -41,7 +44,13 @@ type AuthTokenRecord struct {
 
 // Store is everything the AS persists.
 type Store interface {
-	// RecordAuthToken records an issued auth token.
+	// RecordAuthToken records an issued auth token, unless the presented
+	// token (r.PresentedIssuer, r.PresentedJTI) has been revoked: then it
+	// records nothing and returns ErrRevoked. The check and the insert
+	// MUST be atomic with respect to Revoke, so that a revocation stored
+	// before the insert is seen here and one stored after it finds r
+	// through AuthTokensIssuedAgainst. Otherwise an issuance racing a
+	// revocation escapes the cascade (§11.12.4).
 	RecordAuthToken(ctx context.Context, r AuthTokenRecord) error
 	// AuthTokensIssuedAgainst returns the auth tokens issued against the
 	// presented token (iss, jti).
@@ -87,6 +96,9 @@ var _ Store = (*MemoryStore)(nil)
 func (m *MemoryStore) RecordAuthToken(_ context.Context, r AuthTokenRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.revoked[[2]string{r.PresentedIssuer, r.PresentedJTI}]; ok {
+		return ErrRevoked
+	}
 	m.auths = append(m.auths, r)
 	return nil
 }

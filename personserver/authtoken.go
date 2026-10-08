@@ -242,7 +242,7 @@ func (s *Server) issueAuthToken(ctx context.Context, j *authTokenJob, g Grant) (
 		return s.failure(err)
 	}
 	if err := s.recordAuthToken(ctx, j, claims); err != nil {
-		return nil, nil, err
+		return s.failure(err)
 	}
 	res, err := jsonResult(http.StatusOK, aauth.AuthTokenResponse{
 		AuthToken: tok, ExpiresIn: int64(claims.ExpiresAt.Sub(p.Now) / time.Second),
@@ -254,11 +254,23 @@ func (s *Server) issueAuthToken(ctx context.Context, j *authTokenJob, g Grant) (
 // (§11.12.4) and logs it to the mission.
 func (s *Server) recordAuthToken(ctx context.Context, j *authTokenJob, claims *aauth.AuthClaims) error {
 	_, presentedJTI := tokenID(j.presented)
-	if err := s.cfg.Store.RecordAuthToken(ctx, AuthTokenRecord{
+	err := s.cfg.Store.RecordAuthToken(ctx, AuthTokenRecord{
 		Issuer: claims.Issuer, JTI: claims.ID, Resource: j.rc.Issuer, Exp: expOf(claims.ExpiresAt),
-		PresentedJTI: presentedJTI, PersonJTI: j.root.JTI, Agent: agentRef(j.agent), Subagent: agentRef(j.subagent),
+		PresentedJTI: presentedJTI, PersonIssuer: s.cfg.Issuer, PersonJTI: j.root.JTI,
+		Agent: agentRef(j.agent), Subagent: agentRef(j.subagent),
 		Person: j.person, Subject: claims.Subject, MissionS256: claims.MissionS256,
-	}); err != nil {
+	})
+	// Revoked or terminated while the request was being decided: the
+	// token is never delivered (§11.12.4).
+	switch {
+	case errors.Is(err, ErrRevoked):
+		return &aauth.TokenError{Code: aauth.TokenErrRevokedPresentedToken, Err: errors.New("the grant's person token was revoked")}
+	case errors.Is(err, ErrMissionTerminated):
+		if _, merr := s.activeMission(ctx, claims.MissionS256); merr != nil {
+			return merr
+		}
+		return &aauth.MissionStatusError{Code: aauth.MissionErrTerminated, MissionStatus: aauth.MissionStatusTerminated}
+	case err != nil:
 		return storeErr("record auth token", err)
 	}
 	s.missionLog(ctx, claims.MissionS256, LogTokenRequest, agentRef(j.agent), map[string]any{

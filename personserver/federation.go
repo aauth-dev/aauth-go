@@ -206,7 +206,7 @@ func (s *Server) deliverFederated(ctx context.Context, j *authTokenJob, g Grant,
 		return asUnreachable(err), nil, nil
 	}
 	if err := s.recordAuthToken(ctx, j, ac); err != nil {
-		return nil, nil, err
+		return s.failure(err)
 	}
 	res, err := jsonResult(http.StatusOK, aauth.AuthTokenResponse{
 		AuthToken: resp.AuthToken, ExpiresIn: int64(ac.ExpiresAt.Sub(now) / time.Second),

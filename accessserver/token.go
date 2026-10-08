@@ -234,7 +234,11 @@ func (s *Server) conclude(ctx context.Context, j *job, d Decision) (*Result, err
 		JTI: claims.ID, Resource: j.rc.Issuer, Exp: claims.ExpiresAt.Time, PS: j.ps,
 		PresentedIssuer: piss, PresentedJTI: pjti, Agent: j.agent.Subject, Subject: claims.Subject,
 		Scope: claims.Scope, MissionS256: claims.MissionS256,
-	}); err != nil {
+	}); errors.Is(err, ErrRevoked) {
+		// Revoked while the request was being authorized: the token is
+		// never delivered (§11.12.4).
+		return errorResult(&aauth.TokenError{Code: aauth.TokenErrRevokedPresentedToken}), nil
+	} else if err != nil {
 		return nil, fmt.Errorf("accessserver: record auth token: %w", err)
 	}
 	return jsonResult(http.StatusOK, aauth.AuthTokenResponse{AuthToken: tok, ExpiresIn: int64(claims.ExpiresAt.Sub(now) / time.Second)})

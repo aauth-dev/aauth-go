@@ -319,3 +319,53 @@ func TestHTTPRevoker(t *testing.T) {
 		t.Fatal("no metadata, no error")
 	}
 }
+
+// TestRevocationDuringDecision: the grant's person token is revoked, or its
+// mission terminated, after the PS's checks and before it records the auth
+// token (here, from inside the Decider). The cascade has already scanned
+// and found nothing, so recording must refuse: the token is never
+// delivered and no record outlives the revocation.
+func TestRevocationDuringDecision(t *testing.T) {
+	ctx := context.Background()
+	t.Run("person token revoked", func(t *testing.T) {
+		w := newWorld(t, nil)
+		pt := w.personToken(w.agent, w.resURL, "")
+		pc := personClaimsOf(t, pt)
+		rt := w.resourceToken(pt, aauth.ResourceTokenParams{Scope: "files:read"})
+		w.setDecide(func(*TokenRequest) Decision {
+			if _, err := w.ps.RevokePersonToken(ctx, pc.ID); err != nil {
+				t.Errorf("revoke: %v", err)
+			}
+			return Allow(Grant{Person: "alice"})
+		})
+		_, err := w.psClient(w.agent).RequestAuthToken(ctx, aauth.AuthTokenRequest{ResourceToken: rt, PresentedToken: pt})
+		if tokenCode(err) != aauth.TokenErrRevokedPresentedToken {
+			t.Fatalf("issued during revocation: %v", err)
+		}
+		auths, err := w.store.AuthTokensForPersonToken(ctx, pc.ID)
+		if err != nil || len(auths) != 0 {
+			t.Fatalf("recorded %d auth tokens against the revoked person token (%v)", len(auths), err)
+		}
+	})
+	t.Run("mission terminated", func(t *testing.T) {
+		w := newWorld(t, nil)
+		m := w.seedMission(agentRefOf(w.agent), time.Time{})
+		pt := w.personToken(w.agent, w.resURL, m.S256)
+		rt := w.resourceToken(pt, aauth.ResourceTokenParams{Scope: "files:read"})
+		w.setDecide(func(*TokenRequest) Decision {
+			if _, err := w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked); err != nil {
+				t.Errorf("terminate: %v", err)
+			}
+			return Allow(Grant{Person: "alice"})
+		})
+		_, err := w.psClient(w.agent).RequestAuthToken(ctx, aauth.AuthTokenRequest{ResourceToken: rt, PresentedToken: pt})
+		var mse *aauth.MissionStatusError
+		if !errors.As(err, &mse) || mse.TerminationReason != aauth.TerminationRevoked {
+			t.Fatalf("issued during termination: %v", err)
+		}
+		auths, err := w.store.AuthTokensForMission(ctx, m.S256)
+		if err != nil || len(auths) != 0 {
+			t.Fatalf("recorded %d auth tokens under the terminated mission (%v)", len(auths), err)
+		}
+	})
+}

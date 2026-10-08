@@ -443,6 +443,44 @@ func TestRevocationCascade(t *testing.T) {
 	}
 }
 
+// TestRevocationDuringAuthorization: the person token is revoked after the
+// AS's revocation check and before it records the auth token (here, from
+// inside the Authorizer). The cascade has already scanned and found
+// nothing, so recording must refuse: the token is never delivered and no
+// record outlives the revocation.
+func TestRevocationDuringAuthorization(t *testing.T) {
+	f := newFourParty(t, false, nil, nil)
+	ctx := context.Background()
+	if _, err := f.get(f.transport(f.psClient())); err != nil {
+		t.Fatal(err)
+	}
+	pt, _ := f.tokens()
+	pc := claims(t, pt)
+	rt := resourceTokenFor(t, f, pt)
+	f.setAuthz(func(*AuthorizationRequest) Decision {
+		if _, err := f.ps.RevokePersonToken(ctx, pc.ID); err != nil {
+			t.Errorf("revoke: %v", err)
+		}
+		return Allow("")
+	})
+	before, err := f.asStore.AuthTokensIssuedAgainst(ctx, f.psURL, pc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.psClient().RequestAuthToken(ctx, aauth.AuthTokenRequest{ResourceToken: rt, PresentedToken: pt})
+	var te *aauth.TokenError
+	if !errors.As(err, &te) || te.Code != aauth.TokenErrRevokedPresentedToken {
+		t.Fatalf("issued during revocation: %v", err)
+	}
+	after, err := f.asStore.AuthTokensIssuedAgainst(ctx, f.psURL, pc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("recorded an auth token against the revoked person token: %d -> %d records", len(before), len(after))
+	}
+}
+
 func claims(t *testing.T, tok string) *aauth.AuthClaims {
 	t.Helper()
 	var c aauth.AuthClaims

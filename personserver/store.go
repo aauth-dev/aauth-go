@@ -26,6 +26,12 @@ var (
 	ErrBindingConflict = errors.New("personserver: agent is bound to another person")
 	// ErrExists means a record with the key already exists.
 	ErrExists = errors.New("personserver: already exists")
+	// ErrRevoked means the person token at the root of a grant has been
+	// revoked, so an auth token issued under it was not recorded.
+	ErrRevoked = errors.New("personserver: person token revoked")
+	// ErrMissionTerminated means the mission an auth token was issued
+	// under has been terminated, so the auth token was not recorded.
+	ErrMissionTerminated = errors.New("personserver: mission terminated")
 )
 
 // AgentRef identifies an agent the way a PS recognizes it: by its agent
@@ -119,8 +125,9 @@ type AuthTokenRecord struct {
 	Resource string    `json:"aud"`
 	Exp      time.Time `json:"exp"`
 	// PresentedJTI is the jti of the token the request presented, and
-	// PersonJTI the person token at the root of the grant.
+	// (PersonIssuer, PersonJTI) the person token at the root of the grant.
 	PresentedJTI string   `json:"presented_jti"`
+	PersonIssuer string   `json:"person_iss"`
 	PersonJTI    string   `json:"person_jti"`
 	Agent        AgentRef `json:"agent"`
 	Subagent     AgentRef `json:"subagent,omitempty"`
@@ -148,6 +155,16 @@ type TokenStore interface {
 	// access server as (§9.1.1).
 	MarkPresented(ctx context.Context, jti, as string) error
 
+	// RecordAuthToken records an auth token the PS issued or federated,
+	// unless the person token at the root of its grant (r.PersonIssuer,
+	// r.PersonJTI) has been revoked (ErrRevoked) or its mission
+	// r.MissionS256 terminated (ErrMissionTerminated): then it records
+	// nothing. The check and the insert MUST be atomic with respect to
+	// Revoke and TerminateMission, so that a revocation or termination
+	// stored before the insert is seen here and one stored after it finds
+	// r through AuthTokensForPersonToken or AuthTokensForMission.
+	// Otherwise an issuance racing a revocation escapes the cascade
+	// (§11.12.4).
 	RecordAuthToken(ctx context.Context, r AuthTokenRecord) error
 	// AuthToken returns the auth token (iss, jti), or ErrNotFound.
 	AuthToken(ctx context.Context, iss, jti string) (*AuthTokenRecord, error)
