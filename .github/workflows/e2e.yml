@@ -1,0 +1,40 @@
+name: e2e
+
+# End-to-end tests of the protocol flows, one job per deployment topology so
+# each shows up on its own in the Actions UI. Both run with the HTTP trace on,
+# so the log shows every exchange between the agent, resources, and servers,
+# and each job writes a summary of the steps it ran. The same tests also run
+# inside the test workflow's go test ./...; these jobs exist to read.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AAUTH_E2E_TRACE: "1"
+
+jobs:
+  collapsed:
+    name: e2e collapsed (AP + PS + AS on one origin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: TestCollapsedDeployment
+        run: .github/scripts/e2e.sh TestCollapsedDeployment "Collapsed: agent provider, person server, and access server on one origin (in-process federation, §9.3.3)"
+
+  four-party:
+    name: e2e four-party (AS on its own origin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: TestFourPartyDeployment
+        run: .github/scripts/e2e.sh TestFourPartyDeployment "Four-party: access server on its own origin (federation over HTTP, §9.1)"
