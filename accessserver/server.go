@@ -91,7 +91,10 @@ type Config struct {
 	ServerResolver aauth.KeyResolver
 	TokenResolver  aauth.KeyResolver
 	AgentResolver  aauth.KeyResolver
-	// HTTPClient makes outbound requests; nil uses http.DefaultClient.
+	// HTTPClient makes outbound requests (discovery, revocation); nil uses
+	// aauth.DiscoveryClient, which reaches only public https destinations.
+	// Supply a client to reach others, such as local servers in
+	// development.
 	HTTPClient *http.Client
 	// Revoker delivers the AS's revocations to resources; nil discovers
 	// each resource's revocation endpoint and signs as the AS.

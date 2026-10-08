@@ -101,7 +101,9 @@ type RevocationClient struct {
 	// Signer signs the revocation and its polls under the jwks_uri scheme
 	// (§11.3.2). Required.
 	Signer ServerSigner
-	// HTTPClient makes requests; nil uses http.DefaultClient.
+	// HTTPClient makes requests; nil uses [DiscoveryClient], which reaches
+	// only public https destinations: the endpoint comes from the
+	// recipient's metadata.
 	HTTPClient *http.Client
 	// PreferWaitSeconds, when positive, is sent as Prefer: wait=N: how
 	// long the caller will wait for the cascade before a 202.
@@ -138,7 +140,7 @@ func (c *RevocationClient) Revoke(ctx context.Context, endpoint string, req Revo
 	if err := c.Signer.SignRequest(hreq); err != nil {
 		return nil, fmt.Errorf("aauth: sign revocation: %w", err)
 	}
-	res, err := DoDeferred(ctx, c.HTTPClient, hreq, DeferredOptions{
+	res, err := DoDeferred(ctx, discoveryClient(c.HTTPClient), hreq, DeferredOptions{
 		PreferWaitSeconds: c.PreferWaitSeconds,
 		Sign:              c.Signer.SignRequest,
 	})

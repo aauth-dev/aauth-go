@@ -166,7 +166,7 @@ type Config struct {
 	// SignatureWindow is the HTTP signature validity window.
 	SignatureWindow time.Duration
 	// HTTPClient makes outbound requests (revocation); nil uses
-	// http.DefaultClient.
+	// aauth.DiscoveryClient, which reaches only public https destinations.
 	HTTPClient *http.Client
 	// Logger receives operational errors; nil discards them.
 	Logger *slog.Logger

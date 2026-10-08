@@ -147,7 +147,9 @@ type Config struct {
 	// HTTPRevoker signing as the PS.
 	Revoker Revoker
 	// HTTPClient makes outbound requests (discovery, revocation); nil uses
-	// http.DefaultClient. Deployments SHOULD apply egress admission.
+	// aauth.DiscoveryClient, which reaches only public https destinations.
+	// Supply a client to reach others, such as local servers in
+	// development.
 	HTTPClient *http.Client
 	// SignatureWindow is the HTTP signature validity window (default
 	// aauth.DefaultSignatureWindow).

@@ -27,10 +27,9 @@ type KeyRefresher interface {
 // metadata document's issuer must equal iss (see [FetchMetadata]), and
 // key sets are cached (see [JWKSCache]).
 type JWKSResolver struct {
-	// HTTPClient performs discovery fetches; nil uses http.DefaultClient.
-	// Deployments SHOULD supply a client that applies egress admission
-	// (HTTPS only, no private or loopback destinations, bounded redirects
-	// and timeouts; signature-key §7.3).
+	// HTTPClient performs discovery fetches; nil uses [DiscoveryClient],
+	// which reaches only public https destinations. A client supplied here
+	// SHOULD apply the same egress admission (signature-key §7.3).
 	HTTPClient *http.Client
 	// Cache holds fetched key sets; nil uses DefaultJWKSCache.
 	Cache *JWKSCache
@@ -42,10 +41,7 @@ func NewJWKSResolver(hc *http.Client) JWKSResolver {
 }
 
 func (r JWKSResolver) client() *http.Client {
-	if r.HTTPClient != nil {
-		return r.HTTPClient
-	}
-	return http.DefaultClient
+	return discoveryClient(r.HTTPClient)
 }
 
 func (r JWKSResolver) cache() *JWKSCache {

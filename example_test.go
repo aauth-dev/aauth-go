@@ -111,9 +111,9 @@ func Example_resource() {
 		log.Fatal(err)
 	}
 	// Person and auth token keys are discovered from each issuer's JWKS.
-	// Supply an http.Client that applies egress admission (no private
-	// addresses, bounded timeouts): token issuers are attacker-chosen URLs.
-	verify := aauth.TokenVerifyOptions{Resolver: aauth.NewJWKSResolver(http.DefaultClient)}
+	// Token issuers are URLs the request chooses, so a nil client uses
+	// aauth.DiscoveryClient, which reaches only public https destinations.
+	verify := aauth.TokenVerifyOptions{Resolver: aauth.NewJWKSResolver(nil)}
 
 	// A valid signature proves the issuer signed the claims, not that the
 	// subject may use this resource. The resource keeps its own record of

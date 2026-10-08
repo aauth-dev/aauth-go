@@ -200,7 +200,8 @@ func TestCollapsedDeployment(t *testing.T) {
 	sessions := &workSessions{}
 	apKey, _ := aauth.GenerateKey(aauth.AlgEd25519)
 	ap, err := agentprovider.New(agentprovider.Config{
-		Issuer: issuer, Domain: "agents.example", Key: apKey, Registrar: sessions,
+		HTTPClient: http.DefaultClient,
+		Issuer:     issuer, Domain: "agents.example", Key: apKey, Registrar: sessions,
 		OnIssue: func(_ context.Context, it agentprovider.IssuedToken) {
 			sessions.mu.Lock()
 			defer sessions.mu.Unlock()
@@ -215,7 +216,8 @@ func TestCollapsedDeployment(t *testing.T) {
 	var asSrv *accessserver.Server
 	asKey, _ := aauth.GenerateKey(aauth.AlgES256)
 	asSrv, err = accessserver.New(accessserver.Config{
-		Issuer: issuer, Key: asKey, Store: accessserver.NewMemoryStore(),
+		HTTPClient: http.DefaultClient,
+		Issuer:     issuer, Key: asKey, Store: accessserver.NewMemoryStore(),
 		Resources: func(r string) bool { return r == resB.url },
 		Authorizer: accessserver.AuthorizerFunc(func(_ context.Context, r *accessserver.AuthorizationRequest) (accessserver.Decision, error) {
 			if r.Resource.MissionS256 == "" {
@@ -244,7 +246,8 @@ func TestCollapsedDeployment(t *testing.T) {
 	psKey, _ := aauth.GenerateKey(aauth.AlgEd25519)
 	psStore := personserver.NewMemoryStore()
 	ps, err = personserver.New(personserver.Config{
-		Issuer: issuer, Key: psKey, SubjectKey: bytes.Repeat([]byte{42}, 32), Store: psStore,
+		HTTPClient: http.DefaultClient,
+		Issuer:     issuer, Key: psKey, SubjectKey: bytes.Repeat([]byte{42}, 32), Store: psStore,
 		Decider: personserver.DeciderFunc(func(_ context.Context, r *personserver.TokenRequest) (personserver.Decision, error) {
 			if r.Person == "" {
 				return personserver.DeferApproval(), nil // a new agent: ask the person

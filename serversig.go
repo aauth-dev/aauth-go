@@ -65,7 +65,8 @@ type ServerCaller struct {
 // VerifyServerOptions tunes VerifyServerRequest.
 type VerifyServerOptions struct {
 	// Resolver discovers the caller's key from (id, dwk, kid); nil uses a
-	// JWKSResolver with DefaultJWKSCache. Discovery verifies that the
+	// JWKSResolver with DefaultJWKSCache and [DiscoveryClient], which
+	// reaches only public https destinations. Discovery verifies that the
 	// metadata issuer equals id (issuer_missing / issuer_mismatch).
 	Resolver KeyResolver
 	// DWKs, when non-empty, restricts the metadata documents (roles)

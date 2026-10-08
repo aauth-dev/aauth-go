@@ -115,7 +115,8 @@ func newFourParty(t *testing.T, local bool, claims personserver.ClaimsProvider, 
 
 	psKey, _ := aauth.GenerateKey(aauth.AlgEd25519)
 	f.ps, err = personserver.New(personserver.Config{
-		Issuer: f.psURL, Key: psKey, SubjectKey: bytes.Repeat([]byte{9}, 32), Store: personserver.NewMemoryStore(),
+		HTTPClient: http.DefaultClient,
+		Issuer:     f.psURL, Key: psKey, SubjectKey: bytes.Repeat([]byte{9}, 32), Store: personserver.NewMemoryStore(),
 		Decider: personserver.DeciderFunc(func(context.Context, *personserver.TokenRequest) (personserver.Decision, error) {
 			return personserver.Allow(personserver.Grant{Person: "alice"}), nil
 		}),
@@ -136,7 +137,8 @@ func newFourParty(t *testing.T, local bool, claims personserver.ClaimsProvider, 
 
 	asKey, _ := aauth.GenerateKey(aauth.AlgEd25519)
 	cfg := Config{
-		Issuer: f.asURL, Key: asKey, Store: f.asStore,
+		HTTPClient: http.DefaultClient,
+		Issuer:     f.asURL, Key: asKey, Store: f.asStore,
 		Authorizer: AuthorizerFunc(func(_ context.Context, r *AuthorizationRequest) (Decision, error) {
 			f.mu.Lock()
 			fn := f.authz
@@ -719,7 +721,7 @@ func TestResourceRevokesAtAS(t *testing.T) {
 	_ = res.Body.Close()
 	// The resource signs as itself; the AS discovers its key.
 	rc := resourceClaims(t, rt)
-	rev := aauth.RevocationClient{Signer: aauth.ServerSigner{Issuer: f.resURL, DWK: aauth.WellKnownResource, Kid: f.resKey.JWK().Kid, Key: f.resKey.Key}}
+	rev := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: aauth.ServerSigner{Issuer: f.resURL, DWK: aauth.WellKnownResource, Kid: f.resKey.JWK().Kid, Key: f.resKey.Key}}
 	if _, err := rev.Revoke(ctx, f.asURL+"/as/revoke", aauth.RevocationRequest{JTI: rc.ID, Exp: rc.ExpiresAt.Unix()}); err != nil {
 		t.Fatal(err)
 	}
@@ -729,7 +731,7 @@ func TestResourceRevokesAtAS(t *testing.T) {
 	}
 	srvURL := f.resURL
 	// Agent providers may not revoke here; bodies and exp are checked.
-	agentRev := aauth.RevocationClient{Signer: aauth.ServerSigner{Issuer: srvURL, DWK: aauth.WellKnownAgent, Kid: f.resKey.JWK().Kid, Key: f.resKey.Key}}
+	agentRev := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: aauth.ServerSigner{Issuer: srvURL, DWK: aauth.WellKnownAgent, Kid: f.resKey.JWK().Kid, Key: f.resKey.Key}}
 	if _, err := agentRev.Revoke(ctx, f.asURL+"/as/revoke", aauth.RevocationRequest{JTI: "x", Exp: time.Now().Add(time.Minute).Unix()}); !errors.Is(err, aauth.ErrRevocationUnsupported) {
 		t.Fatalf("agent provider: %v", err)
 	}
@@ -832,7 +834,7 @@ func TestLimiter(t *testing.T) {
 		t.Fatalf("poll: %d %q", res.StatusCode, got)
 	}
 	blocked = "revoke:"
-	rc := aauth.RevocationClient{Signer: f.ps.Signer()}
+	rc := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: f.ps.Signer()}
 	_, err := rc.Revoke(context.Background(), f.asURL+"/as/revoke", aauth.RevocationRequest{JTI: "x", Exp: time.Now().Add(time.Minute).Unix()})
 	var pe *aauth.ProblemError
 	if !errors.As(err, &pe) || pe.Code != aauth.ErrCodeRateLimited || pe.RetryAfter != 2*time.Second {

@@ -85,7 +85,7 @@ func TestAgentProviderRevocationCascades(t *testing.T) {
 	res := w.signed(w.agent, tok, http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: "https://x.example"})
 	_ = res.Body.Close()
 	ac := agentClaimsOf(t, tok)
-	rc := aauth.RevocationClient{Signer: signerFor(w.agent, agentIssuer, aauth.WellKnownAgent)}
+	rc := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: signerFor(w.agent, agentIssuer, aauth.WellKnownAgent)}
 	out, err := rc.Revoke(ctx, w.psURL+"/ps/revoke", aauth.RevocationRequest{JTI: ac.ID, Exp: ac.ExpiresAt.Unix()})
 	if err != nil || len(out.Downstream) != 0 {
 		t.Fatalf("revoke: %+v %v", out, err)
@@ -125,7 +125,7 @@ func TestResourceRevokesResourceToken(t *testing.T) {
 	loc := res.Header.Get(aauth.HeaderLocation)
 	_ = res.Body.Close()
 	rc := claimsOf(t, rt)
-	rev := aauth.RevocationClient{Signer: signerFor(w.resKey, w.resURL, aauth.WellKnownResource)}
+	rev := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: signerFor(w.resKey, w.resURL, aauth.WellKnownResource)}
 	if _, err := rev.Revoke(ctx, w.psURL+"/ps/revoke", aauth.RevocationRequest{JTI: rc.ID, Exp: rc.ExpiresAt.Unix()}); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestRevocationEndpointErrors(t *testing.T) {
 	w, _ := newRevocationWorld(t, func(sc aauth.ServerCaller) bool { return sc.ID != "https://blocked.example" })
 	ctx := context.Background()
 	// A PS (or any other role) is not a revoker here.
-	rc := aauth.RevocationClient{Signer: signerFor(w.agent, agentIssuer, aauth.WellKnownPerson)}
+	rc := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: signerFor(w.agent, agentIssuer, aauth.WellKnownPerson)}
 	_, err := rc.Revoke(ctx, w.psURL+"/ps/revoke", aauth.RevocationRequest{JTI: "x", Exp: time.Now().Add(time.Hour).Unix()})
 	if !errors.Is(err, aauth.ErrRevocationUnsupported) {
 		t.Fatalf("role: %v", err)
@@ -152,12 +152,12 @@ func TestRevocationEndpointErrors(t *testing.T) {
 	// AcceptRevocation refuses a caller.
 	blocked := newAgent(t, "blocked", "https://blocked.example", "")
 	w.pin(blocked.Issuer, blocked.JWKS())
-	rc = aauth.RevocationClient{Signer: signerFor(blocked, "https://blocked.example", aauth.WellKnownAgent)}
+	rc = aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: signerFor(blocked, "https://blocked.example", aauth.WellKnownAgent)}
 	if _, err := rc.Revoke(ctx, w.psURL+"/ps/revoke", aauth.RevocationRequest{JTI: "x", Exp: time.Now().Add(time.Hour).Unix()}); !errors.Is(err, aauth.ErrRevocationUnsupported) {
 		t.Fatalf("refused caller: %v", err)
 	}
 	// exp beyond any token lifetime; malformed body; unsigned.
-	rc = aauth.RevocationClient{Signer: signerFor(w.agent, agentIssuer, aauth.WellKnownAgent)}
+	rc = aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: signerFor(w.agent, agentIssuer, aauth.WellKnownAgent)}
 	_, err = rc.Revoke(ctx, w.psURL+"/ps/revoke", aauth.RevocationRequest{JTI: "x", Exp: time.Now().Add(30 * 24 * time.Hour).Unix()})
 	var pe *aauth.ProblemError
 	if !errors.As(err, &pe) || pe.Code != aauth.ErrCodeInvalidRequest {

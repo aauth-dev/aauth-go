@@ -221,9 +221,7 @@ func (m ResourceMetadata) EffectiveAccessMode() string {
 // equal base by byte equality ([ErrIssuerMismatch]). This prevents a
 // document hosted at one domain from claiming the issuer of another.
 func FetchMetadata(ctx context.Context, hc *http.Client, base, doc string, dst any) error {
-	if hc == nil {
-		hc = http.DefaultClient
-	}
+	hc = discoveryClient(hc)
 	u := strings.TrimSuffix(base, "/") + "/.well-known/" + doc
 	body, _, err := fetchJSON(ctx, hc, u)
 	if err != nil {

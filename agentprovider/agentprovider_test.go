@@ -92,7 +92,8 @@ func newAP(t *testing.T, att AttestationVerifier) *testAP {
 	key, _ := aauth.GenerateKey(aauth.AlgEd25519)
 	var mu sync.Mutex
 	ap, err := New(Config{
-		Issuer: srv.URL, Domain: "ap.example", Key: key, Registrar: ta.reg, Attestation: att,
+		HTTPClient: http.DefaultClient,
+		Issuer:     srv.URL, Domain: "ap.example", Key: key, Registrar: ta.reg, Attestation: att,
 		Metadata: aauth.AgentProviderMetadata{ServerMetadata: aauth.ServerMetadata{Name: "Test AP"}},
 		OnIssue: func(_ context.Context, it IssuedToken) {
 			mu.Lock()

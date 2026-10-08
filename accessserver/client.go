@@ -26,8 +26,10 @@ import (
 type Client struct {
 	// Signer signs as the PS (DWK aauth-person.json). Required.
 	Signer aauth.ServerSigner
-	// HTTPClient makes requests; nil uses http.DefaultClient. Apply
-	// egress admission: the access server is named by a resource token.
+	// HTTPClient makes requests; nil uses [aauth.DiscoveryClient], which
+	// reaches only public https destinations: the access server is named
+	// by a resource token. A client supplied here SHOULD apply the same
+	// egress admission.
 	HTTPClient *http.Client
 	// PreferWaitSeconds, when positive, is sent as Prefer: wait=N.
 	PreferWaitSeconds int
@@ -47,7 +49,7 @@ func (c *Client) client() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return http.DefaultClient
+	return aauth.DiscoveryClient()
 }
 
 // endpoint discovers and caches the access server's auth token endpoint.
