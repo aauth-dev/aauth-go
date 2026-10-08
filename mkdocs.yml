@@ -5,12 +5,23 @@ repo_name: aauth-dev/aauth-go
 
 theme:
   name: material
+  custom_dir: docs/overrides
+  favicon: assets/favicon.svg
+  logo: assets/logo-mark.svg
+  font:
+    text: Inter
+    code: JetBrains Mono
   palette:
+    # Dark first, as on aauth.dev.
     - scheme: slate
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
     - scheme: default
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
@@ -20,6 +31,12 @@ theme:
     - navigation.top
     - search.highlight
     - content.code.copy
+
+extra_css:
+  - stylesheets/aauth.css
+
+exclude_docs: |
+  overrides/
 
 markdown_extensions:
   - admonition
