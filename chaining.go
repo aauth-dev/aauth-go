@@ -55,7 +55,7 @@ func RouteDownstream(upstream PresentedToken, rawUpstream string) (ChainRouter, 
 	if _, _, err := jwt.NewParser().ParseUnverified(rawUpstream, &rc); err != nil {
 		return ChainRouter{}, fmt.Errorf("%w: upstream token: %w", ErrInvalidToken, err)
 	}
-	if rc.ID != v.jti {
+	if v.jti == "" || rc.ID != v.jti {
 		return ChainRouter{}, errors.New("aauth: RouteDownstream: the raw upstream token is not the verified one")
 	}
 	aud := ""

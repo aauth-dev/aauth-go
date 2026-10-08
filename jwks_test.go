@@ -248,6 +248,7 @@ func TestJWKSRefreshOnSignatureFailure(t *testing.T) {
 	claims := AgentClaims{DWK: WellKnownAgent, Cnf: Cnf{JWK: &jwkNew}}
 	claims.Issuer = s.srv.URL
 	claims.Subject = newKey.ID.String()
+	claims.ID = "jti-rekey"
 	claims.IssuedAt = jwt.NewNumericDate(time.Now())
 	claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Hour))
 	tok, err := MintAgentToken(claims, newKey.Key, "k1")

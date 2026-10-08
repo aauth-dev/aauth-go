@@ -3,6 +3,7 @@ package aauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -66,6 +67,22 @@ func TestRouteDownstream(t *testing.T) {
 	}
 	if _, err := RouteDownstream(auth, ""); err == nil {
 		t.Error("routed without the raw upstream token")
+	}
+	// Empty jtis must not associate a raw token with verified claims: a
+	// token without jti fails verification, and claims without one are
+	// refused before the comparison.
+	noJTI := mintTestAuth(t, as, caller, asURL, bookingID, now, func(c *AuthClaims) {
+		c.DWK, c.PS, c.ID = WellKnownAccess, testPS, ""
+	})
+	if _, err := VerifyUpstreamToken(ctx, noJTI, UpstreamVerifyOptions{
+		TokenVerifyOptions: TokenVerifyOptions{Resolver: StaticResolver{asURL: as.JWKS()}},
+		Intermediary:       &AgentClaims{RegisteredClaims: jwt.RegisteredClaims{Issuer: bookingID}},
+		PS:                 testPS, AtAS: true,
+	}); !errors.Is(err, ErrMissingClaim) {
+		t.Errorf("verified an upstream token without jti: %v", err)
+	}
+	if _, err := RouteDownstream(&AuthClaims{PS: testPS}, noJTI); err == nil {
+		t.Error("routed claims without jti against a raw token without jti")
 	}
 }
 

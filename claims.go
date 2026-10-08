@@ -152,6 +152,11 @@ func (c jwtCheck) verify(ctx context.Context, token string, dst aauthClaims) err
 		return ErrInvalidToken
 	}
 	rc = dst.registered()
+	if rc.ID == "" {
+		// jti names the token for revocation and for presented_jti
+		// (§11.5, §11.12); a token without one cannot be revoked.
+		return fmt.Errorf("%w: jti", ErrMissingClaim)
+	}
 	if rc.IssuedAt == nil {
 		return fmt.Errorf("%w: iat", ErrMissingClaim)
 	}
