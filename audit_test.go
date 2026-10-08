@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestAudit(t *testing.T) {
@@ -110,5 +111,38 @@ func TestPermissionWithMission(t *testing.T) {
 	var mse *MissionStatusError
 	if !errors.As(err, &mse) || mse.TerminationReason != "policy-review" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestAuditPermissionProblemErrors: problem responses other than a mission
+// status error (e.g. mission_not_found, rate_limited) reach callers of
+// Audit and RequestPermission as *ProblemError, with RetryAfter.
+func TestAuditPermissionProblemErrors(t *testing.T) {
+	agent := testAgent(t)
+	const mission = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/audit":
+			WriteProblem(rw, http.StatusNotFound, "mission_not_found", "no such mission")
+		case "/permission":
+			rw.Header().Set(HeaderRetryAfter, "7")
+			WriteProblem(rw, http.StatusTooManyRequests, "rate_limited", "")
+		default:
+			http.NotFound(rw, r)
+		}
+	}))
+	defer srv.Close()
+	c := NewPSClient(srv.URL, agent)
+
+	err := c.Audit(context.Background(), AuditRequest{MissionS256: mission, Action: "SendEmail"})
+	var pe *ProblemError
+	if !errors.As(err, &pe) || pe.Status != http.StatusNotFound || pe.Code != "mission_not_found" || pe.Detail != "no such mission" {
+		t.Fatalf("Audit err = %v", err)
+	}
+
+	_, err = c.RequestPermission(context.Background(), PermissionRequest{Action: "BookHotel", MissionS256: mission})
+	pe = nil
+	if !errors.As(err, &pe) || pe.Status != http.StatusTooManyRequests || pe.Code != "rate_limited" || pe.RetryAfter != 7*time.Second {
+		t.Fatalf("RequestPermission err = %v", err)
 	}
 }

@@ -58,11 +58,7 @@ func (c *PSClient) RequestPermission(ctx context.Context, p PermissionRequest) (
 	}
 	defer closeBody(final.Body)
 	if final.StatusCode != http.StatusOK {
-		b := readErrorBody(final)
-		if mse := missionStatusErrorFrom(final.StatusCode, b); mse != nil {
-			return nil, mse
-		}
-		return nil, fmt.Errorf("aauth: permission endpoint status %d: %s", final.StatusCode, b)
+		return nil, endpointError("permission endpoint", final, readErrorBody(final))
 	}
 	var pr PermissionResponse
 	if err := json.NewDecoder(final.Body).Decode(&pr); err != nil {

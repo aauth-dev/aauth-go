@@ -51,9 +51,5 @@ func (c *PSClient) Audit(ctx context.Context, a AuditRequest) error {
 	if res.StatusCode == http.StatusCreated {
 		return nil
 	}
-	b := readErrorBody(res)
-	if mse := missionStatusErrorFrom(res.StatusCode, b); mse != nil {
-		return mse
-	}
-	return fmt.Errorf("aauth: audit endpoint status %d: %s", res.StatusCode, b)
+	return endpointError("audit endpoint", res, readErrorBody(res))
 }
