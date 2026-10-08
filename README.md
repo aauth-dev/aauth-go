@@ -5,7 +5,6 @@
 [![govulncheck](https://github.com/aauth-dev/aauth-go/actions/workflows/govulncheck.yml/badge.svg)](https://github.com/aauth-dev/aauth-go/actions/workflows/govulncheck.yml)
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/aauth-dev/aauth-go.svg)](https://pkg.go.dev/github.com/aauth-dev/aauth-go)
-[![Go Report Card](https://goreportcard.com/badge/github.com/aauth-dev/aauth-go)](https://goreportcard.com/report/github.com/aauth-dev/aauth-go)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A Go implementation of the **AAuth protocol**: agent identity and
