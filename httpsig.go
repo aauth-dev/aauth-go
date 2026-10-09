@@ -1,12 +1,14 @@
 package aauth
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -44,9 +46,36 @@ func coveredComponents(hasBody, hasContentType, hasAAuthAccess bool) []string {
 	return base
 }
 
-// requestHasBody reports whether req carries (or will carry) content.
+// requestHasBody reports whether an incoming request carries content, for
+// verification: a server restoring a body it already read leaves
+// ContentLength zero, and an incoming request with no body has http.NoBody.
 func requestHasBody(req *http.Request) bool {
 	return req.Body != nil && req.Body != http.NoBody && req.ContentLength != 0
+}
+
+// bufferStreamingBody reads an outgoing body of unknown length (a non-nil
+// body with ContentLength zero) into memory, so its digest can be signed and
+// its length is known when sent. An empty body becomes http.NoBody.
+func bufferStreamingBody(req *http.Request) error {
+	if req.Body == nil || req.Body == http.NoBody || req.ContentLength != 0 {
+		return nil
+	}
+	b, err := io.ReadAll(req.Body)
+	cerr := req.Body.Close()
+	if err != nil {
+		return fmt.Errorf("aauth: read request body: %w", err)
+	}
+	if cerr != nil {
+		return fmt.Errorf("aauth: close request body: %w", cerr)
+	}
+	if len(b) == 0 {
+		req.Body, req.GetBody = http.NoBody, nil
+		return nil
+	}
+	req.Body = io.NopCloser(bytes.NewReader(b))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(b)), nil }
+	req.ContentLength = int64(len(b))
+	return nil
 }
 
 // hasAAuthAuthorization reports whether the request carries an
@@ -178,6 +207,13 @@ func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
 		// §2.2.6); sign what the recipient will see.
 		req.URL.Path = "/"
 	}
+	// A body of unknown length is buffered so it is covered by a digest
+	// rather than signed as if absent.
+	if err := bufferStreamingBody(req); err != nil {
+		return err
+	}
+	// After buffering, ContentLength is zero only for a body that is absent
+	// or empty (http.NoBody), so the verifier's rule applies.
 	hasBody := requestHasBody(req)
 	if hasBody && req.Header.Get("Content-Digest") == "" {
 		d, err := httpsign.GenerateContentDigestHeader(&req.Body, []string{ContentDigestAlg})
