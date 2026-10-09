@@ -1,0 +1,168 @@
+/* Material theme in the AAuth palette (https://www.aauth.dev/). */
+
+:root {
+  --aauth-agent: #38bdf8;
+  --aauth-person-server: #a78bfa;
+  --aauth-access-server: #fb923c;
+  --aauth-resource: #4ade80;
+}
+
+/* Dark is the default, as on aauth.dev. */
+[data-md-color-scheme="slate"] {
+  --md-hue: 240;
+  --md-default-bg-color: #0a0a0f;
+  --md-default-bg-color--light: #12121a;
+  --md-default-bg-color--lighter: #1a1a25;
+  --md-default-bg-color--lightest: #1e1e2e;
+  --md-default-fg-color: #e4e4ed;
+  --md-default-fg-color--light: #8888a0;
+  --md-default-fg-color--lighter: #55556a;
+  --md-default-fg-color--lightest: #1e1e2e;
+
+  --md-primary-fg-color: #0a0a0f;
+  --md-primary-fg-color--light: #12121a;
+  --md-primary-fg-color--dark: #0a0a0f;
+  --md-primary-bg-color: #e4e4ed;
+  --md-primary-bg-color--light: #8888a0;
+
+  --md-accent-fg-color: #40d97b;
+  --md-accent-fg-color--transparent: rgba(64, 217, 123, 0.1);
+  --md-accent-bg-color: #000;
+
+  --md-typeset-color: #e4e4ed;
+  --md-typeset-a-color: #40d97b;
+  --md-typeset-mark-color: rgba(64, 217, 123, 0.25);
+  --md-typeset-table-color: #1e1e2e;
+
+  --md-code-bg-color: #1a1a25;
+  --md-code-fg-color: #e4e4ed;
+  --md-footer-bg-color: #0a0a0f;
+  --md-footer-bg-color--dark: #0a0a0f;
+  --md-footer-fg-color: #8888a0;
+  --md-footer-fg-color--light: #8888a0;
+  --md-footer-fg-color--lighter: #55556a;
+
+  --aauth-nav-bg: #0a0a0f;
+  --aauth-nav-border: #1e1e2e;
+  --aauth-nav-link: #8888a0;
+  --aauth-nav-link-hover: #e4e4ed;
+}
+
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: #f4f6fa;
+  --md-default-bg-color--light: #ffffff;
+  --md-default-fg-color: #0f172a;
+  --md-default-fg-color--light: #475569;
+  --md-default-fg-color--lighter: #64748b;
+  --md-default-fg-color--lightest: #d8dee8;
+
+  --md-primary-fg-color: #f4f6fa;
+  --md-primary-fg-color--light: #ffffff;
+  --md-primary-fg-color--dark: #d8dee8;
+  --md-primary-bg-color: #0f172a;
+  --md-primary-bg-color--light: #475569;
+
+  --md-accent-fg-color: #0d9b4d;
+  --md-accent-fg-color--transparent: rgba(13, 155, 77, 0.1);
+  --md-accent-bg-color: #ffffff;
+
+  --md-typeset-color: #0f172a;
+  --md-typeset-a-color: #0a7a3d;
+
+  --md-code-bg-color: #eef1f6;
+  --md-code-fg-color: #0f172a;
+  --md-footer-bg-color: #f4f6fa;
+  --md-footer-bg-color--dark: #d8dee8;
+  --md-footer-fg-color: #475569;
+  --md-footer-fg-color--light: #475569;
+  --md-footer-fg-color--lighter: #64748b;
+
+  --aauth-nav-bg: #f4f6fa;
+  --aauth-nav-border: #d8dee8;
+  --aauth-nav-link: #475569;
+  --aauth-nav-link-hover: #0f172a;
+}
+
+/* Top bar: wordmark on the left, section links like aauth.dev. */
+.aauth-nav {
+  background: var(--aauth-nav-bg);
+  border-bottom: 1px solid var(--aauth-nav-border);
+}
+
+.aauth-nav__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 3rem;
+  margin: 0 auto;
+  max-width: 80rem;
+  padding: 0 1.25rem;
+}
+
+.aauth-nav__logo {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.aauth-nav__logo img {
+  display: block;
+  height: 22px;
+  width: auto;
+}
+
+.aauth-nav__links {
+  display: flex;
+  align-items: center;
+  gap: 1.75rem;
+}
+
+.aauth-nav__links a {
+  color: var(--aauth-nav-link);
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+
+.aauth-nav__links a:hover,
+.aauth-nav__links a:focus-visible {
+  color: var(--aauth-nav-link-hover);
+}
+
+@media (max-width: 60em) {
+  .aauth-nav__links a:not(:last-child) {
+    display: none;
+  }
+}
+
+/* The Material header below it carries search, the theme toggle, and the repo. */
+.md-header {
+  border-bottom: 1px solid var(--aauth-nav-border);
+  box-shadow: none;
+}
+
+.md-header[data-md-state="shadow"] {
+  box-shadow: none;
+}
+
+.md-typeset code {
+  font-feature-settings: normal;
+}
+
+.md-typeset table:not([class]) {
+  border: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* Material tints the light-mode search box with the header's text color. */
+[data-md-color-scheme="default"] .md-search__input {
+  background-color: #ffffff;
+  border: 1px solid var(--md-default-fg-color--lightest);
+}
+
+[data-md-color-scheme="default"] .md-search__input::placeholder,
+[data-md-color-scheme="default"] .md-search__icon {
+  color: var(--md-default-fg-color--light);
+}

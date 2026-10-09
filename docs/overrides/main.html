@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% block header %}
+<!-- AAuth site navigation, mirroring https://www.aauth.dev/ -->
+<nav class="aauth-nav" aria-label="AAuth">
+  <div class="aauth-nav__inner">
+    <a class="aauth-nav__logo" href="https://www.aauth.dev/" aria-label="AAuth">
+      <img src="{{ 'assets/aauth-wordmark.svg' | url }}" alt="AAuth" height="22">
+    </a>
+    <div class="aauth-nav__links">
+      <a href="https://www.aauth.dev/#how-it-works">How AAuth Works</a>
+      <a href="https://www.aauth.dev/#walkthrough">Getting Started</a>
+      <a href="https://www.aauth.dev/#deep-dives">Deep Dives</a>
+      <a href="https://www.aauth.dev/#community">Community</a>
+      <a href="https://explorer.aauth.dev">Protocol Explorer</a>
+    </div>
+  </div>
+</nav>
+
+{{ super() }}
+{% endblock %}

@@ -8,7 +8,7 @@ upgrade every agent, resource, and server you operate together.
 This guide lists every breaking change to the root `aauth` package, grouped by
 area, with before and after code. The `personserver`, `accessserver`,
 `agentprovider`, and `ratelimit` packages are new in v0.2 and have nothing to
-migrate. See the [changelog](CHANGELOG.md) for additions.
+migrate. See the [changelog](https://github.com/aauth-dev/aauth-go/blob/main/CHANGELOG.md) for additions.
 
 ## Contents
 
