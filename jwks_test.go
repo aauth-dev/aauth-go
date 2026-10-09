@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -308,5 +309,56 @@ func TestCacheLifetime(t *testing.T) {
 		if got := cacheLifetime(c.hdr, now); got != c.want {
 			t.Errorf("%v: %v, want %v", c.hdr, got, c.want)
 		}
+	}
+}
+
+// With every entry busy the cache refuses new issuers rather than growing
+// past MaxEntries.
+func TestJWKSCacheBoundHoldsWhenEntriesBusy(t *testing.T) {
+	cache := &JWKSCache{MaxEntries: 2}
+	var held []*jwksEntry
+	for _, iss := range []string{"https://a.example", "https://b.example"} {
+		e, err := cache.entry(iss, WellKnownAgent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !e.mu.tryLock() { // a discovery in flight
+			t.Fatal("fresh entry is locked")
+		}
+		held = append(held, e)
+	}
+	for i := 0; i < 10; i++ {
+		_, err := cache.entry(fmt.Sprintf("https://new%d.example", i), WellKnownAgent)
+		if !errors.Is(err, ErrJWKSCacheFull) {
+			t.Fatalf("admission with all entries busy: %v, want ErrJWKSCacheFull", err)
+		}
+	}
+	if n := len(cache.entries); n != 2 {
+		t.Fatalf("entries = %d, want 2", n)
+	}
+	// Once one finishes, it can be evicted again.
+	held[0].mu.unlock()
+	if _, err := cache.entry("https://later.example", WellKnownAgent); err != nil {
+		t.Fatalf("after a fetch finished: %v", err)
+	}
+	if n := len(cache.entries); n != 2 {
+		t.Fatalf("entries = %d, want 2", n)
+	}
+}
+
+// A request waiting behind another discovery of the same issuer gives up
+// when its context ends.
+func TestJWKSCacheWaitHonorsContext(t *testing.T) {
+	cache := &JWKSCache{}
+	e, err := cache.entry("https://slow.example", WellKnownAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.mu.tryLock() // the in-flight discovery
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = cache.key(ctx, http.DefaultClient, "https://slow.example", WellKnownAgent, "k", false)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
 }
