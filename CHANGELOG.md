@@ -146,6 +146,30 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
   no client is configured. It allows only https and public unicast
   destinations, including on redirects, and refusals wrap
   `ErrDisallowedDestination` (see the README security notes).
+- `PSClient` uses the new `EgressClient` (https only, public destinations
+  only, no overall timeout for long polls) when `HTTPClient` is nil, including
+  clients built by `ChainRouter.PSClient` for a person server named by an
+  upstream token. Reaching other destinations is an explicit `HTTPClient`.
+- Sub-agent tokens verified as a `subagent_token` parameter are recorded, so
+  an agent provider revoking one cascades to the sub-agent's grants.
+- Deferred permission and interaction requests recheck their mission before
+  completing; a terminated or expired mission no longer yields `granted`.
+- `TokenStore.RecordPersonToken` must now refuse (`ErrBindingRevoked`,
+  `ErrRevoked`, `ErrMissionTerminated`) atomically with `Unbind`, `Revoke`
+  and `TerminateMission`, so an issuance racing a revocation cannot escape
+  the cascade. Custom stores must implement the guards.
+- Call chains through more than one intermediary validate the original
+  caller's binding and each hop's revocation state.
+- Agent provider refresh: naming JWTs expiring beyond
+  `Config.MaxNamingJWTLifetime` (default 10 minutes) are refused, the replay
+  identifier is stored only after the `Registrar` authorizes the refresh, and
+  `MemoryReplayCache` is bounded (`MaxEntries`, failing closed with
+  `ErrReplayCacheFull`).
+- `JWKSCache` refuses new issuers with `ErrJWKSCacheFull` rather than
+  exceeding `MaxEntries` while every entry has a fetch in flight, and waiting
+  on a busy entry honors the request context.
+- `SignRequest` buffers a body of unknown length so its `Content-Digest` is
+  signed, instead of signing the request as if it had no body.
 
 ## [0.1.1] - 2026-07-17
 
