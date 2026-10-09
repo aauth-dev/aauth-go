@@ -369,3 +369,62 @@ func TestRevocationDuringDecision(t *testing.T) {
 		}
 	})
 }
+
+// An agent provider revoking a sub-agent token the PS saw as a
+// subagent_token parameter revokes the grants issued to that sub-agent.
+func TestSubagentTokenRevocationCascades(t *testing.T) {
+	w, f := newRevocationWorld(t, nil)
+	ctx := context.Background()
+	sub, err := w.agent.NewSubAgent("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The sub-agent's requests go through its parent's PS client (§10.2.3).
+	get(t, w.transport(sub, w.psClient(w.agent)), w.resURL+"/files")
+	subRef := agentRefOf(sub)
+	persons, auths, err := w.store.TokensForAgent(ctx, subRef)
+	if err != nil || len(persons) == 0 || len(auths) == 0 {
+		t.Fatalf("sub-agent records %d %d %v", len(persons), len(auths), err)
+	}
+	// The PS recorded the sub-agent token it verified, so the agent
+	// provider can revoke it by (iss, jti).
+	subTok, err := sub.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := w.signed(w.agent, "", http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL, SubagentToken: subTok})
+	_ = res.Body.Close()
+	sc := agentClaimsOf(t, subTok)
+	rc := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: signerFor(w.agent, agentIssuer, aauth.WellKnownAgent)}
+	if _, err := rc.Revoke(ctx, w.psURL+"/ps/revoke", aauth.RevocationRequest{JTI: sc.ID, Exp: sc.ExpiresAt.Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	persons, auths, err = w.store.TokensForAgent(ctx, subRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, jti := range append(personJTIs(persons), authJTIs(auths)...) {
+		if ok, _ := w.store.IsRevoked(ctx, w.psURL, jti); !ok {
+			t.Errorf("%s not revoked at the PS", jti)
+		}
+		if !f.revoked(jti) {
+			t.Errorf("%s not revoked downstream", jti)
+		}
+	}
+}
+
+func personJTIs(rs []PersonTokenRecord) []string {
+	var out []string
+	for _, r := range rs {
+		out = append(out, r.JTI)
+	}
+	return out
+}
+
+func authJTIs(rs []AuthTokenRecord) []string {
+	var out []string
+	for _, r := range rs {
+		out = append(out, r.JTI)
+	}
+	return out
+}

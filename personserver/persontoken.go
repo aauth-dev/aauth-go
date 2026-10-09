@@ -280,6 +280,16 @@ func (s *Server) verifySubagent(ctx context.Context, token string, agent *aauth.
 	if revoked {
 		return nil, &aauth.TokenError{Code: aauth.TokenErrRevokedSubagentToken}
 	}
+	// Record it as authenticate records the signing agent's token: its
+	// agent provider revokes it by (iss, jti), and the cascade needs the
+	// agent identity behind that pair (§11.12.4).
+	if sub.ID != "" {
+		if err := s.cfg.Store.RecordAgentToken(ctx, AgentTokenRecord{
+			Issuer: sub.Issuer, JTI: sub.ID, Subject: sub.Subject, Exp: expOf(sub.ExpiresAt),
+		}); err != nil {
+			return nil, storeErr("record subagent token", err)
+		}
+	}
 	return sub, nil
 }
 
