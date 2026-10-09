@@ -1,9 +1,10 @@
 name: e2e
 
 # End-to-end tests of the protocol flows, one job per deployment topology so
-# each shows up on its own in the Actions UI. Both run with the HTTP trace on,
-# so the log shows every exchange between the agent, resources, and servers,
-# and each job writes a summary of the steps it ran. The same tests also run
+# each shows up on its own in the Actions UI. Both run with the HTTP trace at
+# level 1, so the log shows the protocol exchanges between the agent,
+# resources, and servers (set AAUTH_E2E_TRACE=2 to add discovery fetches), and
+# each job writes a summary of the steps it ran. The same tests also run
 # inside the test workflow's go test ./...; these jobs exist to read.
 on:
   push:
