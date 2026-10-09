@@ -1,0 +1,2682 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A Go implementation of the AAuth protocol">
+      
+      
+      
+      
+        <link rel="prev" href="../testing/">
+      
+      
+        <link rel="next" href="../../specs/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/favicon.svg">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Migrating from v0.1 - aauth-go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,700,700i%7CJetBrains+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../stylesheets/aauth.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#migrating-from-v01-to-v02" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+<!-- AAuth site navigation, mirroring https://www.aauth.dev/ -->
+<nav class="aauth-nav" aria-label="AAuth">
+  <div class="aauth-nav__inner">
+    <a class="aauth-nav__logo" href="https://www.aauth.dev/" aria-label="AAuth">
+      <img src="../../assets/aauth-wordmark.svg" alt="AAuth" height="22">
+    </a>
+    <div class="aauth-nav__links">
+      <a href="https://www.aauth.dev/#how-it-works">How AAuth Works</a>
+      <a href="https://www.aauth.dev/#walkthrough">Getting Started</a>
+      <a href="https://www.aauth.dev/#deep-dives">Deep Dives</a>
+      <a href="https://www.aauth.dev/#community">Community</a>
+      <a href="https://explorer.aauth.dev">Protocol Explorer</a>
+    </div>
+  </div>
+</nav>
+
+
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="aauth-go" class="md-header__button md-logo" aria-label="aauth-go" data-md-component="logo">
+      
+  <img src="../../assets/logo-mark.svg" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            aauth-go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Migrating from v0.1
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="custom" data-md-color-accent="custom"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/aauth-dev/aauth-go" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    aauth-dev/aauth-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="aauth-go" class="md-nav__button md-logo" aria-label="aauth-go" data-md-component="logo">
+      
+  <img src="../../assets/logo-mark.svg" alt="logo">
+
+    </a>
+    aauth-go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/aauth-dev/aauth-go" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    aauth-dev/aauth-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User guide
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Agent
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resource/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Resource
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../servers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hosted AP, PS, and AS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design-and-security/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design and security notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating from v0.1
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migrating from v0.1
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#contents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contents
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#module-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keys-and-algorithms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keys and algorithms
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Keys and algorithms">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-agentpriv-and-agentpub-are-replaced-by-agentkey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Agent.Priv and Agent.Pub are replaced by Agent.Key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-withkey-takes-a-cryptosigner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. WithKey takes a crypto.Signer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-mintagenttoken-mintauthtoken-and-mintresourcetoken-take-a-cryptosigner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. MintAgentToken, MintAuthToken, and MintResourceToken take a crypto.Signer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-signrequest-takes-a-cryptosigner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. SignRequest takes a crypto.Signer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-verifyrequest-takes-a-cryptopublickey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. VerifyRequest takes a crypto.PublicKey
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-keyresolverresolvekey-returns-cryptopublickey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. KeyResolver.ResolveKey returns crypto.PublicKey
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-jwkpublickey-returns-cryptopublickey-and-validates-alg-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. JWK.PublicKey returns crypto.PublicKey and validates alg first
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-jws-and-jwk-alg-is-ed25519-not-eddsa-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. JWS and JWK alg is Ed25519, not EdDSA (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signatures-and-signature-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signatures and Signature-Error
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Signatures and Signature-Error">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#9-writesignatureerror-no-longer-takes-a-status-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. WriteSignatureError no longer takes a status code
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#10-sigerrkeynotfound-is-replaced-by-sigerrunknownkey-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. SigErrKeyNotFound is replaced by SigErrUnknownKey (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#11-sigerrexpiredsignature-is-removed-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. SigErrExpiredSignature is removed (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-signature-error-is-an-rfc-9651-dictionary-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Signature-Error is an RFC 9651 dictionary (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-signature-key-is-parsed-as-a-dictionary-keyed-by-label-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Signature-Key is parsed as a dictionary keyed by label (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-signature-created-is-enforced-and-coverage-changed-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Signature created is enforced and coverage changed (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#15-parserequirement-requires-an-rfc-9651-dictionary-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        15. ParseRequirement requires an RFC 9651 dictionary (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#identifiers-and-common-token-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Identifiers and common token rules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Identifiers and common token rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#16-agent-identifiers-are-validated-per-draft-11-52" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        16. Agent identifiers are validated per draft -11 §5.2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#17-server-issued-tokens-follow-the-common-jwt-rules-draft-11-115" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        17. Server-issued tokens follow the common JWT rules (draft -11 §11.5)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#18-metadata-documents-must-carry-a-matching-issuer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        18. Metadata documents must carry a matching issuer
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resource-tokens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource tokens
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resource tokens">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#19-issueresourcetoken-takes-resourcetokenparams-and-a-verified-presented-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        19. IssueResourceToken takes ResourceTokenParams and a verified presented token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#20-verifyresourcetoken-takes-resourcetokenverifyoptions-and-returns-the-presented-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        20. VerifyResourceToken takes ResourceTokenVerifyOptions and returns the presented token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#21-verifyresourcechallenge-takes-a-context-and-resourcechallengeoptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        21. VerifyResourceChallenge takes a context and ResourceChallengeOptions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-resourceclaims-drops-agent-and-mission-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        22. ResourceClaims drops Agent and Mission (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auth-tokens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth tokens
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Auth tokens">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#23-authclaims-drops-agent-act-and-mission-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        23. AuthClaims drops Agent, Act, and Mission (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-actclaim-actclaimdelegators-and-nextact-are-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        24. ActClaim, ActClaim.Delegators, and NextAct are removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-verifyauthtoken-and-verifyandextractauth-take-authtokenverifyoptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        25. VerifyAuthToken and VerifyAndExtractAuth take AuthTokenVerifyOptions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-auth-and-person-token-cnf-and-ps-are-checked-more-strictly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        26. Auth and person token cnf and ps are checked more strictly
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ps-client-and-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PS client and metadata
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="PS client and metadata">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#27-tokenrequest-tokenresponse-and-exchangetoken-are-renamed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        27. TokenRequest, TokenResponse, and ExchangeToken are renamed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#28-psclienttokenendpoint-is-psclientauthtokenendpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        28. PSClient.TokenEndpoint is PSClient.AuthTokenEndpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#29-token_endpoint-is-auth_token_endpoint-in-ps-metadata-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        29. token_endpoint is auth_token_endpoint in PS metadata (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#30-metadata-types-embed-servermetadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30. Metadata types embed ServerMetadata
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#31-clarification-updated-requests-carry-presented_token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        31. Clarification updated requests carry presented_token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-token-endpoints-report-a-terminated-mission-as-missionstatuserror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        32. Token endpoints report a terminated mission as *MissionStatusError
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#missions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Missions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#33-missionref-is-replaced-by-mission_s256-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        33. MissionRef is replaced by mission_s256 (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-auditrequestmission-is-auditrequestmissions256-and-is-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        34. AuditRequest.Mission is AuditRequest.MissionS256 and is REQUIRED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-writemissionstatuserror-is-replaced-by-writemissionterminated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        35. WriteMissionStatusError is replaced by WriteMissionTerminated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-mission-status-errors-carry-termination_reason-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        36. Mission status errors carry termination_reason (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transport
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Transport">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#37-transportexpiryleeway-is-transportrefreshmargin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        37. Transport.ExpiryLeeway is Transport.RefreshMargin
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#38-transport-answers-requirementperson-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        38. Transport answers requirement=person-token
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delegation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Delegation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#39-agentmintsubagenttoken-is-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        39. Agent.MintSubAgentToken is removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#40-routedownstream-takes-a-presentedtoken-and-routes-by-person-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        40. RouteDownstream takes a PresentedToken and routes by person server
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../specs/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Specifications
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Specifications
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specs/protocol-coverage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocol coverage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../releases/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release notes
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Release notes
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releases/v0.2.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.2.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releases/v0.1.1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.1.1
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releases/v0.1.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.1.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#contents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Contents
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#module-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#keys-and-algorithms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Keys and algorithms
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Keys and algorithms">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-agentpriv-and-agentpub-are-replaced-by-agentkey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Agent.Priv and Agent.Pub are replaced by Agent.Key
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-withkey-takes-a-cryptosigner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. WithKey takes a crypto.Signer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-mintagenttoken-mintauthtoken-and-mintresourcetoken-take-a-cryptosigner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. MintAgentToken, MintAuthToken, and MintResourceToken take a crypto.Signer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-signrequest-takes-a-cryptosigner" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. SignRequest takes a crypto.Signer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-verifyrequest-takes-a-cryptopublickey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. VerifyRequest takes a crypto.PublicKey
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-keyresolverresolvekey-returns-cryptopublickey" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. KeyResolver.ResolveKey returns crypto.PublicKey
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-jwkpublickey-returns-cryptopublickey-and-validates-alg-first" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. JWK.PublicKey returns crypto.PublicKey and validates alg first
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#8-jws-and-jwk-alg-is-ed25519-not-eddsa-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. JWS and JWK alg is Ed25519, not EdDSA (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signatures-and-signature-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signatures and Signature-Error
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Signatures and Signature-Error">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#9-writesignatureerror-no-longer-takes-a-status-code" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. WriteSignatureError no longer takes a status code
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#10-sigerrkeynotfound-is-replaced-by-sigerrunknownkey-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. SigErrKeyNotFound is replaced by SigErrUnknownKey (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#11-sigerrexpiredsignature-is-removed-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. SigErrExpiredSignature is removed (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#12-signature-error-is-an-rfc-9651-dictionary-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Signature-Error is an RFC 9651 dictionary (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#13-signature-key-is-parsed-as-a-dictionary-keyed-by-label-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Signature-Key is parsed as a dictionary keyed by label (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#14-signature-created-is-enforced-and-coverage-changed-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Signature created is enforced and coverage changed (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#15-parserequirement-requires-an-rfc-9651-dictionary-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        15. ParseRequirement requires an RFC 9651 dictionary (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#identifiers-and-common-token-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Identifiers and common token rules
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Identifiers and common token rules">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#16-agent-identifiers-are-validated-per-draft-11-52" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        16. Agent identifiers are validated per draft -11 §5.2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#17-server-issued-tokens-follow-the-common-jwt-rules-draft-11-115" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        17. Server-issued tokens follow the common JWT rules (draft -11 §11.5)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#18-metadata-documents-must-carry-a-matching-issuer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        18. Metadata documents must carry a matching issuer
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resource-tokens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resource tokens
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Resource tokens">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#19-issueresourcetoken-takes-resourcetokenparams-and-a-verified-presented-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        19. IssueResourceToken takes ResourceTokenParams and a verified presented token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#20-verifyresourcetoken-takes-resourcetokenverifyoptions-and-returns-the-presented-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        20. VerifyResourceToken takes ResourceTokenVerifyOptions and returns the presented token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#21-verifyresourcechallenge-takes-a-context-and-resourcechallengeoptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        21. VerifyResourceChallenge takes a context and ResourceChallengeOptions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-resourceclaims-drops-agent-and-mission-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        22. ResourceClaims drops Agent and Mission (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#auth-tokens" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auth tokens
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Auth tokens">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#23-authclaims-drops-agent-act-and-mission-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        23. AuthClaims drops Agent, Act, and Mission (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-actclaim-actclaimdelegators-and-nextact-are-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        24. ActClaim, ActClaim.Delegators, and NextAct are removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-verifyauthtoken-and-verifyandextractauth-take-authtokenverifyoptions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        25. VerifyAuthToken and VerifyAndExtractAuth take AuthTokenVerifyOptions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-auth-and-person-token-cnf-and-ps-are-checked-more-strictly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        26. Auth and person token cnf and ps are checked more strictly
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ps-client-and-metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PS client and metadata
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="PS client and metadata">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#27-tokenrequest-tokenresponse-and-exchangetoken-are-renamed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        27. TokenRequest, TokenResponse, and ExchangeToken are renamed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#28-psclienttokenendpoint-is-psclientauthtokenendpoint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        28. PSClient.TokenEndpoint is PSClient.AuthTokenEndpoint
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#29-token_endpoint-is-auth_token_endpoint-in-ps-metadata-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        29. token_endpoint is auth_token_endpoint in PS metadata (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#30-metadata-types-embed-servermetadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        30. Metadata types embed ServerMetadata
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#31-clarification-updated-requests-carry-presented_token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        31. Clarification updated requests carry presented_token
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-token-endpoints-report-a-terminated-mission-as-missionstatuserror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        32. Token endpoints report a terminated mission as *MissionStatusError
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#missions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Missions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#33-missionref-is-replaced-by-mission_s256-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        33. MissionRef is replaced by mission_s256 (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-auditrequestmission-is-auditrequestmissions256-and-is-required" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        34. AuditRequest.Mission is AuditRequest.MissionS256 and is REQUIRED
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-writemissionstatuserror-is-replaced-by-writemissionterminated" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        35. WriteMissionStatusError is replaced by WriteMissionTerminated
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-mission-status-errors-carry-termination_reason-wire-change" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        36. Mission status errors carry termination_reason (wire change)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#transport" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transport
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Transport">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#37-transportexpiryleeway-is-transportrefreshmargin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        37. Transport.ExpiryLeeway is Transport.RefreshMargin
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#38-transport-answers-requirementperson-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        38. Transport answers requirement=person-token
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#delegation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Delegation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Delegation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#39-agentmintsubagenttoken-is-removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        39. Agent.MintSubAgentToken is removed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#40-routedownstream-takes-a-presentedtoken-and-routes-by-person-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        40. RouteDownstream takes a PresentedToken and routes by person server
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="migrating-from-v01-to-v02">Migrating from v0.1 to v0.2<a class="headerlink" href="#migrating-from-v01-to-v02" title="Permanent link">&para;</a></h1>
+<p>v0.1 implemented AAuth draft -09 with signature-key-04 and bootstrap-01. v0.2
+implements draft -11 with signature-key-09 and bootstrap-02. Draft -11
+changes the wire format, so v0.1 and v0.2 parties cannot talk to each other:
+upgrade every agent, resource, and server you operate together.</p>
+<p>This guide lists every breaking change to the root <code>aauth</code> package, grouped by
+area, with before and after code. The <code>personserver</code>, <code>accessserver</code>,
+<code>agentprovider</code>, and <code>ratelimit</code> packages are new in v0.2 and have nothing to
+migrate. See the <a href="https://github.com/aauth-dev/aauth-go/blob/main/CHANGELOG.md">changelog</a> for additions.</p>
+<h2 id="contents">Contents<a class="headerlink" href="#contents" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="#module-path">Module path</a></li>
+<li><a href="#keys-and-algorithms">Keys and algorithms</a> (1–8)</li>
+<li><a href="#signatures-and-signature-error">Signatures and Signature-Error</a> (9–15)</li>
+<li><a href="#identifiers-and-common-token-rules">Identifiers and common token rules</a> (16–18)</li>
+<li><a href="#resource-tokens">Resource tokens</a> (19–22)</li>
+<li><a href="#auth-tokens">Auth tokens</a> (23–26)</li>
+<li><a href="#ps-client-and-metadata">PS client and metadata</a> (27–32)</li>
+<li><a href="#missions">Missions</a> (33–36)</li>
+<li><a href="#transport">Transport</a> (37–38)</li>
+<li><a href="#delegation">Delegation</a> (39–40)</li>
+</ul>
+<h2 id="module-path">Module path<a class="headerlink" href="#module-path" title="Permanent link">&para;</a></h2>
+<p>The repository was renamed from <code>auth-go</code> to <code>aauth-go</code>, and v0.2 has the
+module path <code>github.com/aauth-dev/aauth-go</code>. Update imports and <code>go.mod</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nx">aauth</span><span class="w"> </span><span class="s">&quot;github.com/aauth-dev/auth-go&quot;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">import</span><span class="w"> </span><span class="nx">aauth</span><span class="w"> </span><span class="s">&quot;github.com/aauth-dev/aauth-go&quot;</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>go<span class="w"> </span>get<span class="w"> </span>github.com/aauth-dev/aauth-go@v0.2.0
+</code></pre></div>
+<p>Subpackages move the same way, for example
+<code>github.com/aauth-dev/aauth-go/personserver</code>. v0.1 releases remain available
+under the old path.</p>
+<h2 id="keys-and-algorithms">Keys and algorithms<a class="headerlink" href="#keys-and-algorithms" title="Permanent link">&para;</a></h2>
+<h3 id="1-agentpriv-and-agentpub-are-replaced-by-agentkey">1. <code>Agent.Priv</code> and <code>Agent.Pub</code> are replaced by <code>Agent.Key</code><a class="headerlink" href="#1-agentpriv-and-agentpub-are-replaced-by-agentkey" title="Permanent link">&para;</a></h3>
+<p>Keys are <code>crypto.Signer</code>s, so hardware-backed keys work. The public key is
+<code>Agent.Key.Public()</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nx">sig</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ed25519</span><span class="p">.</span><span class="nx">Sign</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Priv</span><span class="p">,</span><span class="w"> </span><span class="nx">msg</span><span class="p">)</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nx">pub</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Pub</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nx">pub</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Key</span><span class="p">.</span><span class="nx">Public</span><span class="p">()</span><span class="w">          </span><span class="c1">// crypto.PublicKey</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="nx">jwk</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">JWK</span><span class="p">()</span><span class="w">                 </span><span class="c1">// as before</span>
+</code></pre></div>
+<h3 id="2-withkey-takes-a-cryptosigner">2. <code>WithKey</code> takes a <code>crypto.Signer</code><a class="headerlink" href="#2-withkey-takes-a-cryptosigner" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">NewAgent</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">WithKey</span><span class="p">(</span><span class="nx">priv</span><span class="p">))</span><span class="w"> </span><span class="c1">// ed25519.PrivateKey</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1">// v0.2: any Ed25519 or P-256 crypto.Signer (ed25519.PrivateKey still works)</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">NewAgent</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">WithKey</span><span class="p">(</span><span class="nx">signer</span><span class="p">))</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1">// or generate a P-256 key:</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">NewAgent</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">WithKeyAlgorithm</span><span class="p">(</span><span class="nx">aauth</span><span class="p">.</span><span class="nx">AlgES256</span><span class="p">))</span>
+</code></pre></div>
+<h3 id="3-mintagenttoken-mintauthtoken-and-mintresourcetoken-take-a-cryptosigner">3. <code>MintAgentToken</code>, <code>MintAuthToken</code>, and <code>MintResourceToken</code> take a <code>crypto.Signer</code><a class="headerlink" href="#3-mintagenttoken-mintauthtoken-and-mintresourcetoken-take-a-cryptosigner" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nx">tok</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">MintAgentToken</span><span class="p">(</span><span class="nx">claims</span><span class="p">,</span><span class="w"> </span><span class="nx">priv</span><span class="p">,</span><span class="w"> </span><span class="nx">kid</span><span class="p">)</span><span class="w"> </span><span class="c1">// priv ed25519.PrivateKey</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="nx">tok</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">MintAgentToken</span><span class="p">(</span><span class="nx">claims</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">kid</span><span class="p">)</span><span class="w"> </span><span class="c1">// key crypto.Signer</span>
+</code></pre></div>
+<p>The JWS <code>alg</code> follows the key: <code>Ed25519</code> or <code>ES256</code>.</p>
+<h3 id="4-signrequest-takes-a-cryptosigner">4. <code>SignRequest</code> takes a <code>crypto.Signer</code><a class="headerlink" href="#4-signrequest-takes-a-cryptosigner" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SignRequest</span><span class="p">(</span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Priv</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;sig&quot;</span><span class="p">)</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SignRequest</span><span class="p">(</span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Key</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;sig&quot;</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="5-verifyrequest-takes-a-cryptopublickey">5. <code>VerifyRequest</code> takes a <code>crypto.PublicKey</code><a class="headerlink" href="#5-verifyrequest-takes-a-cryptopublickey" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyRequest</span><span class="p">(</span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">pub</span><span class="p">)</span><span class="w"> </span><span class="c1">// ed25519.PublicKey</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyRequest</span><span class="p">(</span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">pub</span><span class="p">)</span><span class="w"> </span><span class="c1">// crypto.PublicKey (ed25519.PublicKey or *ecdsa.PublicKey)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1">// with a validity window, clock, or required components:</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyRequestWithOptions</span><span class="p">(</span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">pub</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">RequestVerifyOptions</span><span class="p">{})</span>
+</code></pre></div>
+<h3 id="6-keyresolverresolvekey-returns-cryptopublickey">6. <code>KeyResolver.ResolveKey</code> returns <code>crypto.PublicKey</code><a class="headerlink" href="#6-keyresolverresolvekey-returns-cryptopublickey" title="Permanent link">&para;</a></h3>
+<p>Custom resolvers change their return type. The built-in <code>JWKSResolver</code>,
+<code>StaticResolver</code>, and <code>SelfSignedResolver</code> already do.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="nx">myResolver</span><span class="p">)</span><span class="w"> </span><span class="nx">ResolveKey</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">iss</span><span class="p">,</span><span class="w"> </span><span class="nx">dwk</span><span class="p">,</span><span class="w"> </span><span class="nx">kid</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">cnf</span><span class="w"> </span><span class="o">*</span><span class="nx">aauth</span><span class="p">.</span><span class="nx">JWK</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">ed25519</span><span class="p">.</span><span class="nx">PublicKey</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">r</span><span class="w"> </span><span class="nx">myResolver</span><span class="p">)</span><span class="w"> </span><span class="nx">ResolveKey</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">iss</span><span class="p">,</span><span class="w"> </span><span class="nx">dwk</span><span class="p">,</span><span class="w"> </span><span class="nx">kid</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">cnf</span><span class="w"> </span><span class="o">*</span><span class="nx">aauth</span><span class="p">.</span><span class="nx">JWK</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">crypto</span><span class="p">.</span><span class="nx">PublicKey</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>A resolver that caches keys can also implement <code>aauth.KeyRefresher</code>, so
+verifiers refresh once when an issuer re-keys under the same <code>kid</code>.</p>
+<h3 id="7-jwkpublickey-returns-cryptopublickey-and-validates-alg-first">7. <code>JWK.PublicKey</code> returns <code>crypto.PublicKey</code> and validates <code>alg</code> first<a class="headerlink" href="#7-jwkpublickey-returns-cryptopublickey-and-validates-alg-first" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="nx">pub</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">jwk</span><span class="p">.</span><span class="nx">PublicKey</span><span class="p">()</span><span class="w"> </span><span class="c1">// ed25519.PublicKey</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="nx">pub</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">jwk</span><span class="p">.</span><span class="nx">PublicKey</span><span class="p">()</span><span class="w"> </span><span class="c1">// crypto.PublicKey; ErrUnsupportedAlgorithm or ErrInvalidKey for a bad alg</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="nx">edPub</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">pub</span><span class="p">.(</span><span class="nx">ed25519</span><span class="p">.</span><span class="nx">PublicKey</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="8-jws-and-jwk-alg-is-ed25519-not-eddsa-wire-change">8. JWS and JWK <code>alg</code> is <code>Ed25519</code>, not <code>EdDSA</code> (wire change)<a class="headerlink" href="#8-jws-and-jwk-alg-is-ed25519-not-eddsa-wire-change" title="Permanent link">&para;</a></h3>
+<p>Tokens and keys are minted with the fully-specified <code>Ed25519</code> algorithm.
+Tokens or keys using <code>EdDSA</code>, <code>none</code>, a symmetric algorithm, or no <code>alg</code> are
+rejected, as are keys whose <code>kty</code>/<code>crv</code> disagree with <code>alg</code> or that omit
+<code>crv</code>. Republish any
+hand-written JWKS with <code>"alg": "Ed25519"</code> (or <code>"ES256"</code>); <code>aauth.NewJWK</code> and
+<code>Agent.JWKS</code> produce conforming keys.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="p">{</span><span class="nt">&quot;kty&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;OKP&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;crv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Ed25519&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;x&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;alg&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;EdDSA&quot;</span><span class="p">}</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="p">{</span><span class="nt">&quot;kty&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;OKP&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;crv&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Ed25519&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;x&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;alg&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Ed25519&quot;</span><span class="p">}</span>
+</code></pre></div>
+<h2 id="signatures-and-signature-error">Signatures and Signature-Error<a class="headerlink" href="#signatures-and-signature-error" title="Permanent link">&para;</a></h2>
+<h3 id="9-writesignatureerror-no-longer-takes-a-status-code">9. <code>WriteSignatureError</code> no longer takes a status code<a class="headerlink" href="#9-writesignatureerror-no-longer-takes-a-status-code" title="Permanent link">&para;</a></h3>
+<p>Every signature failure is a 401. Most servers should call
+<code>WriteSignatureFailure</code>, which picks the code from the error.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nx">aauth</span><span class="p">.</span><span class="nx">WriteSignatureError</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">StatusUnauthorized</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SignatureError</span><span class="p">{</span><span class="nx">Code</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SigErrInvalidSignature</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;bad signature&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="nx">aauth</span><span class="p">.</span><span class="nx">WriteSignatureError</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SignatureError</span><span class="p">{</span><span class="nx">Code</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SigErrInvalidSignature</span><span class="p">},</span><span class="w"> </span><span class="s">&quot;bad signature&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="c1">// or, from any verification error:</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="nx">aauth</span><span class="p">.</span><span class="nx">WriteSignatureFailure</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="10-sigerrkeynotfound-is-replaced-by-sigerrunknownkey-wire-change">10. <code>SigErrKeyNotFound</code> is replaced by <code>SigErrUnknownKey</code> (wire change)<a class="headerlink" href="#10-sigerrkeynotfound-is-replaced-by-sigerrunknownkey-wire-change" title="Permanent link">&para;</a></h3>
+<p>The code is now <code>unknown_key</code>, from the signature-key-09 registry. A <code>kid</code>
+missing from a JWKS or pinned key set is <code>aauth.ErrUnknownKey</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">se</span><span class="p">.</span><span class="nx">Code</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SigErrKeyNotFound</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">...</span><span class="w"> </span><span class="p">}</span>
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="k">if</span><span class="w"> </span><span class="nx">se</span><span class="p">.</span><span class="nx">Code</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SigErrUnknownKey</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="o">...</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+<h3 id="11-sigerrexpiredsignature-is-removed-wire-change">11. <code>SigErrExpiredSignature</code> is removed (wire change)<a class="headerlink" href="#11-sigerrexpiredsignature-is-removed-wire-change" title="Permanent link">&para;</a></h3>
+<p>signature-key-09 has no <code>expired_signature</code>. An expired token is
+<code>expired_jwt</code> (<code>SigErrExpiredJWT</code>); a signature whose <code>created</code> is older than
+the validity window is <code>invalid_signature</code>; one ahead of the verifier's clock
+is <code>clock_skew</code> (<code>SigErrClockSkew</code>).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">case</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SigErrExpiredSignature</span><span class="p">:</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="k">case</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SigErrExpiredJWT</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">SigErrClockSkew</span><span class="p">:</span>
+</code></pre></div>
+<p>The other new codes are <code>unsupported_scheme</code>, <code>cache_miss</code>,
+<code>invalid_request</code>, <code>issuer_missing</code>, <code>issuer_mismatch</code>, <code>invalid_jwt</code>, and
+<code>revoked_jwt</code>.</p>
+<h3 id="12-signature-error-is-an-rfc-9651-dictionary-wire-change">12. <code>Signature-Error</code> is an RFC 9651 dictionary (wire change)<a class="headerlink" href="#12-signature-error-is-an-rfc-9651-dictionary-wire-change" title="Permanent link">&para;</a></h3>
+<p><code>SignatureError.String</code> serializes a Structured Field Dictionary (string
+parameters quoted, <code>required_input</code> as an inner list of strings), and
+<code>ParseSignatureError</code> parses one, rejecting malformed values instead of
+splitting on commas. <code>invalid_input</code> exposes its components as
+<code>SignatureError.RequiredInput</code>, and <code>unsupported_scheme</code> /
+<code>unsupported_algorithm</code> responses carry <code>Accept-Signature-Scheme</code> /
+<code>Accept-Signature-Alg</code> (<code>AcceptSignatureFromResponse</code>).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="err">Signature-Error: error=invalid_input, required_input=(&quot;content-digest&quot; &quot;content-type&quot;)</span>
+</code></pre></div>
+<h3 id="13-signature-key-is-parsed-as-a-dictionary-keyed-by-label-wire-change">13. <code>Signature-Key</code> is parsed as a dictionary keyed by label (wire change)<a class="headerlink" href="#13-signature-key-is-parsed-as-a-dictionary-keyed-by-label-wire-change" title="Permanent link">&para;</a></h3>
+<p>Only the member for the verified label is read. A scheme other than <code>jwt</code> at
+an agent endpoint is <code>unsupported_scheme</code> (<code>ErrUnsupportedScheme</code>), answered
+with <code>Accept-Signature-Scheme</code>. <code>AttachSignatureKey</code> emits the canonical
+serialization. Code that only calls <code>AttachSignatureKey</code> and
+<code>ParseSignatureKey</code> needs no change.</p>
+<h3 id="14-signature-created-is-enforced-and-coverage-changed-wire-change">14. Signature <code>created</code> is enforced and coverage changed (wire change)<a class="headerlink" href="#14-signature-created-is-enforced-and-coverage-changed-wire-change" title="Permanent link">&para;</a></h3>
+<p>Verification no longer skips the <code>created</code> check: a signature must be
+created within the validity window (default 60 seconds,
+<code>aauth.DefaultSignatureWindow</code>, or a resource's <code>signature_window</code>). Requests
+with a body cover <code>content-type</code> as well as <code>content-digest</code>, and the
+<code>keyid</code> signature parameter is no longer sent. Keep clocks synchronized; to
+widen the window at a verifier:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="nx">claims</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyAndExtractAgent</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyAgentTokenOptions</span><span class="p">{</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="w">    </span><span class="nx">Resolver</span><span class="p">:</span><span class="w">  </span><span class="nx">resolver</span><span class="p">,</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a><span class="w">    </span><span class="nx">Signature</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">RequestVerifyOptions</span><span class="p">{</span><span class="nx">Window</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">},</span>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="p">})</span>
+</code></pre></div>
+<h3 id="15-parserequirement-requires-an-rfc-9651-dictionary-wire-change">15. <code>ParseRequirement</code> requires an RFC 9651 dictionary (wire change)<a class="headerlink" href="#15-parserequirement-requires-an-rfc-9651-dictionary-wire-change" title="Permanent link">&para;</a></h3>
+<p>A requirement given as a quoted string is rejected; the <code>requirement</code> member
+must be a Token.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1">// v0.1 accepted</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="nx">AAuth</span><span class="o">-</span><span class="nx">Requirement</span><span class="p">:</span><span class="w"> </span><span class="nx">requirement</span><span class="p">=</span><span class="s">&quot;auth-token&quot;</span><span class="p">;</span><span class="w"> </span><span class="nx">resource</span><span class="o">-</span><span class="nx">token</span><span class="p">=</span><span class="s">&quot;...&quot;</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="nx">AAuth</span><span class="o">-</span><span class="nx">Requirement</span><span class="p">:</span><span class="w"> </span><span class="nx">requirement</span><span class="p">=</span><span class="nx">auth</span><span class="o">-</span><span class="nx">token</span><span class="p">;</span><span class="w"> </span><span class="nx">resource</span><span class="o">-</span><span class="nx">token</span><span class="p">=</span><span class="s">&quot;...&quot;</span>
+</code></pre></div>
+<p>Use <code>ChallengeAgentToken</code>, <code>ChallengePersonToken</code>, <code>ChallengeAuthToken</code>, or
+<code>Requirement.String</code> to produce conforming values.</p>
+<h2 id="identifiers-and-common-token-rules">Identifiers and common token rules<a class="headerlink" href="#identifiers-and-common-token-rules" title="Permanent link">&para;</a></h2>
+<h3 id="16-agent-identifiers-are-validated-per-draft-11-52">16. Agent identifiers are validated per draft -11 §5.2<a class="headerlink" href="#16-agent-identifiers-are-validated-per-draft-11-52" title="Permanent link">&para;</a></h3>
+<p><code>ParseAgentIdentifier</code> rejects local parts outside <code>A-Z a-z 0-9 - _ + .</code> or
+longer than 255 characters, malformed sub-agent names, and domains that are
+not lowercase A-label host names (no scheme, port, or path). Failures wrap
+<code>aauth.ErrInvalidIdentifier</code>. Identifiers remain case-sensitive.</p>
+<h3 id="17-server-issued-tokens-follow-the-common-jwt-rules-draft-11-115">17. Server-issued tokens follow the common JWT rules (draft -11 §11.5)<a class="headerlink" href="#17-server-issued-tokens-follow-the-common-jwt-rules-draft-11-115" title="Permanent link">&para;</a></h3>
+<p><code>iat</code> is required, <code>exp</code> has no skew tolerance, <code>iss</code> must be a server
+identifier (https, host only, lowercase), <code>typ</code> and <code>dwk</code> are checked first,
+person and auth tokens may not live longer than one hour, and every token
+must carry <code>jti</code>. Agent tokens verified with <code>RequireProviderClaims</code> also
+require server-identifier <code>iss</code> and <code>ps</code>. For local development against <code>http://127.0.0.1:port</code> servers, set
+<code>InsecureSkipIdentifierCheck</code> in the verify options; never in production.</p>
+<p>Discovery with no client configured now uses <code>aauth.DiscoveryClient</code>,
+which reaches only public https destinations. Against local servers, pass a
+client to <code>NewJWKSResolver</code>, <code>FetchMetadata</code>, <code>RevocationClient</code>, and each
+server's <code>Config.HTTPClient</code>.</p>
+<h3 id="18-metadata-documents-must-carry-a-matching-issuer">18. Metadata documents must carry a matching <code>issuer</code><a class="headerlink" href="#18-metadata-documents-must-carry-a-matching-issuer" title="Permanent link">&para;</a></h3>
+<p><code>FetchMetadata</code> (and every resolver built on it) rejects a document with no
+<code>issuer</code> (<code>ErrIssuerMissing</code>) or whose <code>issuer</code> differs from the URL it was
+fetched under (<code>ErrIssuerMismatch</code>). Publish <code>issuer</code> in every
+<code>aauth-*.json</code> you serve.</p>
+<h2 id="resource-tokens">Resource tokens<a class="headerlink" href="#resource-tokens" title="Permanent link">&para;</a></h2>
+<h3 id="19-issueresourcetoken-takes-resourcetokenparams-and-a-verified-presented-token">19. <code>IssueResourceToken</code> takes <code>ResourceTokenParams</code> and a verified presented token<a class="headerlink" href="#19-issueresourcetoken-takes-resourcetokenparams-and-a-verified-presented-token" title="Permanent link">&para;</a></h3>
+<p>A resource token can only be issued against a verified person token or auth
+token; its <code>ps</code>, <code>sub</code>, <code>jti</code>, <code>mission_s256</code>, and <code>tenant</code> are copied from
+it. Without one, answer <code>requirement=person-token</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="nx">rt</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">IssueResourceToken</span><span class="p">(</span><span class="nx">resourceURL</span><span class="p">,</span><span class="w"> </span><span class="nx">psURL</span><span class="p">,</span><span class="w"> </span><span class="nx">agentClaims</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;files:read&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">priv</span><span class="p">,</span><span class="w"> </span><span class="nx">kid</span><span class="p">)</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a><span class="nx">person</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyAndExtractPerson</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">resourceURL</span><span class="p">,</span><span class="w"> </span><span class="nx">verifyOpts</span><span class="p">)</span>
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="w">    </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">WriteSignatureFailure</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a><span class="w">    </span><span class="k">return</span>
+<a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a><span class="p">}</span>
+<a id="__codelineno-16-10" name="__codelineno-16-10" href="#__codelineno-16-10"></a><span class="nx">rt</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">IssueResourceToken</span><span class="p">(</span><span class="nx">aauth</span><span class="p">.</span><span class="nx">ResourceTokenParams</span><span class="p">{</span>
+<a id="__codelineno-16-11" name="__codelineno-16-11" href="#__codelineno-16-11"></a><span class="w">    </span><span class="nx">Resource</span><span class="p">:</span><span class="w"> </span><span class="nx">resourceURL</span><span class="p">,</span>
+<a id="__codelineno-16-12" name="__codelineno-16-12" href="#__codelineno-16-12"></a><span class="w">    </span><span class="nx">Scope</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;files:read&quot;</span><span class="p">,</span>
+<a id="__codelineno-16-13" name="__codelineno-16-13" href="#__codelineno-16-13"></a><span class="w">    </span><span class="c1">// Audience: the access server, for four-party; empty means the person&#39;s PS.</span>
+<a id="__codelineno-16-14" name="__codelineno-16-14" href="#__codelineno-16-14"></a><span class="p">},</span><span class="w"> </span><span class="nx">person</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">kid</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="20-verifyresourcetoken-takes-resourcetokenverifyoptions-and-returns-the-presented-token">20. <code>VerifyResourceToken</code> takes <code>ResourceTokenVerifyOptions</code> and returns the presented token<a class="headerlink" href="#20-verifyresourcetoken-takes-resourcetokenverifyoptions-and-returns-the-presented-token" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="nx">rc</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyResourceToken</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">token</span><span class="p">,</span><span class="w"> </span><span class="nx">audience</span><span class="p">,</span><span class="w"> </span><span class="nx">agentClaims</span><span class="p">,</span><span class="w"> </span><span class="nx">resolver</span><span class="p">)</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="nx">rc</span><span class="p">,</span><span class="w"> </span><span class="nx">presented</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyResourceToken</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">token</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">ResourceTokenVerifyOptions</span><span class="p">{</span>
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="w">    </span><span class="nx">TokenVerifyOptions</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">TokenVerifyOptions</span><span class="p">{</span><span class="nx">Resolver</span><span class="p">:</span><span class="w"> </span><span class="nx">resolver</span><span class="p">},</span>
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">    </span><span class="nx">Audience</span><span class="p">:</span><span class="w">           </span><span class="nx">audience</span><span class="p">,</span>
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">    </span><span class="nx">PS</span><span class="p">:</span><span class="w">                 </span><span class="nx">psIssuer</span><span class="p">,</span>
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a><span class="w">    </span><span class="nx">AgentJKT</span><span class="p">:</span><span class="w">           </span><span class="nx">agentClaims</span><span class="p">.</span><span class="nx">Cnf</span><span class="p">.</span><span class="nx">JWK</span><span class="p">.</span><span class="nx">Thumbprint</span><span class="p">(),</span>
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a><span class="w">    </span><span class="nx">PresentedToken</span><span class="p">:</span><span class="w">     </span><span class="nx">req</span><span class="p">.</span><span class="nx">PresentedToken</span><span class="p">,</span>
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a><span class="p">})</span>
+</code></pre></div>
+<p>Failures are <code>*aauth.TokenError</code>s with the §11.9.3 codes.</p>
+<h3 id="21-verifyresourcechallenge-takes-a-context-and-resourcechallengeoptions">21. <code>VerifyResourceChallenge</code> takes a context and <code>ResourceChallengeOptions</code><a class="headerlink" href="#21-verifyresourcechallenge-takes-a-context-and-resourcechallengeoptions" title="Permanent link">&para;</a></h3>
+<p>It now verifies the resource token's signature and checks <code>ps</code>, <code>sub</code>, and
+<code>presented_jti</code> against the token the agent presented. <code>Transport</code> does this
+for you.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nx">rc</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyResourceChallenge</span><span class="p">(</span><span class="nx">token</span><span class="p">,</span><span class="w"> </span><span class="nx">resourceURL</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="nx">rc</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyResourceChallenge</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">token</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">ResourceChallengeOptions</span><span class="p">{</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="w">    </span><span class="nx">TokenVerifyOptions</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">TokenVerifyOptions</span><span class="p">{</span><span class="nx">Resolver</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">NewJWKSResolver</span><span class="p">(</span><span class="nx">hc</span><span class="p">)},</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="w">    </span><span class="nx">Resource</span><span class="p">:</span><span class="w">           </span><span class="nx">resourceURL</span><span class="p">,</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="w">    </span><span class="nx">Agent</span><span class="p">:</span><span class="w">              </span><span class="nx">agent</span><span class="p">,</span>
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="w">    </span><span class="nx">PS</span><span class="p">:</span><span class="w">                 </span><span class="nx">psIssuer</span><span class="p">,</span>
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a><span class="w">    </span><span class="nx">Presented</span><span class="p">:</span><span class="w">          </span><span class="nx">presentedToken</span><span class="p">,</span>
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a><span class="p">})</span>
+</code></pre></div>
+<h3 id="22-resourceclaims-drops-agent-and-mission-wire-change">22. <code>ResourceClaims</code> drops <code>Agent</code> and <code>Mission</code> (wire change)<a class="headerlink" href="#22-resourceclaims-drops-agent-and-mission-wire-change" title="Permanent link">&para;</a></h3>
+<p>A resource token no longer names the agent; <code>agent_jkt</code> binds it to the
+agent's key. New members: <code>PS</code>, <code>PresentedJTI</code>, <code>MissionS256</code>, <code>Account</code>,
+<code>LoginHint</code>, and <code>Tenant</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="nx">who</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">rc</span><span class="p">.</span><span class="nx">Agent</span>
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="nx">mission</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">rc</span><span class="p">.</span><span class="nx">Mission</span><span class="p">.</span><span class="nx">S256</span>
+<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>
+<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a><span class="nx">mission</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">rc</span><span class="p">.</span><span class="nx">MissionS256</span>
+<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="nx">ps</span><span class="p">,</span><span class="w"> </span><span class="nx">sub</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">rc</span><span class="p">.</span><span class="nx">PS</span><span class="p">,</span><span class="w"> </span><span class="nx">rc</span><span class="p">.</span><span class="nx">Subject</span><span class="w"> </span><span class="c1">// the person, as a directed identifier at that PS</span>
+</code></pre></div>
+<h2 id="auth-tokens">Auth tokens<a class="headerlink" href="#auth-tokens" title="Permanent link">&para;</a></h2>
+<h3 id="23-authclaims-drops-agent-act-and-mission-wire-change">23. <code>AuthClaims</code> drops <code>Agent</code>, <code>Act</code>, and <code>Mission</code> (wire change)<a class="headerlink" href="#23-authclaims-drops-agent-act-and-mission-wire-change" title="Permanent link">&para;</a></h3>
+<p>An auth token carries no agent identifier and no delegation chain. It now
+carries the REQUIRED <code>ps</code> and a directed <code>sub</code>, plus optional <code>account</code> and
+<code>mission_s256</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a><span class="nx">agentID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ac</span><span class="p">.</span><span class="nx">Agent</span>
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a><span class="nx">mission</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ac</span><span class="p">.</span><span class="nx">Mission</span><span class="p">.</span><span class="nx">S256</span>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a><span class="nx">ps</span><span class="p">,</span><span class="w"> </span><span class="nx">sub</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ac</span><span class="p">.</span><span class="nx">PS</span><span class="p">,</span><span class="w"> </span><span class="nx">ac</span><span class="p">.</span><span class="nx">Subject</span>
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="nx">mission</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ac</span><span class="p">.</span><span class="nx">MissionS256</span>
+</code></pre></div>
+<h3 id="24-actclaim-actclaimdelegators-and-nextact-are-removed">24. <code>ActClaim</code>, <code>ActClaim.Delegators</code>, and <code>NextAct</code> are removed<a class="headerlink" href="#24-actclaim-actclaimdelegators-and-nextact-are-removed" title="Permanent link">&para;</a></h3>
+<p>Draft -11 removed <code>act</code>. There is no replacement; call chaining is carried by
+<code>upstream_token</code> (see <a href="#delegation">Delegation</a>).</p>
+<h3 id="25-verifyauthtoken-and-verifyandextractauth-take-authtokenverifyoptions">25. <code>VerifyAuthToken</code> and <code>VerifyAndExtractAuth</code> take <code>AuthTokenVerifyOptions</code><a class="headerlink" href="#25-verifyauthtoken-and-verifyandextractauth-take-authtokenverifyoptions" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a><span class="nx">ac</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyAndExtractAuth</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">resourceURL</span><span class="p">,</span><span class="w"> </span><span class="nx">resolver</span><span class="p">)</span>
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a><span class="nx">ac</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">VerifyAndExtractAuth</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="nx">resourceURL</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">AuthTokenVerifyOptions</span><span class="p">{</span>
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a><span class="w">    </span><span class="nx">TokenVerifyOptions</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">TokenVerifyOptions</span><span class="p">{</span><span class="nx">Resolver</span><span class="p">:</span><span class="w"> </span><span class="nx">resolver</span><span class="p">},</span>
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a><span class="w">    </span><span class="nx">CheckSubject</span><span class="p">:</span><span class="w">       </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="c1">// optional (iss, sub) record check, §9.4.3.2</span>
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a><span class="p">})</span>
+</code></pre></div>
+<h3 id="26-auth-and-person-token-cnf-and-ps-are-checked-more-strictly">26. Auth and person token <code>cnf</code> and <code>ps</code> are checked more strictly<a class="headerlink" href="#26-auth-and-person-token-cnf-and-ps-are-checked-more-strictly" title="Permanent link">&para;</a></h3>
+<p>Auth and person tokens must carry a structurally complete <code>cnf.jwk</code> that
+passes algorithm validation, and a PS-issued auth token must have <code>ps</code>
+equal to <code>iss</code>. Tokens minted by v0.1 issuers fail these checks.</p>
+<h2 id="ps-client-and-metadata">PS client and metadata<a class="headerlink" href="#ps-client-and-metadata" title="Permanent link">&para;</a></h2>
+<h3 id="27-tokenrequest-tokenresponse-and-exchangetoken-are-renamed">27. <code>TokenRequest</code>, <code>TokenResponse</code>, and <code>ExchangeToken</code> are renamed<a class="headerlink" href="#27-tokenrequest-tokenresponse-and-exchangetoken-are-renamed" title="Permanent link">&para;</a></h3>
+<p>They are <code>AuthTokenRequest</code>, <code>AuthTokenResponse</code>, and
+<code>PSClient.RequestAuthToken</code>. The optional request parameters move into the
+embedded <code>TokenRequestHints</code>, and <code>PresentedToken</code> (the token the agent
+presented to the resource) is REQUIRED.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ps</span><span class="p">.</span><span class="nx">ExchangeToken</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">TokenRequest</span><span class="p">{</span>
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a><span class="w">    </span><span class="nx">ResourceToken</span><span class="p">:</span><span class="w"> </span><span class="nx">rt</span><span class="p">,</span>
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a><span class="w">    </span><span class="nx">Justification</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;list files&quot;</span><span class="p">,</span>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a><span class="p">})</span>
+<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>
+<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-22-8" name="__codelineno-22-8" href="#__codelineno-22-8"></a><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ps</span><span class="p">.</span><span class="nx">RequestAuthToken</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">AuthTokenRequest</span><span class="p">{</span>
+<a id="__codelineno-22-9" name="__codelineno-22-9" href="#__codelineno-22-9"></a><span class="w">    </span><span class="nx">ResourceToken</span><span class="p">:</span><span class="w">     </span><span class="nx">rt</span><span class="p">,</span>
+<a id="__codelineno-22-10" name="__codelineno-22-10" href="#__codelineno-22-10"></a><span class="w">    </span><span class="nx">PresentedToken</span><span class="p">:</span><span class="w">    </span><span class="nx">presented</span><span class="p">,</span><span class="w"> </span><span class="c1">// ErrPresentedTokenMissing if empty</span>
+<a id="__codelineno-22-11" name="__codelineno-22-11" href="#__codelineno-22-11"></a><span class="w">    </span><span class="nx">TokenRequestHints</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">TokenRequestHints</span><span class="p">{</span><span class="nx">Justification</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;list files&quot;</span><span class="p">},</span>
+<a id="__codelineno-22-12" name="__codelineno-22-12" href="#__codelineno-22-12"></a><span class="p">})</span>
+</code></pre></div>
+<h3 id="28-psclienttokenendpoint-is-psclientauthtokenendpoint">28. <code>PSClient.TokenEndpoint</code> is <code>PSClient.AuthTokenEndpoint</code><a class="headerlink" href="#28-psclienttokenendpoint-is-psclientauthtokenendpoint" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a><span class="nx">ps</span><span class="p">.</span><span class="nx">TokenEndpoint</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;https://ps.example/token&quot;</span>
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a><span class="nx">ps</span><span class="p">.</span><span class="nx">AuthTokenEndpoint</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;https://ps.example/token&quot;</span>
+<a id="__codelineno-23-6" name="__codelineno-23-6" href="#__codelineno-23-6"></a><span class="nx">ps</span><span class="p">.</span><span class="nx">PersonTokenEndpoint</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s">&quot;https://ps.example/person&quot;</span>
+<a id="__codelineno-23-7" name="__codelineno-23-7" href="#__codelineno-23-7"></a><span class="c1">// or fill every endpoint from the PS metadata:</span>
+<a id="__codelineno-23-8" name="__codelineno-23-8" href="#__codelineno-23-8"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ps</span><span class="p">.</span><span class="nx">Discover</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="29-token_endpoint-is-auth_token_endpoint-in-ps-metadata-wire-change">29. <code>token_endpoint</code> is <code>auth_token_endpoint</code> in PS metadata (wire change)<a class="headerlink" href="#29-token_endpoint-is-auth_token_endpoint-in-ps-metadata-wire-change" title="Permanent link">&para;</a></h3>
+<p><code>PersonServerMetadata.TokenEndpoint</code> is <code>AuthTokenEndpoint</code>, and
+<code>person_token_endpoint</code> (<code>PersonTokenEndpoint</code>) is REQUIRED.
+<code>PersonServerMetadata.Validate</code> reports missing members.</p>
+<h3 id="30-metadata-types-embed-servermetadata">30. Metadata types embed <code>ServerMetadata</code><a class="headerlink" href="#30-metadata-types-embed-servermetadata" title="Permanent link">&para;</a></h3>
+<p><code>Issuer</code> and <code>JWKSURI</code> (and the display members) moved to an embedded
+<code>ServerMetadata</code> in <code>AgentProviderMetadata</code>, <code>PersonServerMetadata</code>, and
+<code>ResourceMetadata</code>. Field access is unchanged; composite literals name the
+embedded struct. <code>issuer</code> is no longer <code>omitempty</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a><span class="nx">md</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">ResourceMetadata</span><span class="p">{</span><span class="nx">Issuer</span><span class="p">:</span><span class="w"> </span><span class="nx">self</span><span class="p">,</span><span class="w"> </span><span class="nx">JWKSURI</span><span class="p">:</span><span class="w"> </span><span class="nx">self</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;/jwks&quot;</span><span class="p">}</span>
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>
+<a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a><span class="nx">md</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">ResourceMetadata</span><span class="p">{</span>
+<a id="__codelineno-24-6" name="__codelineno-24-6" href="#__codelineno-24-6"></a><span class="w">    </span><span class="nx">ServerMetadata</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">ServerMetadata</span><span class="p">{</span><span class="nx">Issuer</span><span class="p">:</span><span class="w"> </span><span class="nx">self</span><span class="p">,</span><span class="w"> </span><span class="nx">JWKSURI</span><span class="p">:</span><span class="w"> </span><span class="nx">self</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;/jwks&quot;</span><span class="p">},</span>
+<a id="__codelineno-24-7" name="__codelineno-24-7" href="#__codelineno-24-7"></a><span class="p">}</span>
+</code></pre></div>
+<h3 id="31-clarification-updated-requests-carry-presented_token">31. Clarification updated requests carry <code>presented_token</code><a class="headerlink" href="#31-clarification-updated-requests-carry-presented_token" title="Permanent link">&para;</a></h3>
+<p><code>ClarificationReply.PresentedToken</code> is REQUIRED for an <code>updated_request</code>,
+and the client refuses one without it. On the server side,
+<code>ParseClarificationPost</code> returns a <code>*TokenError</code> (<code>invalid_request</code>) for a
+malformed body or an <code>updated_request</code> lacking <code>resource_token</code> or
+<code>presented_token</code>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a><span class="k">return</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">ClarificationReply</span><span class="p">{</span><span class="nx">ResourceToken</span><span class="p">:</span><span class="w"> </span><span class="nx">newRT</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+<a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>
+<a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a><span class="k">return</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">ClarificationReply</span><span class="p">{</span><span class="nx">ResourceToken</span><span class="p">:</span><span class="w"> </span><span class="nx">newRT</span><span class="p">,</span><span class="w"> </span><span class="nx">PresentedToken</span><span class="p">:</span><span class="w"> </span><span class="nx">presented</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</code></pre></div>
+<h3 id="32-token-endpoints-report-a-terminated-mission-as-missionstatuserror">32. Token endpoints report a terminated mission as <code>*MissionStatusError</code><a class="headerlink" href="#32-token-endpoints-report-a-terminated-mission-as-missionstatuserror" title="Permanent link">&para;</a></h3>
+<p><code>RequestPersonToken</code>, <code>PersonToken</code>, and <code>RequestAuthToken</code> return a
+<code>*aauth.MissionStatusError</code> (not a <code>*TokenError</code>) when the request names a
+mission that is no longer active, as the other PS endpoints already did.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a><span class="kd">var</span><span class="w"> </span><span class="nx">mse</span><span class="w"> </span><span class="o">*</span><span class="nx">aauth</span><span class="p">.</span><span class="nx">MissionStatusError</span>
+<a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">As</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">mse</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a><span class="w">    </span><span class="c1">// stop acting on the mission; mse.TerminationReason says why</span>
+<a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a><span class="p">}</span>
+</code></pre></div>
+<h2 id="missions">Missions<a class="headerlink" href="#missions" title="Permanent link">&para;</a></h2>
+<h3 id="33-missionref-is-replaced-by-mission_s256-wire-change">33. <code>MissionRef</code> is replaced by <code>mission_s256</code> (wire change)<a class="headerlink" href="#33-missionref-is-replaced-by-mission_s256-wire-change" title="Permanent link">&para;</a></h3>
+<p>A mission is identified by its PS and its s256, sent as a single
+<code>mission_s256</code> string.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a><span class="nx">req</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">PermissionRequest</span><span class="p">{</span><span class="nx">Action</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SendEmail&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">Mission</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">aauth</span><span class="p">.</span><span class="nx">MissionRef</span><span class="p">{</span><span class="nx">Approver</span><span class="p">:</span><span class="w"> </span><span class="nx">psURL</span><span class="p">,</span><span class="w"> </span><span class="nx">S256</span><span class="p">:</span><span class="w"> </span><span class="nx">s256</span><span class="p">}}</span>
+<a id="__codelineno-27-3" name="__codelineno-27-3" href="#__codelineno-27-3"></a>
+<a id="__codelineno-27-4" name="__codelineno-27-4" href="#__codelineno-27-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-27-5" name="__codelineno-27-5" href="#__codelineno-27-5"></a><span class="nx">req</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">PermissionRequest</span><span class="p">{</span><span class="nx">Action</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SendEmail&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">MissionS256</span><span class="p">:</span><span class="w"> </span><span class="nx">s256</span><span class="p">}</span>
+</code></pre></div>
+<h3 id="34-auditrequestmission-is-auditrequestmissions256-and-is-required">34. <code>AuditRequest.Mission</code> is <code>AuditRequest.MissionS256</code> and is REQUIRED<a class="headerlink" href="#34-auditrequestmission-is-auditrequestmissions256-and-is-required" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ps</span><span class="p">.</span><span class="nx">Audit</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">AuditRequest</span><span class="p">{</span><span class="nx">Mission</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">MissionRef</span><span class="p">{</span><span class="nx">Approver</span><span class="p">:</span><span class="w"> </span><span class="nx">psURL</span><span class="p">,</span><span class="w"> </span><span class="nx">S256</span><span class="p">:</span><span class="w"> </span><span class="nx">s256</span><span class="p">},</span><span class="w"> </span><span class="nx">Action</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SendEmail&quot;</span><span class="p">})</span>
+<a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>
+<a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ps</span><span class="p">.</span><span class="nx">Audit</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">AuditRequest</span><span class="p">{</span><span class="nx">MissionS256</span><span class="p">:</span><span class="w"> </span><span class="nx">s256</span><span class="p">,</span><span class="w"> </span><span class="nx">Action</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;SendEmail&quot;</span><span class="p">})</span>
+</code></pre></div>
+<h3 id="35-writemissionstatuserror-is-replaced-by-writemissionterminated">35. <code>WriteMissionStatusError</code> is replaced by <code>WriteMissionTerminated</code><a class="headerlink" href="#35-writemissionstatuserror-is-replaced-by-writemissionterminated" title="Permanent link">&para;</a></h3>
+<p>A mission is either active or terminated; the response carries an optional
+termination reason.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a><span class="nx">aauth</span><span class="p">.</span><span class="nx">WriteMissionStatusError</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;revoked&quot;</span><span class="p">)</span>
+<a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>
+<a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a><span class="nx">aauth</span><span class="p">.</span><span class="nx">WriteMissionTerminated</span><span class="p">(</span><span class="nx">w</span><span class="p">,</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">TerminationRevoked</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="36-mission-status-errors-carry-termination_reason-wire-change">36. Mission status errors carry <code>termination_reason</code> (wire change)<a class="headerlink" href="#36-mission-status-errors-carry-termination_reason-wire-change" title="Permanent link">&para;</a></h3>
+<p><code>MissionStatusError.MissionStatus</code> is always <code>terminated</code>; the reason is in
+<code>TerminationReason</code> (<code>completed</code>, <code>revoked</code>, <code>expired</code>, <code>superseded</code>,
+<code>administrative</code>, or an unrecognized value kept as-is).</p>
+<h2 id="transport">Transport<a class="headerlink" href="#transport" title="Permanent link">&para;</a></h2>
+<h3 id="37-transportexpiryleeway-is-transportrefreshmargin">37. <code>Transport.ExpiryLeeway</code> is <code>Transport.RefreshMargin</code><a class="headerlink" href="#37-transportexpiryleeway-is-transportrefreshmargin" title="Permanent link">&para;</a></h3>
+<p>The default margin is five minutes (<code>aauth.DefaultRefreshMargin</code>): a cached
+token with less time left is not presented again.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a><span class="nx">tr</span><span class="p">.</span><span class="nx">ExpiryLeeway</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mi">30</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span>
+<a id="__codelineno-30-3" name="__codelineno-30-3" href="#__codelineno-30-3"></a>
+<a id="__codelineno-30-4" name="__codelineno-30-4" href="#__codelineno-30-4"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-30-5" name="__codelineno-30-5" href="#__codelineno-30-5"></a><span class="nx">tr</span><span class="p">.</span><span class="nx">RefreshMargin</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="mi">5</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span>
+</code></pre></div>
+<h3 id="38-transport-answers-requirementperson-token">38. <code>Transport</code> answers <code>requirement=person-token</code><a class="headerlink" href="#38-transport-answers-requirementperson-token" title="Permanent link">&para;</a></h3>
+<p>A <code>Transport</code> with a <code>PSClient</code> now obtains a person token instead of
+returning an error for <code>requirement=person-token</code>, and verifies resource
+token challenges against the PS client's issuer rather than the agent
+token's <code>ps</code> claim. Discover the PS (<code>PSClient.Discover</code>) or set its
+endpoints explicitly.</p>
+<h2 id="delegation">Delegation<a class="headerlink" href="#delegation" title="Permanent link">&para;</a></h2>
+<h3 id="39-agentmintsubagenttoken-is-removed">39. <code>Agent.MintSubAgentToken</code> is removed<a class="headerlink" href="#39-agentmintsubagenttoken-is-removed" title="Permanent link">&para;</a></h3>
+<p>A sub-agent holds its own key, and its token is issued by the parent's
+agent provider. Sub-agent tokens are no longer verifiable with
+<code>SelfSignedResolver</code>; verify them against the parent's provider keys.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a><span class="nx">tok</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">parent</span><span class="p">.</span><span class="nx">MintSubAgentToken</span><span class="p">(</span><span class="s">&quot;worker-1&quot;</span><span class="p">)</span>
+<a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>
+<a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a><span class="c1">// v0.2: generate the sub-agent and its key together</span>
+<a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a><span class="nx">sub</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">parent</span><span class="p">.</span><span class="nx">NewSubAgent</span><span class="p">(</span><span class="s">&quot;worker-1&quot;</span><span class="p">)</span>
+<a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a><span class="c1">// or issue a token for a key held elsewhere</span>
+<a id="__codelineno-31-7" name="__codelineno-31-7" href="#__codelineno-31-7"></a><span class="nx">tok</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">parent</span><span class="p">.</span><span class="nx">IssueSubAgentToken</span><span class="p">(</span><span class="s">&quot;worker-1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">subKey</span><span class="p">.</span><span class="nx">Public</span><span class="p">())</span>
+</code></pre></div>
+<p>A sub-agent requests authorization through its parent:
+<code>aauth.NewTransport(sub, parentPSClient)</code> sends <code>subagent_token</code>.</p>
+<h3 id="40-routedownstream-takes-a-presentedtoken-and-routes-by-person-server">40. <code>RouteDownstream</code> takes a <code>PresentedToken</code> and routes by person server<a class="headerlink" href="#40-routedownstream-takes-a-presentedtoken-and-routes-by-person-server" title="Permanent link">&para;</a></h3>
+<p>Call chaining routes by the upstream token's person server: the <code>iss</code> of a
+person token or the <code>ps</code> of an auth token. <code>ChainRouter.Endpoint</code> and
+<code>Governed</code> are replaced by <code>PersonServer</code>, <code>MissionS256</code>, and
+<code>UpstreamExpiresAt</code>, and <code>ChainRouter.Transport</code> builds the intermediary's
+transport.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="c1">// v0.1</span>
+<a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="nx">r</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">RouteDownstream</span><span class="p">(</span><span class="nx">upstreamAuthClaims</span><span class="p">,</span><span class="w"> </span><span class="nx">rawUpstream</span><span class="p">,</span><span class="w"> </span><span class="nx">isPS</span><span class="p">)</span>
+<a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a><span class="nx">psc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">NewPSClient</span><span class="p">(</span><span class="nx">r</span><span class="p">.</span><span class="nx">Endpoint</span><span class="p">,</span><span class="w"> </span><span class="nx">intermediary</span><span class="p">)</span>
+<a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a>
+<a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a><span class="c1">// v0.2</span>
+<a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a><span class="nx">r</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">RouteDownstream</span><span class="p">(</span><span class="nx">upstreamClaims</span><span class="p">,</span><span class="w"> </span><span class="nx">rawUpstream</span><span class="p">)</span><span class="w"> </span><span class="c1">// *PersonClaims or *AuthClaims</span>
+<a id="__codelineno-32-7" name="__codelineno-32-7" href="#__codelineno-32-7"></a><span class="nx">tr</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Transport</span><span class="p">(</span><span class="nx">intermediary</span><span class="p">)</span><span class="w">                          </span><span class="c1">// intermediary must be its own agent provider</span>
+<a id="__codelineno-32-8" name="__codelineno-32-8" href="#__codelineno-32-8"></a><span class="nx">hc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">http</span><span class="p">.</span><span class="nx">Client</span><span class="p">{</span><span class="nx">Transport</span><span class="p">:</span><span class="w"> </span><span class="nx">tr</span><span class="p">}</span>
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.indexes", "navigation.top", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
