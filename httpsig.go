@@ -59,7 +59,7 @@ func requestHasBody(req *http.Request) bool {
 const MaxSignedStreamBytes = 4 << 20
 
 // bufferStreamingBody reads an outgoing body of unknown length (a non-nil
-// body with ContentLength zero) into memory, so its digest can be signed and
+// body with ContentLength zero or -1) into memory, so its digest can be signed and
 // its length is known when sent. An empty body becomes http.NoBody.
 //
 // At most MaxSignedStreamBytes are buffered; a longer body is an error
@@ -67,7 +67,7 @@ const MaxSignedStreamBytes = 4 << 20
 // Content-Digest itself and sets the header, in which case the body is not
 // read here.
 func bufferStreamingBody(req *http.Request) error {
-	if req.Body == nil || req.Body == http.NoBody || req.ContentLength != 0 || req.Header.Get("Content-Digest") != "" {
+	if req.Body == nil || req.Body == http.NoBody || req.ContentLength > 0 || req.Header.Get("Content-Digest") != "" {
 		return nil
 	}
 	b, err := io.ReadAll(io.LimitReader(req.Body, MaxSignedStreamBytes+1))

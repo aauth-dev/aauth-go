@@ -232,6 +232,16 @@ func TestSignRequestStreamingBodyBound(t *testing.T) {
 	if err := SignRequest(req, a.Key, ""); err == nil {
 		t.Fatal("body over MaxSignedStreamBytes was buffered and signed")
 	}
+	// ContentLength -1 is unknown too, not a known length to digest unbounded.
+	req, err = http.NewRequest(http.MethodPost, "https://ps.example/token", io.NopCloser(io.LimitReader(zeroReader{}, MaxSignedStreamBytes+1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = -1
+	AttachSignatureKey(req, tok)
+	if err := SignRequest(req, a.Key, ""); err == nil {
+		t.Fatal("body of ContentLength -1 over MaxSignedStreamBytes was buffered and signed")
+	}
 
 	// With the digest supplied, the body is not read at signing time.
 	req, err = http.NewRequest(http.MethodPost, "https://ps.example/token", io.NopCloser(failingReader{}))
