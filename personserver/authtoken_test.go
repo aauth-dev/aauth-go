@@ -523,3 +523,55 @@ func TestCallChaining(t *testing.T) {
 		t.Fatalf("revoked binding: %v", err)
 	}
 }
+
+// A second intermediary: caller → r1 → r2 → resource. r1 holds a person
+// token for r2 that names r1 as its agent; the original caller's binding is
+// what must be checked at the next hop, not r1's.
+func TestCallChainingSecondHop(t *testing.T) {
+	w := newWorld(t, nil)
+	ctx := context.Background()
+	const r1, r2 = "https://r1.example", "https://r2.example"
+	upstream := w.personToken(w.agent, r1, "")
+	inter1 := newAgent(t, "proxy1", r1, "")
+	inter2 := newAgent(t, "proxy2", r2, "")
+	w.pin(r1, inter1.JWKS())
+	w.pin(r2, inter2.JWKS())
+	w.setDecide(func(*TokenRequest) Decision { return Allow(Grant{}) })
+
+	// r1 obtains a person token for r2 on the caller's upstream token.
+	pr1, err := w.psClient(inter1).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: r2, UpstreamToken: upstream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// r2 chains on it toward the resource.
+	pr2, err := w.psClient(inter2).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: w.resURL, UpstreamToken: pr1.PersonToken})
+	if err != nil {
+		t.Fatalf("second hop: %v", err)
+	}
+	if pr2.PersonToken == "" {
+		t.Fatal("no person token for the second hop")
+	}
+
+	// Revoking a token in the middle of the chain stops the next hop.
+	pc1 := personClaimsOf(t, pr1.PersonToken)
+	if _, err := w.ps.RevokePersonToken(ctx, pc1.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err = w.psClient(inter2).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: w.resURL, UpstreamToken: pr1.PersonToken})
+	if tokenCode(err) != aauth.TokenErrRevokedUpstreamToken {
+		t.Fatalf("revoked intermediate token: %v", err)
+	}
+
+	// And so does revoking the original caller's binding.
+	pr1b, err := w.psClient(inter1).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: r2, UpstreamToken: upstream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.store.Unbind(ctx, agentRefOf(w.agent)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = w.psClient(inter2).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: w.resURL, UpstreamToken: pr1b.PersonToken})
+	if tokenCode(err) != aauth.TokenErrRevokedUpstreamToken {
+		t.Fatalf("revoked origin binding: %v", err)
+	}
+}

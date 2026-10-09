@@ -327,8 +327,12 @@ func (s *Server) verifyUpstream(ctx context.Context, token string, intermediary 
 		return nil, fail(aauth.TokenErrRevokedUpstreamToken, "the upstream token was revoked")
 	}
 	// Step 4: identify the calling agent from the PS's own records.
-	root, err := s.rootPersonToken(ctx, pt)
-	if err != nil {
+	root, err := s.originPersonToken(ctx, pt)
+	var revokedHop *revokedHopError
+	switch {
+	case errors.As(err, &revokedHop):
+		return nil, fail(aauth.TokenErrRevokedUpstreamToken, "%v", err)
+	case err != nil:
 		return nil, fail(aauth.TokenErrInvalidUpstreamToken, "the calling agent cannot be identified: %v", err)
 	}
 	if revoked, err = s.cfg.Store.IsRevoked(ctx, s.cfg.Issuer, root.JTI); err != nil {
@@ -371,6 +375,62 @@ func (s *Server) rootPersonToken(ctx context.Context, pt aauth.PresentedToken) (
 		jti = ar.PersonJTI
 	default:
 		return nil, errors.New("not a person or auth token")
+	}
+	return s.cfg.Store.PersonToken(ctx, jti)
+}
+
+// maxChainDepth bounds how many intermediaries a call chain may cross.
+const maxChainDepth = 16
+
+// revokedHopError means a token on a call chain, between the upstream token
+// and its origin, was revoked.
+type revokedHopError struct{ jti string }
+
+func (e *revokedHopError) Error() string { return "a token earlier in the call chain was revoked" }
+
+// originPersonToken follows a call chain from pt back to the person token
+// of the agent that started it. When pt was issued to an intermediary that
+// itself acted on an upstream token (§10.1.1), the record's Agent is that
+// intermediary, which is never bound to the person; the calling agent is at
+// the other end of the chain. Every token walked is checked for revocation.
+func (s *Server) originPersonToken(ctx context.Context, pt aauth.PresentedToken) (*PersonTokenRecord, error) {
+	rec, err := s.rootPersonToken(ctx, pt)
+	if err != nil {
+		return nil, err
+	}
+	for range maxChainDepth {
+		if rec.UpstreamJTI == "" {
+			return rec, nil
+		}
+		for _, t := range []struct{ iss, jti string }{{s.cfg.Issuer, rec.JTI}, {rec.UpstreamIssuer, rec.UpstreamJTI}} {
+			revoked, err := s.cfg.Store.IsRevoked(ctx, t.iss, t.jti)
+			if err != nil {
+				return nil, storeErr("revocation lookup", err)
+			}
+			if revoked {
+				return nil, &revokedHopError{jti: t.jti}
+			}
+		}
+		next, err := s.upstreamPersonRecord(ctx, rec.UpstreamIssuer, rec.UpstreamJTI)
+		if err != nil {
+			return nil, err
+		}
+		rec = next
+	}
+	return nil, errors.New("personserver: call chain is too long")
+}
+
+// upstreamPersonRecord loads the person token record behind an upstream
+// token this PS issued or federated: the token itself when it is a person
+// token, else the person token its auth token was obtained against.
+func (s *Server) upstreamPersonRecord(ctx context.Context, iss, jti string) (*PersonTokenRecord, error) {
+	if ar, err := s.cfg.Store.AuthToken(ctx, iss, jti); err == nil {
+		return s.cfg.Store.PersonToken(ctx, ar.PersonJTI)
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if iss != s.cfg.Issuer {
+		return nil, ErrNotFound
 	}
 	return s.cfg.Store.PersonToken(ctx, jti)
 }
