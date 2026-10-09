@@ -152,8 +152,10 @@ type delegation struct {
 // (signature-key §3.5 verification procedure): the typ, the header jwk,
 // iss equal to its thumbprint URI, the JWT signature under it, iat and exp
 // (iat no further ahead than the signature window), the ephemeral key in
-// cnf.jwk, and the HTTP signature under that key.
-func verifyJKTJWT(req *http.Request, sk aauth.SignatureKey, opts aauth.RequestVerifyOptions, now time.Time) (*delegation, error) {
+// cnf.jwk, and the HTTP signature under that key. A naming JWT whose exp is
+// more than maxLifetime (plus the signature window, for clock skew) ahead of
+// now is refused, so the replay state it implies is bounded.
+func verifyJKTJWT(req *http.Request, sk aauth.SignatureKey, opts aauth.RequestVerifyOptions, now time.Time, maxLifetime time.Duration) (*delegation, error) {
 	tok := sk.Params["jwt"]
 	if tok == "" {
 		return nil, fmt.Errorf("%w: jkt-jwt scheme without a jwt parameter", aauth.ErrBadSigKey)
@@ -193,6 +195,8 @@ func verifyJKTJWT(req *http.Request, sk aauth.SignatureKey, opts aauth.RequestVe
 	switch {
 	case !now.Before(claims.ExpiresAt.Time):
 		return nil, fmt.Errorf("%w: naming JWT", aauth.ErrExpired)
+	case claims.ExpiresAt.Sub(now) > maxLifetime+window:
+		return nil, fmt.Errorf("%w: naming JWT exp is more than %v ahead", aauth.ErrInvalidToken, maxLifetime)
 	case claims.IssuedAt.Sub(now) > window:
 		return nil, fmt.Errorf("%w: naming JWT iat is ahead of the verifier's clock", aauth.ErrClockSkew)
 	case claims.Cnf.JWK == nil:
@@ -244,29 +248,66 @@ type ReplayCache interface {
 	Remember(ctx context.Context, key string, exp time.Time) (bool, error)
 }
 
-// MemoryReplayCache is an in-process [ReplayCache].
+// DefaultMaxNamingJWTLifetime is the longest naming-JWT lifetime a provider
+// accepts unless [Config.MaxNamingJWTLifetime] says otherwise.
+const DefaultMaxNamingJWTLifetime = 10 * time.Minute
+
+// DefaultReplayCacheEntries is the capacity of a [MemoryReplayCache] whose
+// MaxEntries is zero.
+const DefaultReplayCacheEntries = 100_000
+
+// ErrReplayCacheFull means a [ReplayCache] cannot admit another entry. The
+// provider fails closed: it refuses the request rather than forget an
+// identifier a captured request could replay.
+var ErrReplayCacheFull = errors.New("agentprovider: replay cache is full")
+
+// MemoryReplayCache is an in-process [ReplayCache]. It holds at most
+// MaxEntries unexpired identifiers; beyond that Remember fails with
+// [ErrReplayCacheFull].
 type MemoryReplayCache struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
+	// MaxEntries bounds the cache; zero means [DefaultReplayCacheEntries].
+	MaxEntries int
+
+	mu        sync.Mutex
+	seen      map[string]time.Time
+	nextPrune time.Time
 }
+
+// replayPruneInterval is the longest the cache goes between scans for
+// expired entries when it is not full.
+const replayPruneInterval = time.Minute
 
 // NewMemoryReplayCache returns an empty MemoryReplayCache.
 func NewMemoryReplayCache() *MemoryReplayCache {
 	return &MemoryReplayCache{seen: map[string]time.Time{}}
 }
 
-// Remember implements ReplayCache, pruning expired entries as it goes.
+// Remember implements ReplayCache. Expired entries are pruned at most once
+// a minute, or when the cache is full, rather than on every call.
 func (c *MemoryReplayCache) Remember(_ context.Context, key string, exp time.Time) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := time.Now()
-	for k, e := range c.seen {
-		if !now.Before(e) {
-			delete(c.seen, k)
-		}
+	if c.seen == nil {
+		c.seen = map[string]time.Time{}
 	}
-	if _, ok := c.seen[key]; ok {
+	now := time.Now()
+	limit := c.MaxEntries
+	if limit <= 0 {
+		limit = DefaultReplayCacheEntries
+	}
+	if e, ok := c.seen[key]; ok && now.Before(e) {
 		return false, nil
+	}
+	if len(c.seen) >= limit || !now.Before(c.nextPrune) {
+		for k, e := range c.seen {
+			if !now.Before(e) {
+				delete(c.seen, k)
+			}
+		}
+		c.nextPrune = now.Add(replayPruneInterval)
+		if len(c.seen) >= limit {
+			return false, ErrReplayCacheFull
+		}
 	}
 	c.seen[key] = exp
 	return true, nil
