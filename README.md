@@ -437,18 +437,18 @@ AAUTH_E2E_TRACE=1 go test -v -run TestFourPartyDeployment ./e2e
 ```
 
 ```text
-#41  agent     GET B/ledger
-#41            -> 401  AAuth-Requirement: requirement=person-token
-#42  agent     POST AP+PS/ps/person
-#42            -> 200
-#43  agent     GET B/ledger
-#43            -> 401  AAuth-Requirement: requirement=auth-token; resource-token="eyJhbGci…"
-#44  agent     POST AP+PS/ps/token
-#45  PS        POST AS/as/token
-#45            -> 200
-#44            -> 200
-#46  agent     GET B/ledger
-#46            -> 200
+trace: #41  agent     GET B/ledger
+trace: #41            -> 401  AAuth-Requirement: requirement=person-token
+trace: #42  agent     POST AP+PS/ps/person
+trace: #42            -> 200
+trace: #43  agent     GET B/ledger
+trace: #43            -> 401  AAuth-Requirement: requirement=auth-token; resource-token="eyJhbGci…"
+trace: #44  agent     POST AP+PS/ps/token
+trace: #45  PS        POST AS/as/token
+trace: #45            -> 200
+trace: #44            -> 200
+trace: #46  agent     GET B/ledger
+trace: #46            -> 200
 ```
 
 Each call has a number and logs when it starts and when it returns. A call
