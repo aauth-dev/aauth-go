@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +51,11 @@ func (f *fakeRevoker) revoked(jti string) bool {
 }
 
 func newRevocationWorld(t *testing.T, accept func(aauth.ServerCaller) bool) (*world, *fakeRevoker) {
+	return newRevocationWorldWith(t, accept, nil)
+}
+
+// newRevocationWorldWith is newRevocationWorld with a further Config hook.
+func newRevocationWorldWith(t *testing.T, accept func(aauth.ServerCaller) bool, hook func(*Config)) (*world, *fakeRevoker) {
 	f := &fakeRevoker{fail: map[string]error{}}
 	var w *world
 	w = newWorld(t, func(c *Config) {
@@ -62,6 +68,9 @@ func newRevocationWorld(t *testing.T, accept func(aauth.ServerCaller) bool) (*wo
 		})
 		if accept != nil {
 			c.AcceptRevocation = func(_ context.Context, sc aauth.ServerCaller) bool { return accept(sc) }
+		}
+		if hook != nil {
+			hook(c)
 		}
 	})
 	return w, f
@@ -368,4 +377,332 @@ func TestRevocationDuringDecision(t *testing.T) {
 			t.Fatalf("recorded %d auth tokens under the terminated mission (%v)", len(auths), err)
 		}
 	})
+}
+
+// An agent provider revoking a sub-agent token the PS saw as a
+// subagent_token parameter revokes the grants issued to that sub-agent.
+func TestSubagentTokenRevocationCascades(t *testing.T) {
+	w, f := newRevocationWorld(t, nil)
+	ctx := context.Background()
+	sub, err := w.agent.NewSubAgent("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The sub-agent's requests go through its parent's PS client (§10.2.3).
+	get(t, w.transport(sub, w.psClient(w.agent)), w.resURL+"/files")
+	subRef := agentRefOf(sub)
+	persons, auths, err := w.store.TokensForAgent(ctx, subRef)
+	if err != nil || len(persons) == 0 || len(auths) == 0 {
+		t.Fatalf("sub-agent records %d %d %v", len(persons), len(auths), err)
+	}
+	// The PS recorded the sub-agent token it verified, so the agent
+	// provider can revoke it by (iss, jti).
+	subTok, err := sub.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := w.signed(w.agent, "", http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL, SubagentToken: subTok})
+	_ = res.Body.Close()
+	sc := agentClaimsOf(t, subTok)
+	rc := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: signerFor(w.agent, agentIssuer, aauth.WellKnownAgent)}
+	if _, err := rc.Revoke(ctx, w.psURL+"/ps/revoke", aauth.RevocationRequest{JTI: sc.ID, Exp: sc.ExpiresAt.Unix()}); err != nil {
+		t.Fatal(err)
+	}
+	persons, auths, err = w.store.TokensForAgent(ctx, subRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, jti := range append(personJTIs(persons), authJTIs(auths)...) {
+		if ok, _ := w.store.IsRevoked(ctx, w.psURL, jti); !ok {
+			t.Errorf("%s not revoked at the PS", jti)
+		}
+		if !f.revoked(jti) {
+			t.Errorf("%s not revoked downstream", jti)
+		}
+	}
+}
+
+func personJTIs(rs []PersonTokenRecord) []string {
+	var out []string
+	for _, r := range rs {
+		out = append(out, r.JTI)
+	}
+	return out
+}
+
+func authJTIs(rs []AuthTokenRecord) []string {
+	var out []string
+	for _, r := range rs {
+		out = append(out, r.JTI)
+	}
+	return out
+}
+
+// A binding revoked while a person token request is being decided must stop
+// that request's token, not only later ones.
+func TestPersonTokenIssuanceRacingBindingRevocation(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t, nil)
+	w.setDecide(func(*TokenRequest) Decision { return Allow(Grant{Person: "alice"}) })
+	if _, err := w.psClient(w.agent).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: w.resURL}); err != nil {
+		t.Fatal(err) // binds the agent to alice
+	}
+	ref := agentRefOf(w.agent)
+	w.setDecide(func(*TokenRequest) Decision {
+		if _, err := w.ps.RevokeBinding(ctx, ref); err != nil {
+			t.Errorf("revoke binding: %v", err)
+		}
+		return Allow(Grant{}) // names no new person
+	})
+	before, _, err := w.store.TokensForAgent(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := w.psClient(w.agent).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: "https://other.example"})
+	if err == nil {
+		t.Fatalf("issued a person token for a removed binding: %+v", pr)
+	}
+	if !strings.Contains(err.Error(), "binding") || strings.Contains(err.Error(), aauth.TokenErrServerError) {
+		t.Fatalf("refusal = %v, want a denial naming the revoked binding", err)
+	}
+	after, _, err := w.store.TokensForAgent(ctx, ref)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("recorded %d person tokens after the binding was revoked (had %d): %v", len(after), len(before), err)
+	}
+	if _, err := w.store.BoundPerson(ctx, ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("binding survived: %v", err)
+	}
+}
+
+func TestMemoryStoreRecordPersonTokenGuards(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	a := AgentRef{Issuer: "https://ap.example", Subject: "aauth:a@ap.example"}
+	exp := time.Now().Add(time.Hour)
+	if err := m.RecordPersonToken(ctx, PersonTokenRecord{JTI: "p0", Agent: a, Person: "alice", Exp: exp}); !errors.Is(err, ErrBindingRevoked) {
+		t.Fatalf("unbound agent: %v", err)
+	}
+	if err := m.Bind(ctx, a, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RecordPersonToken(ctx, PersonTokenRecord{JTI: "p1", Agent: a, Person: "alice", Exp: exp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RecordPersonToken(ctx, PersonTokenRecord{JTI: "p2", Agent: a, Person: "bob", Exp: exp}); !errors.Is(err, ErrBindingRevoked) {
+		t.Fatalf("other person: %v", err)
+	}
+	// A chained token needs no binding, but not a revoked upstream token.
+	chained := PersonTokenRecord{JTI: "p3", Agent: AgentRef{Issuer: "https://r1.example", Subject: "r1"}, Person: "alice", Exp: exp, UpstreamIssuer: "https://ps.example", UpstreamJTI: "u1"}
+	if err := m.Revoke(ctx, "https://ps.example", "u1", exp); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RecordPersonToken(ctx, chained); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("revoked upstream: %v", err)
+	}
+	chained.UpstreamJTI = "u2"
+	if err := m.RecordPersonToken(ctx, chained); err != nil {
+		t.Fatalf("chained: %v", err)
+	}
+	// A terminated mission, for bound and chained tokens alike.
+	if err := m.CreateMission(ctx, &MissionRecord{S256: "m1", Owner: a, Status: MissionActive}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.TerminateMission(ctx, "m1", aauth.TerminationRevoked); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []PersonTokenRecord{
+		{JTI: "p4", Agent: a, Person: "alice", Exp: exp, MissionS256: "m1"},
+		{JTI: "p5", Agent: chained.Agent, Person: "alice", Exp: exp, UpstreamIssuer: "https://ps.example", UpstreamJTI: "u3", MissionS256: "m1"},
+	} {
+		if err := m.RecordPersonToken(ctx, r); !errors.Is(err, ErrMissionTerminated) {
+			t.Fatalf("%s under a terminated mission: %v", r.JTI, err)
+		}
+	}
+}
+
+// A mission terminated while a person token request is being decided must
+// stop that request's token.
+func TestPersonTokenIssuanceRacingMissionTermination(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t, nil)
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	w.setDecide(func(*TokenRequest) Decision {
+		if _, err := w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked); err != nil {
+			t.Errorf("terminate: %v", err)
+		}
+		return Allow(Grant{Person: "alice"})
+	})
+	_, err := w.psClient(w.agent).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: w.resURL, MissionS256: m.S256})
+	var mse *aauth.MissionStatusError
+	if !errors.As(err, &mse) || mse.TerminationReason != aauth.TerminationRevoked {
+		t.Fatalf("issued during termination: %v", err)
+	}
+	persons, _, err := w.store.TokensForAgent(ctx, agentRefOf(w.agent))
+	if err != nil || len(persons) != 0 {
+		t.Fatalf("recorded %d person tokens under the terminated mission (%v)", len(persons), err)
+	}
+}
+
+// revokeBeforeRecord is a store whose insert of an agent token for subject
+// is preceded by a revocation of that token, as when a revocation arrives
+// between the PS checking revocation and recording the token.
+type revokeBeforeRecord struct {
+	Store
+	subject atomic.Value // string
+}
+
+func (s *revokeBeforeRecord) RecordAgentToken(ctx context.Context, r AgentTokenRecord) error {
+	if sub, _ := s.subject.Load().(string); sub != "" && sub == r.Subject {
+		if err := s.Revoke(ctx, r.Issuer, r.JTI, r.Exp); err != nil {
+			return err
+		}
+	}
+	return s.Store.RecordAgentToken(ctx, r)
+}
+
+// A revocation that lands between the revocation check and the insert of an
+// agent token would find no record to cascade from, so the token must be
+// refused: recording is followed by a recheck.
+func TestAgentTokenRevokedWhileBeingRecorded(t *testing.T) {
+	var rs *revokeBeforeRecord
+	w := newWorld(t, func(c *Config) {
+		rs = &revokeBeforeRecord{Store: c.Store}
+		c.Store = rs
+	})
+	sub, err := w.agent.NewSubAgent("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The sub-agent token a parent presents as a parameter.
+	subTok, err := sub.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.subject.Store(sub.ID.String())
+	res := w.signed(w.agent, "", http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL, SubagentToken: subTok})
+	if got := errorCode(t, res); got != aauth.TokenErrRevokedSubagentToken {
+		t.Fatalf("sub-agent token revoked while recorded: %q", got)
+	}
+
+	// The signing agent's own token.
+	rs.subject.Store(w.agent.ID.String())
+	res = w.signed(w.agent, "", http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL})
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("agent token revoked while recorded: %d, want 401", res.StatusCode)
+	}
+}
+
+// revokeBeforePersonRecord revokes the credentials a person token was
+// requested with just before it is recorded, as when the agent provider's
+// revocation arrives after the recheck in authenticate and its cascade has
+// already finished.
+type revokeBeforePersonRecord struct {
+	Store
+	revoke atomic.Bool
+}
+
+func (s *revokeBeforePersonRecord) RecordPersonToken(ctx context.Context, r PersonTokenRecord) error {
+	if s.revoke.Load() {
+		for _, c := range []struct{ iss, jti string }{{r.Agent.Issuer, r.AgentJTI}, {r.Subagent.Issuer, r.SubagentJTI}} {
+			if c.jti == "" {
+				continue
+			}
+			if err := s.Revoke(ctx, c.iss, c.jti, r.Exp); err != nil {
+				return err
+			}
+		}
+	}
+	return s.Store.RecordPersonToken(ctx, r)
+}
+
+// A person token must not be recorded for a request whose agent token or
+// sub-agent token was revoked after the earlier checks: that cascade has
+// already run and would never see it.
+func TestPersonTokenIssuanceRacingAgentTokenRevocation(t *testing.T) {
+	ctx := context.Background()
+	var rs *revokeBeforePersonRecord
+	w := newWorld(t, func(c *Config) {
+		rs = &revokeBeforePersonRecord{Store: c.Store}
+		c.Store = rs
+	})
+	rs.revoke.Store(true)
+
+	// The signing agent's token.
+	res := w.signed(w.agent, "", http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL})
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("agent token revoked before recording: %d, want 401", res.StatusCode)
+	}
+
+	// A sub-agent token presented as a parameter, with the parent's own
+	// token left alone by revoking only the sub-agent's.
+	sub, err := w.agent.NewSubAgent("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subTok, err := sub.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentTok, err := w.agent.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.revoke.Store(false)
+	res = w.signed(w.agent, parentTok, http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL})
+	_ = res.Body.Close()
+	// Revoke only the sub-agent token inside the insert.
+	w2 := rs
+	w2.revoke.Store(true)
+	res = w.signed(w.agent, parentTok, http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL, SubagentToken: subTok})
+	if res.StatusCode == http.StatusOK {
+		_ = res.Body.Close()
+		t.Fatal("person token issued with a sub-agent token revoked before recording")
+	}
+	_ = res.Body.Close()
+
+	rs.revoke.Store(false)
+	persons, _, err := w.store.TokensForAgent(ctx, agentRefOf(w.agent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range persons {
+		if p.AgentJTI != "" && p.SubagentJTI != "" {
+			t.Fatalf("recorded a person token under a revoked sub-agent token: %+v", p)
+		}
+	}
+}
+
+// failingMissionPending is a store whose pending-request lookup fails.
+type failingMissionPending struct{ Store }
+
+func (failingMissionPending) PendingForMission(context.Context, string) ([]*Pending, error) {
+	return nil, errors.New("pending store unavailable")
+}
+
+// A failure ending a terminated mission's pending requests must not leave
+// its already-issued tokens valid: the cascade still runs and both errors
+// are reported.
+func TestTerminateMissionCascadesDespitePendingFailure(t *testing.T) {
+	ctx := context.Background()
+	w, f := newRevocationWorldWith(t, nil, func(c *Config) { c.Store = failingMissionPending{c.Store} })
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	tr := w.transport(w.agent, w.psClient(w.agent))
+	tr.MissionS256 = m.S256
+	get(t, tr, w.resURL+"/m")
+	auths, err := w.store.AuthTokensForMission(ctx, m.S256)
+	if err != nil || len(auths) == 0 {
+		t.Fatalf("auth tokens under the mission: %d %v", len(auths), err)
+	}
+	_, err = w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked)
+	if err == nil || !strings.Contains(err.Error(), "pending store unavailable") {
+		t.Fatalf("TerminateMission err = %v, want the pending failure reported", err)
+	}
+	for _, a := range auths {
+		if !f.revoked(a.JTI) {
+			t.Errorf("auth token %s not revoked after the pending cleanup failed", a.JTI)
+		}
+	}
 }

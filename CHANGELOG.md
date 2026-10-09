@@ -146,6 +146,47 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
   no client is configured. It allows only https and public unicast
   destinations, including on redirects, and refusals wrap
   `ErrDisallowedDestination` (see the README security notes).
+- `PSClient` uses the new `EgressClient` (https only, public destinations
+  only, no overall timeout for long polls) when `HTTPClient` is nil, including
+  clients built by `ChainRouter.PSClient` for a person server named by an
+  upstream token. Reaching other destinations is an explicit `HTTPClient`.
+- Sub-agent tokens verified as a `subagent_token` parameter are recorded, so
+  an agent provider revoking one cascades to the sub-agent's grants. Agent
+  tokens are rechecked for revocation after being recorded, and
+  `RecordPersonToken` refuses (`ErrAgentRevoked`) a person token requested
+  with an agent or sub-agent token revoked meanwhile (`PersonTokenRecord`
+  gains `AgentJTI` and `SubagentJTI`; custom stores must check them).
+- Deferred permission and interaction requests recheck their mission before
+  completing, and terminating or expiring a mission resolves its open pending
+  requests (first resolution wins), so an approval racing the termination
+  cannot end in `granted`. `PendingStore` gains `PendingForMission` and
+  `ResolvePendingIfMissionActive`, which stores a granted result only while
+  the mission is still active, atomically, so an approval cannot publish a
+  grant after a termination even when the termination could not resolve it;
+  custom stores must implement both.
+  Completing a mission does the same and also revokes the auth tokens issued
+  under it, unless a concurrent termination won, in which case the completion
+  reports the mission's actual status. If ending the pending requests fails,
+  `TerminateMission` still revokes the mission's tokens, attempts every
+  request, and returns the errors together.
+- `TokenStore.RecordPersonToken` must now refuse (`ErrBindingRevoked`,
+  `ErrRevoked`, `ErrMissionTerminated`) atomically with `Unbind`, `Revoke`
+  and `TerminateMission`, so an issuance racing a revocation cannot escape
+  the cascade. Custom stores must implement the guards.
+- Call chains through more than one intermediary validate the original
+  caller's binding and each hop's revocation state.
+- Agent provider refresh: naming JWTs expiring beyond
+  `Config.MaxNamingJWTLifetime` (default 10 minutes) are refused, the replay
+  identifier is stored only after the `Registrar` authorizes the refresh, and
+  `MemoryReplayCache` is bounded (`MaxEntries`, failing closed with
+  `ErrReplayCacheFull`).
+- `JWKSCache` refuses new issuers with `ErrJWKSCacheFull` rather than
+  exceeding `MaxEntries` while every entry has a fetch in flight, and waiting
+  on a busy entry honors the request context.
+- `SignRequest` buffers a body of unknown length (`ContentLength` 0 or -1), up to
+  `MaxSignedStreamBytes` (4 MiB), so its `Content-Digest` is signed instead of
+  signing the request as if it had no body. A longer body is an error; a
+  caller with one sets `Content-Digest` itself and the body is streamed.
 
 ## [0.1.1] - 2026-07-17
 

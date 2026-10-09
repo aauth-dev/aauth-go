@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -127,7 +128,8 @@ type JWKSCache struct {
 }
 
 type jwksEntry struct {
-	mu          sync.Mutex
+	mu          entryLock
+	users       int // callers holding or awaiting the entry; guarded by JWKSCache.mu
 	set         JWKS
 	have        bool
 	fetched     time.Time // last successful fetch
@@ -136,6 +138,33 @@ type jwksEntry struct {
 	failures    int       // consecutive failed fetches
 	lastErr     error     // error of the last failed fetch
 }
+
+// entryLock is a mutex whose waiters give up when their context ends, so a
+// request queued behind a slow discovery of the same issuer is not held past
+// its own deadline. It holds one token while unlocked.
+type entryLock chan struct{}
+
+func newEntryLock() entryLock {
+	l := make(entryLock, 1)
+	l <- struct{}{}
+	return l
+}
+
+func (l entryLock) lock(ctx context.Context) error {
+	select {
+	case <-l:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (l entryLock) unlock() { l <- struct{}{} }
+
+// ErrJWKSCacheFull means a key set could not be fetched because the cache
+// is at MaxEntries and every entry has a discovery in flight. It is a
+// transient refusal: retrying once a fetch finishes succeeds.
+var ErrJWKSCacheFull = errors.New("aauth: JWKS cache is full")
 
 func (c *JWKSCache) now() time.Time {
 	if c.Now != nil {
@@ -152,8 +181,12 @@ func orDefault[T int | time.Duration](v, d T) T {
 }
 
 // entry returns the cache entry for (iss, dwk), creating it and evicting
-// the least recently attempted entry when the cache is full.
-func (c *JWKSCache) entry(iss, dwk string) *jwksEntry {
+// the least recently attempted idle entry when the cache is full. The caller
+// must [JWKSCache.release] the entry. When it is full and every entry is in
+// use, nothing can be evicted and the new issuer is
+// refused with [ErrJWKSCacheFull], so the bound holds against requests that
+// name many slow issuers.
+func (c *JWKSCache) entry(iss, dwk string) (*jwksEntry, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
@@ -161,29 +194,39 @@ func (c *JWKSCache) entry(iss, dwk string) *jwksEntry {
 	}
 	key := iss + "\x00" + dwk
 	if e, ok := c.entries[key]; ok {
-		return e
+		e.users++
+		return e, nil
 	}
 	if len(c.entries) >= orDefault(c.MaxEntries, DefaultJWKSMaxEntries) {
 		var oldestKey string
 		var oldest time.Time
 		for k, e := range c.entries {
-			// TryLock: an entry mid-fetch is in use; skip it.
-			if !e.mu.TryLock() {
+			// An entry that has been handed to a caller (fetching, or
+			// waiting to) is in use; evicting it would detach that caller
+			// from the cache and let the bound be exceeded.
+			if e.users > 0 {
 				continue
 			}
-			t := e.lastAttempt
-			e.mu.Unlock()
-			if oldestKey == "" || t.Before(oldest) {
-				oldestKey, oldest = k, t
+			// Idle, so no one holds its lock and lastAttempt is stable.
+			if oldestKey == "" || e.lastAttempt.Before(oldest) {
+				oldestKey, oldest = k, e.lastAttempt
 			}
 		}
-		if oldestKey != "" {
-			delete(c.entries, oldestKey)
+		if oldestKey == "" {
+			return nil, ErrJWKSCacheFull
 		}
+		delete(c.entries, oldestKey)
 	}
-	e := &jwksEntry{}
+	e := &jwksEntry{mu: newEntryLock(), users: 1}
 	c.entries[key] = e
-	return e
+	return e, nil
+}
+
+// release returns an entry obtained from entry; it may then be evicted.
+func (c *JWKSCache) release(e *jwksEntry) {
+	c.mu.Lock()
+	e.users--
+	c.mu.Unlock()
 }
 
 // mayFetch applies the refresh floor and, after failures, exponential
@@ -219,9 +262,15 @@ func (c *JWKSCache) key(ctx context.Context, hc *http.Client, iss, dwk, kid stri
 	if iss == "" || dwk == "" {
 		return JWK{}, fmt.Errorf("%w: iss/dwk required for JWKS discovery", ErrMissingClaim)
 	}
-	e := c.entry(iss, dwk)
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	e, err := c.entry(iss, dwk)
+	if err != nil {
+		return JWK{}, err
+	}
+	defer c.release(e)
+	if err := e.mu.lock(ctx); err != nil {
+		return JWK{}, err
+	}
+	defer e.mu.unlock()
 
 	now := c.now()
 	if e.have && now.Sub(e.fetched) >= orDefault(c.MaxAge, DefaultJWKSMaxAge) {

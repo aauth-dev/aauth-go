@@ -1,12 +1,14 @@
 package aauth
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -44,9 +46,49 @@ func coveredComponents(hasBody, hasContentType, hasAAuthAccess bool) []string {
 	return base
 }
 
-// requestHasBody reports whether req carries (or will carry) content.
+// requestHasBody reports whether an incoming request carries content, for
+// verification: a server restoring a body it already read leaves
+// ContentLength zero, and an incoming request with no body has http.NoBody.
 func requestHasBody(req *http.Request) bool {
 	return req.Body != nil && req.Body != http.NoBody && req.ContentLength != 0
+}
+
+// MaxSignedStreamBytes bounds how much of a request body of unknown length
+// [SignRequest] buffers to compute its digest (4 MiB, as for
+// [Transport.MaxBodyBytes]).
+const MaxSignedStreamBytes = 4 << 20
+
+// bufferStreamingBody reads an outgoing body of unknown length (a non-nil
+// body with ContentLength zero or -1) into memory, so its digest can be signed and
+// its length is known when sent. An empty body becomes http.NoBody.
+//
+// At most MaxSignedStreamBytes are buffered; a longer body is an error
+// rather than unbounded memory. A caller with a larger body computes its
+// Content-Digest itself and sets the header, in which case the body is not
+// read here.
+func bufferStreamingBody(req *http.Request) error {
+	if req.Body == nil || req.Body == http.NoBody || req.ContentLength > 0 || req.Header.Get("Content-Digest") != "" {
+		return nil
+	}
+	b, err := io.ReadAll(io.LimitReader(req.Body, MaxSignedStreamBytes+1))
+	cerr := req.Body.Close()
+	if err != nil {
+		return fmt.Errorf("aauth: read request body: %w", err)
+	}
+	if len(b) > MaxSignedStreamBytes {
+		return fmt.Errorf("aauth: request body of unknown length exceeds %d bytes; set ContentLength, or set Content-Digest yourself", MaxSignedStreamBytes)
+	}
+	if cerr != nil {
+		return fmt.Errorf("aauth: close request body: %w", cerr)
+	}
+	if len(b) == 0 {
+		req.Body, req.GetBody = http.NoBody, nil
+		return nil
+	}
+	req.Body = io.NopCloser(bytes.NewReader(b))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(b)), nil }
+	req.ContentLength = int64(len(b))
+	return nil
 }
 
 // hasAAuthAuthorization reports whether the request carries an
@@ -178,7 +220,14 @@ func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
 		// §2.2.6); sign what the recipient will see.
 		req.URL.Path = "/"
 	}
-	hasBody := requestHasBody(req)
+	// A body of unknown length is buffered so it is covered by a digest
+	// rather than signed as if absent.
+	if err := bufferStreamingBody(req); err != nil {
+		return err
+	}
+	// Any body left now is sent, whatever ContentLength says: a streaming
+	// body whose digest the caller supplied is still covered.
+	hasBody := req.Body != nil && req.Body != http.NoBody
 	if hasBody && req.Header.Get("Content-Digest") == "" {
 		d, err := httpsign.GenerateContentDigestHeader(&req.Body, []string{ContentDigestAlg})
 		if err != nil {

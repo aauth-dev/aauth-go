@@ -141,7 +141,8 @@ func (s *Server) issuePersonToken(ctx context.Context, j *personTokenJob, g Gran
 		return pollError(aauth.PollErrExpired, err.Error()), nil
 	}
 	if err != nil {
-		return nil, err
+		res, _, ferr := s.failure(err) // typed refusals reach the agent as such
+		return res, ferr
 	}
 	return jsonResult(http.StatusOK, aauth.PersonTokenResponse{
 		PersonToken: tok, ExpiresIn: int64(claims.ExpiresAt.Sub(now) / time.Second),
@@ -202,12 +203,35 @@ func (s *Server) mintPersonToken(ctx context.Context, j *personTokenJob, g Grant
 	rec := PersonTokenRecord{
 		JTI: claims.ID, Resource: j.req.Resource, Exp: claims.ExpiresAt.Time,
 		Agent: agentRef(j.agent), Subagent: agentRef(j.subagent), Person: person, Subject: sub,
-		MissionS256: claims.MissionS256,
+		MissionS256: claims.MissionS256, AgentJTI: j.agent.ID,
+	}
+	if j.subagent != nil {
+		rec.SubagentJTI = j.subagent.ID
 	}
 	if j.upstream != nil {
 		rec.UpstreamIssuer, rec.UpstreamJTI = j.upstream.issuer, j.upstream.jti
 	}
-	if err := s.cfg.Store.RecordPersonToken(ctx, rec); err != nil {
+	// Unbound, revoked or terminated while the request was being decided:
+	// the token is never delivered (§11.12.4).
+	switch err := s.cfg.Store.RecordPersonToken(ctx, rec); {
+	case errors.Is(err, ErrBindingRevoked):
+		return "", nil, &aauth.ProblemError{Status: http.StatusForbidden, Code: aauth.PollErrDenied, Detail: "the agent's binding to the person was revoked"}
+	case errors.Is(err, ErrAgentRevoked):
+		// The credential the request was made with was revoked meanwhile.
+		if j.subagent != nil {
+			if revoked, _ := s.cfg.Store.IsRevoked(ctx, j.subagent.Issuer, j.subagent.ID); revoked {
+				return "", nil, &aauth.TokenError{Code: aauth.TokenErrRevokedSubagentToken}
+			}
+		}
+		return "", nil, &aauth.ProblemError{Status: http.StatusUnauthorized, Code: aauth.SigErrRevokedJWT, Detail: "the agent token was revoked by its agent provider"}
+	case errors.Is(err, ErrRevoked):
+		return "", nil, &aauth.TokenError{Code: aauth.TokenErrRevokedUpstreamToken, Err: errors.New("the upstream token was revoked")}
+	case errors.Is(err, ErrMissionTerminated):
+		if _, merr := s.activeMission(ctx, claims.MissionS256); merr != nil {
+			return "", nil, merr
+		}
+		return "", nil, &aauth.MissionStatusError{Code: aauth.MissionErrTerminated, MissionStatus: aauth.MissionStatusTerminated}
+	case err != nil:
 		return "", nil, storeErr("record person token", err)
 	}
 	s.missionLog(ctx, claims.MissionS256, LogTokenRequest, agentRef(j.agent), map[string]any{
@@ -280,6 +304,19 @@ func (s *Server) verifySubagent(ctx context.Context, token string, agent *aauth.
 	if revoked {
 		return nil, &aauth.TokenError{Code: aauth.TokenErrRevokedSubagentToken}
 	}
+	// Record it as authenticate records the signing agent's token: its
+	// agent provider revokes it by (iss, jti), and the cascade needs the
+	// agent identity behind that pair (§11.12.4).
+	if sub.ID != "" {
+		if err := s.recordAgentToken(ctx, AgentTokenRecord{
+			Issuer: sub.Issuer, JTI: sub.ID, Subject: sub.Subject, Exp: expOf(sub.ExpiresAt),
+		}); err != nil {
+			if errors.Is(err, errAgentTokenRevoked) {
+				return nil, &aauth.TokenError{Code: aauth.TokenErrRevokedSubagentToken}
+			}
+			return nil, storeErr("record subagent token", err)
+		}
+	}
 	return sub, nil
 }
 
@@ -317,8 +354,12 @@ func (s *Server) verifyUpstream(ctx context.Context, token string, intermediary 
 		return nil, fail(aauth.TokenErrRevokedUpstreamToken, "the upstream token was revoked")
 	}
 	// Step 4: identify the calling agent from the PS's own records.
-	root, err := s.rootPersonToken(ctx, pt)
-	if err != nil {
+	root, err := s.originPersonToken(ctx, pt)
+	var revokedHop *revokedHopError
+	switch {
+	case errors.As(err, &revokedHop):
+		return nil, fail(aauth.TokenErrRevokedUpstreamToken, "%v", err)
+	case err != nil:
 		return nil, fail(aauth.TokenErrInvalidUpstreamToken, "the calling agent cannot be identified: %v", err)
 	}
 	if revoked, err = s.cfg.Store.IsRevoked(ctx, s.cfg.Issuer, root.JTI); err != nil {
@@ -361,6 +402,62 @@ func (s *Server) rootPersonToken(ctx context.Context, pt aauth.PresentedToken) (
 		jti = ar.PersonJTI
 	default:
 		return nil, errors.New("not a person or auth token")
+	}
+	return s.cfg.Store.PersonToken(ctx, jti)
+}
+
+// maxChainDepth bounds how many intermediaries a call chain may cross.
+const maxChainDepth = 16
+
+// revokedHopError means a token on a call chain, between the upstream token
+// and its origin, was revoked.
+type revokedHopError struct{ jti string }
+
+func (e *revokedHopError) Error() string { return "a token earlier in the call chain was revoked" }
+
+// originPersonToken follows a call chain from pt back to the person token
+// of the agent that started it. When pt was issued to an intermediary that
+// itself acted on an upstream token (§10.1.1), the record's Agent is that
+// intermediary, which is never bound to the person; the calling agent is at
+// the other end of the chain. Every token walked is checked for revocation.
+func (s *Server) originPersonToken(ctx context.Context, pt aauth.PresentedToken) (*PersonTokenRecord, error) {
+	rec, err := s.rootPersonToken(ctx, pt)
+	if err != nil {
+		return nil, err
+	}
+	for range maxChainDepth {
+		if rec.UpstreamJTI == "" {
+			return rec, nil
+		}
+		for _, t := range []struct{ iss, jti string }{{s.cfg.Issuer, rec.JTI}, {rec.UpstreamIssuer, rec.UpstreamJTI}} {
+			revoked, err := s.cfg.Store.IsRevoked(ctx, t.iss, t.jti)
+			if err != nil {
+				return nil, storeErr("revocation lookup", err)
+			}
+			if revoked {
+				return nil, &revokedHopError{jti: t.jti}
+			}
+		}
+		next, err := s.upstreamPersonRecord(ctx, rec.UpstreamIssuer, rec.UpstreamJTI)
+		if err != nil {
+			return nil, err
+		}
+		rec = next
+	}
+	return nil, errors.New("personserver: call chain is too long")
+}
+
+// upstreamPersonRecord loads the person token record behind an upstream
+// token this PS issued or federated: the token itself when it is a person
+// token, else the person token its auth token was obtained against.
+func (s *Server) upstreamPersonRecord(ctx context.Context, iss, jti string) (*PersonTokenRecord, error) {
+	if ar, err := s.cfg.Store.AuthToken(ctx, iss, jti); err == nil {
+		return s.cfg.Store.PersonToken(ctx, ar.PersonJTI)
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if iss != s.cfg.Issuer {
+		return nil, ErrNotFound
 	}
 	return s.cfg.Store.PersonToken(ctx, jti)
 }

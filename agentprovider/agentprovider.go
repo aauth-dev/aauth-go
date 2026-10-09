@@ -100,6 +100,13 @@ type Registrar interface {
 	AuthorizeIssue(ctx context.Context, r *http.Request, req *IssueRequest) (*Registration, error)
 	// AuthorizeRefresh authorizes a two-key refresh: look up the
 	// enrollment by DurableID and re-check posture.
+	//
+	// The provider remembers the naming JWT's identifier only after this
+	// returns successfully, so that a key that is not enrolled cannot fill
+	// the replay cache. A captured request that is replayed therefore
+	// reaches AuthorizeRefresh again before the replay is rejected: the
+	// method must be a side-effect-free lookup, or idempotent, and must not
+	// consume one-time state.
 	AuthorizeRefresh(ctx context.Context, req *RefreshRequest) (*Registration, error)
 	// AuthorizeSubagent applies sub-agent policy: whether this parent may
 	// spawn, how many may be live, for how long.
@@ -165,6 +172,10 @@ type Config struct {
 	Metadata aauth.AgentProviderMetadata
 	// SignatureWindow is the HTTP signature validity window.
 	SignatureWindow time.Duration
+	// MaxNamingJWTLifetime is the furthest ahead a refresh's naming JWT may
+	// expire (default [DefaultMaxNamingJWTLifetime]). A longer lifetime is
+	// refused, not shortened: replay state is kept until the JWT expires.
+	MaxNamingJWTLifetime time.Duration
 	// HTTPClient makes outbound requests (revocation); nil uses
 	// aauth.DiscoveryClient, which reaches only public https destinations.
 	HTTPClient *http.Client
@@ -408,7 +419,7 @@ func (s *Server) serveRefresh(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	d, err := verifyJKTJWT(r, sk, s.signatureOptions(), s.now())
+	d, err := verifyJKTJWT(r, sk, s.signatureOptions(), s.now(), s.maxNamingJWTLifetime())
 	if err != nil {
 		aauth.WriteSignatureFailure(w, err)
 		return
@@ -420,22 +431,31 @@ func (s *Server) serveRefresh(w http.ResponseWriter, r *http.Request) {
 	if !s.limit(w, r, "refresh:"+JKTURN(d.durable)) {
 		return
 	}
-	fresh, err := s.replay.Remember(r.Context(), JKTURN(d.durable)+"|"+d.jti, d.exp)
-	if err != nil {
-		s.serverError(w, r, err)
-		return
-	}
-	if !fresh {
-		aauth.WriteSignatureError(w, aauth.SignatureError{Code: aauth.SigErrInvalidJWT}, errReplay.Error())
-		return
-	}
 	att, ok := s.attest(w, r, body, d.durable)
 	if !ok {
 		return
 	}
+	// Ask the Registrar before remembering the JWT: a self-signed naming
+	// JWT from a key that is not enrolled must not occupy replay state.
+	// AuthorizeRefresh is a lookup and may run again for a replayed request;
+	// the replay check below still lets exactly one of them succeed.
 	reg, err := s.cfg.Registrar.AuthorizeRefresh(r.Context(), &RefreshRequest{
 		Durable: d.durable, DurableID: JKTURN(d.durable), Ephemeral: d.ephemeral, Body: body, Attestation: att,
 	})
+	if err == nil {
+		var fresh bool
+		switch fresh, err = s.replay.Remember(r.Context(), JKTURN(d.durable)+"|"+d.jti, d.exp); {
+		case errors.Is(err, ErrReplayCacheFull):
+			aauth.WriteProblem(w, http.StatusServiceUnavailable, aauth.ErrCodeServerError, "the replay cache is full; retry later")
+			return
+		case err != nil:
+			s.serverError(w, r, err)
+			return
+		case !fresh:
+			aauth.WriteSignatureError(w, aauth.SignatureError{Code: aauth.SigErrInvalidJWT}, errReplay.Error())
+			return
+		}
+	}
 	s.finish(w, r, reg, err, d.ephemeral)
 }
 
@@ -635,4 +655,11 @@ func (s *Server) limit(w http.ResponseWriter, r *http.Request, key string) bool 
 		aauth.WriteProblem(w, http.StatusTooManyRequests, aauth.ErrCodeRateLimited, "")
 	}
 	return ok
+}
+
+func (s *Server) maxNamingJWTLifetime() time.Duration {
+	if s.cfg.MaxNamingJWTLifetime > 0 {
+		return s.cfg.MaxNamingJWTLifetime
+	}
+	return DefaultMaxNamingJWTLifetime
 }

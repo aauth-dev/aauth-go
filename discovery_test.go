@@ -80,3 +80,35 @@ func TestDiscoveryDefaults(t *testing.T) {
 		t.Error("a supplied client was not used")
 	}
 }
+
+func TestEgressClientRefusals(t *testing.T) {
+	c := newEgressClient()
+	if c.Timeout != 0 {
+		t.Fatalf("egress client Timeout = %v, want none (long polls)", c.Timeout)
+	}
+	for _, url := range []string{"http://example.com/", "https://127.0.0.1/", "https://[::1]/", "https://169.254.169.254/"} {
+		res, err := c.Get(url)
+		if err == nil {
+			_ = res.Body.Close()
+			t.Fatalf("GET %s succeeded; want ErrDisallowedDestination", url)
+		}
+		if !errors.Is(err, ErrDisallowedDestination) {
+			t.Errorf("GET %s: %v, want ErrDisallowedDestination", url, err)
+		}
+	}
+}
+
+// A PS client built without an HTTPClient (the call-chaining path) must use
+// the guarded client, not http.DefaultClient.
+func TestPSClientDefaultsToGuardedClient(t *testing.T) {
+	if got := NewPSClient("https://ps.example", nil).httpClient(); got != defaultEgressClient {
+		t.Fatal("NewPSClient does not default to the egress client")
+	}
+	if got := (ChainRouter{PersonServer: "https://ps.example"}).PSClient(nil).httpClient(); got != defaultEgressClient {
+		t.Fatal("ChainRouter.PSClient does not default to the egress client")
+	}
+	hc := &http.Client{}
+	if got := (&PSClient{HTTPClient: hc}).httpClient(); got != hc {
+		t.Fatal("explicit HTTPClient was not honored")
+	}
+}

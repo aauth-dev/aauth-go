@@ -163,11 +163,17 @@ func (s *Server) completeGovernance(ctx context.Context, p *Pending, snap snapsh
 		if m, err = s.ownedMission(ctx, p.MissionS256, agentRef(agent)); err != nil {
 			return s.failure(err)
 		}
-		res, err = s.acceptMissionAction(ctx, agent, m, p.MissionAction, snap.Body)
+		res, err = s.acceptMissionAction(ctx, agent, m, p.MissionAction, snap.Body, p.ID)
 	case KindPermission:
+		if err = s.requireLiveMission(ctx, p, agent); err != nil {
+			return s.failure(err)
+		}
 		res, err = jsonResult(http.StatusOK, aauth.PermissionResponse{Permission: aauth.PermissionGranted})
 		s.missionLog(ctx, p.MissionS256, LogPermission, p.Agent, map[string]any{"request": p.Permission, "permission": aauth.PermissionGranted})
 	case KindInteraction:
+		if err = s.requireLiveMission(ctx, p, agent); err != nil {
+			return s.failure(err)
+		}
 		res, err = jsonResult(http.StatusOK, aauth.InteractionResponse{Answer: g.Answer})
 		s.missionLog(ctx, p.MissionS256, LogInteraction, p.Agent, map[string]any{"request": p.Interaction, "answer": g.Answer})
 	default:
@@ -177,6 +183,18 @@ func (s *Server) completeGovernance(ctx context.Context, p *Pending, snap snapsh
 		return s.failure(err)
 	}
 	return res, nil, nil
+}
+
+// requireLiveMission fails unless the mission a deferred request belongs to
+// (if any) is still owned by agent, active, and unexpired. The request was
+// checked when it arrived, but the mission may have been terminated or may
+// have expired while it waited for approval.
+func (s *Server) requireLiveMission(ctx context.Context, p *Pending, agent *aauth.AgentClaims) error {
+	if p.MissionS256 == "" {
+		return nil
+	}
+	_, err := s.ownedMission(ctx, p.MissionS256, agentRef(agent))
+	return err
 }
 
 // serveMissionProposal is POST {mission_endpoint} (draft -11 §8.1).
@@ -374,7 +392,7 @@ func (s *Server) serveMissionAction(w http.ResponseWriter, r *http.Request) {
 	}
 	p := &Pending{Kind: kind, Person: m.Person, MissionS256: m.S256, MissionAction: &act}
 	s.dispatch(w, r, c, body, d, p, nil, func(Grant) (*Result, *FederationState, error) {
-		res, err := s.acceptMissionAction(ctx, c.claims, m, &act, body)
+		res, err := s.acceptMissionAction(ctx, c.claims, m, &act, body, "")
 		if err != nil {
 			return s.failure(err)
 		}
@@ -384,13 +402,34 @@ func (s *Server) serveMissionAction(w http.ResponseWriter, r *http.Request) {
 
 // acceptMissionAction applies an accepted update or completion. An update
 // is appended to the log with the s256 of its persisted bytes (§8.4); a
-// completion terminates the mission as completed (§8.5).
-func (s *Server) acceptMissionAction(ctx context.Context, agent *aauth.AgentClaims, m *MissionRecord, act *aauth.MissionAction, body []byte) (*Result, error) {
+// completion terminates the mission as completed (§8.5) and ends its other
+// open pending requests, as any termination does. pendingID is the deferred
+// request being completed, if any, which is left for the caller to resolve.
+func (s *Server) acceptMissionAction(ctx context.Context, agent *aauth.AgentClaims, m *MissionRecord, act *aauth.MissionAction, body []byte, pendingID string) (*Result, error) {
 	if act.Action == aauth.MissionActionCompletion {
 		if err := s.cfg.Store.TerminateMission(ctx, m.S256, aauth.TerminationCompleted); err != nil {
 			return nil, storeErr("terminate mission", err)
 		}
+		// The store keeps the first termination reason. If a concurrent
+		// termination won, this completion did not happen: report the
+		// mission's actual status and leave the winner's effects alone.
+		cur, err := s.cfg.Store.Mission(ctx, m.S256)
+		if err != nil {
+			return nil, storeErr("load mission", err)
+		}
+		if cur.TerminationReason != aauth.TerminationCompleted {
+			return nil, &aauth.MissionStatusError{
+				Code: aauth.MissionErrTerminated, MissionStatus: aauth.MissionStatusTerminated, TerminationReason: cur.TerminationReason,
+			}
+		}
 		s.missionLog(ctx, m.S256, LogCompletion, agentRef(agent), map[string]string{"summary": act.Summary, "reason": aauth.TerminationCompleted})
+		// The mission is complete whatever happens next, so the cascade
+		// below cannot fail the agent's request; its errors, which the
+		// agent cannot act on, are logged for the operator.
+		if err := s.endMission(ctx, m.S256, aauth.TerminationCompleted, pendingID); err != nil {
+			s.logger().ErrorContext(ctx, "personserver: ending completed mission",
+				"mission_hash", refHash(m.S256), "error", err)
+		}
 		return jsonResult(http.StatusOK, struct{}{})
 	}
 	s256 := aauth.MissionS256(body)

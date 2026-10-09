@@ -3,7 +3,9 @@ package aauth
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"slices"
 	"strings"
@@ -148,3 +150,119 @@ func TestVerifyRequestRequiredComponents(t *testing.T) {
 		t.Fatalf("required = %v", mce.Required)
 	}
 }
+
+// A body of unknown length (an arbitrary reader, ContentLength zero) is
+// sent on the wire, so it must be covered by a digest like any other.
+func TestSignRequestStreamingBody(t *testing.T) {
+	a := testAgent(t)
+	const body = `{"hello":"world"}`
+	var got *http.Request
+	var gotErr error
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r
+		gotErr = VerifyRequestWithOptions(r, a.Key.Public(), RequestVerifyOptions{RequireBodyCoverage: true})
+		if gotErr == nil {
+			b, _ := io.ReadAll(r.Body)
+			if string(b) != body {
+				gotErr = errors.New("server read " + string(b))
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/token", io.NopCloser(strings.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.ContentLength != 0 {
+		t.Fatalf("ContentLength = %d; the test needs an unknown length", req.ContentLength)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	tok, err := a.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	AttachSignatureKey(req, tok)
+	if err := SignRequest(req, a.Key, ""); err != nil {
+		t.Fatal(err)
+	}
+	if req.Header.Get("Content-Digest") == "" {
+		t.Fatal("streaming body signed without a Content-Digest")
+	}
+	if !strings.Contains(req.Header.Get("Signature-Input"), "content-digest") {
+		t.Fatalf("Signature-Input does not cover content-digest: %s", req.Header.Get("Signature-Input"))
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if got == nil || gotErr != nil {
+		t.Fatalf("server verification: %v", gotErr)
+	}
+
+	// An empty streaming body is no body.
+	empty, err := http.NewRequest(http.MethodPost, srv.URL+"/token", io.NopCloser(strings.NewReader("")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	AttachSignatureKey(empty, tok)
+	if err := SignRequest(empty, a.Key, ""); err != nil {
+		t.Fatal(err)
+	}
+	if empty.Body != http.NoBody || empty.Header.Get("Content-Digest") != "" {
+		t.Fatalf("empty streaming body: %v digest %q", empty.Body, empty.Header.Get("Content-Digest"))
+	}
+}
+
+// A body of unknown length is buffered only up to MaxSignedStreamBytes; a
+// caller with a larger one supplies its own Content-Digest.
+func TestSignRequestStreamingBodyBound(t *testing.T) {
+	a := testAgent(t)
+	tok, err := a.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	over := io.NopCloser(io.LimitReader(zeroReader{}, MaxSignedStreamBytes+1))
+	req, err := http.NewRequest(http.MethodPost, "https://ps.example/token", over)
+	if err != nil {
+		t.Fatal(err)
+	}
+	AttachSignatureKey(req, tok)
+	if err := SignRequest(req, a.Key, ""); err == nil {
+		t.Fatal("body over MaxSignedStreamBytes was buffered and signed")
+	}
+	// ContentLength -1 is unknown too, not a known length to digest unbounded.
+	req, err = http.NewRequest(http.MethodPost, "https://ps.example/token", io.NopCloser(io.LimitReader(zeroReader{}, MaxSignedStreamBytes+1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = -1
+	AttachSignatureKey(req, tok)
+	if err := SignRequest(req, a.Key, ""); err == nil {
+		t.Fatal("body of ContentLength -1 over MaxSignedStreamBytes was buffered and signed")
+	}
+
+	// With the digest supplied, the body is not read at signing time.
+	req, err = http.NewRequest(http.MethodPost, "https://ps.example/token", io.NopCloser(failingReader{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Digest", "sha-256=:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=:")
+	req.Header.Set("Content-Type", "application/octet-stream")
+	AttachSignatureKey(req, tok)
+	if err := SignRequest(req, a.Key, ""); err != nil {
+		t.Fatalf("preset Content-Digest: %v", err)
+	}
+	if !strings.Contains(req.Header.Get("Signature-Input"), "content-digest") {
+		t.Fatal("preset Content-Digest not covered")
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("body must not be read") }

@@ -117,6 +117,26 @@ func (m *MemoryStore) AgentToken(_ context.Context, iss, jti string) (*AgentToke
 func (m *MemoryStore) RecordPersonToken(_ context.Context, r PersonTokenRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if r.UpstreamJTI != "" {
+		if _, ok := m.revoked[[2]string{r.UpstreamIssuer, r.UpstreamJTI}]; ok {
+			return ErrRevoked
+		}
+	} else if p, ok := m.bindings[r.Agent]; !ok || p != r.Person {
+		return ErrBindingRevoked
+	}
+	if r.AgentJTI != "" {
+		if _, ok := m.revoked[[2]string{r.Agent.Issuer, r.AgentJTI}]; ok {
+			return ErrAgentRevoked
+		}
+	}
+	if r.SubagentJTI != "" {
+		if _, ok := m.revoked[[2]string{r.Subagent.Issuer, r.SubagentJTI}]; ok {
+			return ErrAgentRevoked
+		}
+	}
+	if mr, ok := m.missions[r.MissionS256]; ok && r.MissionS256 != "" && mr.Status == MissionTerminated {
+		return ErrMissionTerminated
+	}
 	r.PresentedTo = slices.Clone(r.PresentedTo)
 	m.persons[r.JTI] = r
 	return nil
@@ -367,6 +387,24 @@ func (m *MemoryStore) UpdatePending(_ context.Context, p *Pending) error {
 	return m.putPending(p)
 }
 
+// ResolvePendingIfMissionActive implements PendingStore.
+func (m *MemoryStore) ResolvePendingIfMissionActive(_ context.Context, p *Pending) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mr, ok := m.missions[p.MissionS256]; !ok || mr.Status != MissionActive {
+		return ErrMissionTerminated
+	}
+	cur, err := m.getPending(p.ID)
+	if err != nil {
+		return err
+	}
+	if cur.Version != p.Version {
+		return ErrConflict
+	}
+	p.Version++
+	return m.putPending(p)
+}
+
 // PendingForResourceToken implements PendingStore.
 func (m *MemoryStore) PendingForResourceToken(_ context.Context, iss, jti string) ([]*Pending, error) {
 	m.mu.Lock()
@@ -378,6 +416,23 @@ func (m *MemoryStore) PendingForResourceToken(_ context.Context, iss, jti string
 			return nil, err
 		}
 		if p.Open() && p.ResourceTokenIssuer == iss && p.ResourceTokenJTI == jti {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// PendingForMission implements PendingStore.
+func (m *MemoryStore) PendingForMission(_ context.Context, s256 string) ([]*Pending, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*Pending
+	for id := range m.pending {
+		p, err := m.getPending(id)
+		if err != nil {
+			return nil, err
+		}
+		if p.Open() && p.MissionS256 == s256 {
 			out = append(out, p)
 		}
 	}

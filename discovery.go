@@ -43,7 +43,33 @@ func DiscoveryClient() *http.Client { return defaultDiscoveryClient }
 var defaultDiscoveryClient = newDiscoveryClient()
 
 func newDiscoveryClient() *http.Client {
-	dialer := &net.Dialer{Timeout: 5 * time.Second, Control: refuseNonPublic}
+	return newGuardedClient(5*time.Second, 10*time.Second)
+}
+
+// EgressClient returns the http.Client that agent-side requests to a person
+// server use when the caller supplies none (see [PSClient]). It applies the
+// same destination rules as [DiscoveryClient] (https only, public unicast
+// addresses only, checked at dial time and on every redirect) but has no
+// overall timeout and a longer response-header timeout, because deferred
+// requests long-poll with Prefer: wait. Callers bound each request with its
+// context.
+func EgressClient() *http.Client { return defaultEgressClient }
+
+var defaultEgressClient = newEgressClient()
+
+func newEgressClient() *http.Client {
+	return newGuardedClient(5*time.Second, 0)
+}
+
+// newGuardedClient builds a client that refuses non-https and non-public
+// destinations. total is the overall request timeout; zero means none, in
+// which case the response-header timeout is relaxed to allow long polls.
+func newGuardedClient(dial, total time.Duration) *http.Client {
+	headerTimeout := 5 * time.Second
+	if total == 0 {
+		headerTimeout = 2 * time.Minute
+	}
+	dialer := &net.Dialer{Timeout: dial, Control: refuseNonPublic}
 	t := &http.Transport{
 		Proxy:                 nil,
 		DialContext:           dialer.DialContext,
@@ -51,11 +77,11 @@ func newDiscoveryClient() *http.Client {
 		MaxIdleConns:          32,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   5 * time.Second,
-		ResponseHeaderTimeout: 5 * time.Second,
+		ResponseHeaderTimeout: headerTimeout,
 	}
 	return &http.Client{
 		Transport: httpsOnly{t},
-		Timeout:   10 * time.Second,
+		Timeout:   total,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxDiscoveryRedirects {
 				return fmt.Errorf("%w: more than %d redirects", ErrDisallowedDestination, maxDiscoveryRedirects)

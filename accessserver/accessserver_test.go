@@ -232,6 +232,7 @@ func (f *fourParty) resource() http.Handler {
 
 func (f *fourParty) psClient() *aauth.PSClient {
 	c := aauth.NewPSClient(f.psURL, f.agent)
+	c.HTTPClient = http.DefaultClient // local test servers are plain http on loopback
 	c.PreferWaitSeconds = 2
 	if _, err := c.Discover(context.Background()); err != nil {
 		f.t.Fatal(err)

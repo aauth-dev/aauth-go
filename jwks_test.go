@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -308,5 +309,80 @@ func TestCacheLifetime(t *testing.T) {
 		if got := cacheLifetime(c.hdr, now); got != c.want {
 			t.Errorf("%v: %v, want %v", c.hdr, got, c.want)
 		}
+	}
+}
+
+// With every entry busy the cache refuses new issuers rather than growing
+// past MaxEntries.
+func TestJWKSCacheBoundHoldsWhenEntriesBusy(t *testing.T) {
+	cache := &JWKSCache{MaxEntries: 2}
+	var held []*jwksEntry
+	for _, iss := range []string{"https://a.example", "https://b.example"} {
+		// An entry handed out by entry is in use until released: a
+		// discovery in flight, or a request waiting for one.
+		e, err := cache.entry(iss, WellKnownAgent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, e)
+	}
+	for i := 0; i < 10; i++ {
+		_, err := cache.entry(fmt.Sprintf("https://new%d.example", i), WellKnownAgent)
+		if !errors.Is(err, ErrJWKSCacheFull) {
+			t.Fatalf("admission with all entries busy: %v, want ErrJWKSCacheFull", err)
+		}
+	}
+	if n := len(cache.entries); n != 2 {
+		t.Fatalf("entries = %d, want 2", n)
+	}
+	// Once one finishes, it can be evicted again.
+	cache.release(held[0])
+	if _, err := cache.entry("https://later.example", WellKnownAgent); err != nil {
+		t.Fatalf("after a fetch finished: %v", err)
+	}
+	if n := len(cache.entries); n != 2 {
+		t.Fatalf("entries = %d, want 2", n)
+	}
+}
+
+// A request waiting behind another discovery of the same issuer gives up
+// when its context ends.
+func TestJWKSCacheWaitHonorsContext(t *testing.T) {
+	cache := &JWKSCache{}
+	e, err := cache.entry("https://slow.example", WellKnownAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.mu.lock(context.Background()); err != nil { // the in-flight discovery
+		t.Fatal(err)
+	}
+	cache.release(e)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = cache.key(ctx, http.DefaultClient, "https://slow.example", WellKnownAgent, "k", false)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// An entry a caller holds cannot be evicted between entry returning it and
+// the caller locking it: otherwise that caller fetches into a detached entry
+// while a replacement is cached, and the bound is exceeded.
+func TestJWKSCacheNoEvictionOfHandedOutEntry(t *testing.T) {
+	cache := &JWKSCache{MaxEntries: 1}
+	a, err := cache.entry("https://a.example", WellKnownAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a has not been locked yet; a second issuer must still not evict it.
+	if _, err := cache.entry("https://b.example", WellKnownAgent); !errors.Is(err, ErrJWKSCacheFull) {
+		t.Fatalf("second issuer: %v, want ErrJWKSCacheFull", err)
+	}
+	if cache.entries["https://a.example\x00"+WellKnownAgent] != a {
+		t.Fatal("handed-out entry was evicted")
+	}
+	cache.release(a)
+	if _, err := cache.entry("https://b.example", WellKnownAgent); err != nil {
+		t.Fatalf("after release: %v", err)
 	}
 }
