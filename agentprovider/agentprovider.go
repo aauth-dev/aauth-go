@@ -100,6 +100,13 @@ type Registrar interface {
 	AuthorizeIssue(ctx context.Context, r *http.Request, req *IssueRequest) (*Registration, error)
 	// AuthorizeRefresh authorizes a two-key refresh: look up the
 	// enrollment by DurableID and re-check posture.
+	//
+	// The provider remembers the naming JWT's identifier only after this
+	// returns successfully, so that a key that is not enrolled cannot fill
+	// the replay cache. A captured request that is replayed therefore
+	// reaches AuthorizeRefresh again before the replay is rejected: the
+	// method must be a side-effect-free lookup, or idempotent, and must not
+	// consume one-time state.
 	AuthorizeRefresh(ctx context.Context, req *RefreshRequest) (*Registration, error)
 	// AuthorizeSubagent applies sub-agent policy: whether this parent may
 	// spawn, how many may be live, for how long.
