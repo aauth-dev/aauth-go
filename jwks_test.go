@@ -318,12 +318,11 @@ func TestJWKSCacheBoundHoldsWhenEntriesBusy(t *testing.T) {
 	cache := &JWKSCache{MaxEntries: 2}
 	var held []*jwksEntry
 	for _, iss := range []string{"https://a.example", "https://b.example"} {
+		// An entry handed out by entry is in use until released: a
+		// discovery in flight, or a request waiting for one.
 		e, err := cache.entry(iss, WellKnownAgent)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if !e.mu.tryLock() { // a discovery in flight
-			t.Fatal("fresh entry is locked")
 		}
 		held = append(held, e)
 	}
@@ -337,7 +336,7 @@ func TestJWKSCacheBoundHoldsWhenEntriesBusy(t *testing.T) {
 		t.Fatalf("entries = %d, want 2", n)
 	}
 	// Once one finishes, it can be evicted again.
-	held[0].mu.unlock()
+	cache.release(held[0])
 	if _, err := cache.entry("https://later.example", WellKnownAgent); err != nil {
 		t.Fatalf("after a fetch finished: %v", err)
 	}
@@ -354,11 +353,36 @@ func TestJWKSCacheWaitHonorsContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.mu.tryLock() // the in-flight discovery
+	if err := e.mu.lock(context.Background()); err != nil { // the in-flight discovery
+		t.Fatal(err)
+	}
+	cache.release(e)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	_, err = cache.key(ctx, http.DefaultClient, "https://slow.example", WellKnownAgent, "k", false)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// An entry a caller holds cannot be evicted between entry returning it and
+// the caller locking it: otherwise that caller fetches into a detached entry
+// while a replacement is cached, and the bound is exceeded.
+func TestJWKSCacheNoEvictionOfHandedOutEntry(t *testing.T) {
+	cache := &JWKSCache{MaxEntries: 1}
+	a, err := cache.entry("https://a.example", WellKnownAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a has not been locked yet; a second issuer must still not evict it.
+	if _, err := cache.entry("https://b.example", WellKnownAgent); !errors.Is(err, ErrJWKSCacheFull) {
+		t.Fatalf("second issuer: %v, want ErrJWKSCacheFull", err)
+	}
+	if cache.entries["https://a.example\x00"+WellKnownAgent] != a {
+		t.Fatal("handed-out entry was evicted")
+	}
+	cache.release(a)
+	if _, err := cache.entry("https://b.example", WellKnownAgent); err != nil {
+		t.Fatalf("after release: %v", err)
 	}
 }

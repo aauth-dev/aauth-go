@@ -129,6 +129,7 @@ type JWKSCache struct {
 
 type jwksEntry struct {
 	mu          entryLock
+	users       int // callers holding or awaiting the entry; guarded by JWKSCache.mu
 	set         JWKS
 	have        bool
 	fetched     time.Time // last successful fetch
@@ -158,15 +159,6 @@ func (l entryLock) lock(ctx context.Context) error {
 	}
 }
 
-func (l entryLock) tryLock() bool {
-	select {
-	case <-l:
-		return true
-	default:
-		return false
-	}
-}
-
 func (l entryLock) unlock() { l <- struct{}{} }
 
 // ErrJWKSCacheFull means a key set could not be fetched because the cache
@@ -189,8 +181,9 @@ func orDefault[T int | time.Duration](v, d T) T {
 }
 
 // entry returns the cache entry for (iss, dwk), creating it and evicting
-// the least recently attempted entry when the cache is full. When it is full
-// and every entry is mid-fetch, nothing can be evicted and the new issuer is
+// the least recently attempted idle entry when the cache is full. The caller
+// must [JWKSCache.release] the entry. When it is full and every entry is in
+// use, nothing can be evicted and the new issuer is
 // refused with [ErrJWKSCacheFull], so the bound holds against requests that
 // name many slow issuers.
 func (c *JWKSCache) entry(iss, dwk string) (*jwksEntry, error) {
@@ -201,20 +194,22 @@ func (c *JWKSCache) entry(iss, dwk string) (*jwksEntry, error) {
 	}
 	key := iss + "\x00" + dwk
 	if e, ok := c.entries[key]; ok {
+		e.users++
 		return e, nil
 	}
 	if len(c.entries) >= orDefault(c.MaxEntries, DefaultJWKSMaxEntries) {
 		var oldestKey string
 		var oldest time.Time
 		for k, e := range c.entries {
-			// TryLock: an entry mid-fetch is in use; skip it.
-			if !e.mu.tryLock() {
+			// An entry that has been handed to a caller (fetching, or
+			// waiting to) is in use; evicting it would detach that caller
+			// from the cache and let the bound be exceeded.
+			if e.users > 0 {
 				continue
 			}
-			t := e.lastAttempt
-			e.mu.unlock()
-			if oldestKey == "" || t.Before(oldest) {
-				oldestKey, oldest = k, t
+			// Idle, so no one holds its lock and lastAttempt is stable.
+			if oldestKey == "" || e.lastAttempt.Before(oldest) {
+				oldestKey, oldest = k, e.lastAttempt
 			}
 		}
 		if oldestKey == "" {
@@ -222,9 +217,16 @@ func (c *JWKSCache) entry(iss, dwk string) (*jwksEntry, error) {
 		}
 		delete(c.entries, oldestKey)
 	}
-	e := &jwksEntry{mu: newEntryLock()}
+	e := &jwksEntry{mu: newEntryLock(), users: 1}
 	c.entries[key] = e
 	return e, nil
+}
+
+// release returns an entry obtained from entry; it may then be evicted.
+func (c *JWKSCache) release(e *jwksEntry) {
+	c.mu.Lock()
+	e.users--
+	c.mu.Unlock()
 }
 
 // mayFetch applies the refresh floor and, after failures, exponential
@@ -264,6 +266,7 @@ func (c *JWKSCache) key(ctx context.Context, hc *http.Client, iss, dwk, kid stri
 	if err != nil {
 		return JWK{}, err
 	}
+	defer c.release(e)
 	if err := e.mu.lock(ctx); err != nil {
 		return JWK{}, err
 	}
