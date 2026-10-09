@@ -1,5 +1,9 @@
 # Getting started
 
+New to the protocol? [How AAuth works](how-aauth-works.md) explains the roles,
+and [Flows](flows.md) shows each exchange. This page is for installing the
+module and choosing a package.
+
 ## Drafts implemented
 
 | Draft | Version | Constant |

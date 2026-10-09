@@ -6,6 +6,8 @@ repeating it.
 
 | Guide | Read it to |
 |---|---|
+| [How AAuth works](how-aauth-works.md) | Learn the roles, tokens, and system shapes before reading any code |
+| [Flows](flows.md) | See a sequence diagram of each exchange: tokens, consent, four-party, missions, chaining, revocation |
 | [Getting started](getting-started.md) | Install the module, see which drafts it implements, and pick a package |
 | [Agent](agent.md) | Sign requests, obtain tokens through `Transport`, and use missions and permissions |
 | [Resource](resource.md) | Verify tokens and challenge for the next one |

@@ -16,7 +16,9 @@ Java).
 
 ## Where to start
 
-- New here? Read [Getting started](guides/getting-started.md), then the guide for your role:
+- New to AAuth? Read [How AAuth works](guides/how-aauth-works.md) for the roles and
+  systems, and [Flows](guides/flows.md) for a sequence diagram of each exchange.
+- Ready to build? Read [Getting started](guides/getting-started.md), then the guide for your role:
   [agent](guides/agent.md), [resource](guides/resource.md), or
   [hosted AP, PS, and AS](guides/servers.md).
 - Upgrading from v0.1? See [Migrating from v0.1](guides/migrating-from-v0.1.md).
