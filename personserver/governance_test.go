@@ -460,3 +460,49 @@ func TestMarshalBlobExtra(t *testing.T) {
 		t.Fatal("unmarshalable extra accepted")
 	}
 }
+
+// A permission or interaction request deferred to the person must not be
+// granted after its mission ended while it waited.
+func TestDeferredGovernanceAfterMissionEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		body       func(s256 string) any
+	}{
+		{"permission", "/ps/permission", func(s256 string) any {
+			return aauth.PermissionRequest{Action: "SendEmail", MissionS256: s256}
+		}},
+		{"interaction", "/ps/interaction", func(s256 string) any {
+			return aauth.InteractionRequest{Type: aauth.InteractionTypeQuestion, Question: "ok?", MissionS256: s256}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, g := newGovernedWorld(t)
+			ctx := context.Background()
+			m := w.seedMission(agentRefOf(w.agent), time.Time{})
+			g.set(func(g *governance) {
+				g.permission = func(*PermissionRequest) Decision { return DeferApproval() }
+				g.relay = func(*InteractionRequest) Decision { return DeferApproval() }
+			})
+			res := w.signed(w.agent, "", http.MethodPost, tc.path, tc.body(m.S256))
+			loc := res.Header.Get(aauth.HeaderLocation)
+			_ = res.Body.Close()
+			if res.StatusCode != http.StatusAccepted || loc == "" {
+				t.Fatalf("defer: %d %q", res.StatusCode, loc)
+			}
+			id := strings.TrimPrefix(loc, "/ps/pending/")
+			if _, err := w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.ps.Approve(ctx, id, Grant{Answer: "yes"}); err != nil {
+				t.Fatal(err)
+			}
+			p, err := w.ps.PendingRequest(ctx, id)
+			if err != nil || p.Result == nil {
+				t.Fatalf("pending %+v %v", p, err)
+			}
+			if p.Result.Status == http.StatusOK || strings.Contains(string(p.Result.Body), "granted") {
+				t.Fatalf("granted after termination: %d %s", p.Result.Status, p.Result.Body)
+			}
+		})
+	}
+}

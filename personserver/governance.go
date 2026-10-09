@@ -165,9 +165,15 @@ func (s *Server) completeGovernance(ctx context.Context, p *Pending, snap snapsh
 		}
 		res, err = s.acceptMissionAction(ctx, agent, m, p.MissionAction, snap.Body)
 	case KindPermission:
+		if err = s.requireLiveMission(ctx, p, agent); err != nil {
+			return s.failure(err)
+		}
 		res, err = jsonResult(http.StatusOK, aauth.PermissionResponse{Permission: aauth.PermissionGranted})
 		s.missionLog(ctx, p.MissionS256, LogPermission, p.Agent, map[string]any{"request": p.Permission, "permission": aauth.PermissionGranted})
 	case KindInteraction:
+		if err = s.requireLiveMission(ctx, p, agent); err != nil {
+			return s.failure(err)
+		}
 		res, err = jsonResult(http.StatusOK, aauth.InteractionResponse{Answer: g.Answer})
 		s.missionLog(ctx, p.MissionS256, LogInteraction, p.Agent, map[string]any{"request": p.Interaction, "answer": g.Answer})
 	default:
@@ -177,6 +183,18 @@ func (s *Server) completeGovernance(ctx context.Context, p *Pending, snap snapsh
 		return s.failure(err)
 	}
 	return res, nil, nil
+}
+
+// requireLiveMission fails unless the mission a deferred request belongs to
+// (if any) is still owned by agent, active, and unexpired. The request was
+// checked when it arrived, but the mission may have been terminated or may
+// have expired while it waited for approval.
+func (s *Server) requireLiveMission(ctx context.Context, p *Pending, agent *aauth.AgentClaims) error {
+	if p.MissionS256 == "" {
+		return nil
+	}
+	_, err := s.ownedMission(ctx, p.MissionS256, agentRef(agent))
+	return err
 }
 
 // serveMissionProposal is POST {mission_endpoint} (draft -11 §8.1).
