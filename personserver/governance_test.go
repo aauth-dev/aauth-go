@@ -758,3 +758,70 @@ func TestMissionCompletionRevokesTokens(t *testing.T) {
 		}
 	}
 }
+
+// failOnceUpdate is a store whose first update of one pending request fails,
+// as a transient storage error while a termination resolves it.
+type failOnceUpdate struct {
+	Store
+	mu   sync.Mutex
+	id   string
+	done bool
+}
+
+func (s *failOnceUpdate) UpdatePending(ctx context.Context, p *Pending) error {
+	s.mu.Lock()
+	fail := s.id != "" && p.ID == s.id && !s.done
+	if fail {
+		s.done = true
+	}
+	s.mu.Unlock()
+	if fail {
+		return errors.New("transient update failure")
+	}
+	return s.Store.UpdatePending(ctx, p)
+}
+
+// The residual window: an approval has passed its mission check, the
+// termination cannot resolve that request (a storage error), and the
+// approval then publishes. The write itself must refuse, so no grant is
+// published for a terminated mission.
+func TestApprovalRefusedAfterTerminationFailedToResolveIt(t *testing.T) {
+	var hook *logHook
+	var fo *failOnceUpdate
+	w, g := newGovernedWorldWith(t, func(c *Config) {
+		hook = &logHook{Store: c.Store}
+		fo = &failOnceUpdate{Store: hook}
+		c.Store = fo
+	})
+	ctx := context.Background()
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	g.set(func(g *governance) { g.permission = func(*PermissionRequest) Decision { return DeferApproval() } })
+	res := w.signed(w.agent, "", http.MethodPost, "/ps/permission", aauth.PermissionRequest{Action: "SendEmail", MissionS256: m.S256})
+	id := strings.TrimPrefix(res.Header.Get(aauth.HeaderLocation), "/ps/pending/")
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusAccepted {
+		t.Fatalf("defer: %d", res.StatusCode)
+	}
+	fo.mu.Lock()
+	fo.id = id
+	fo.mu.Unlock()
+
+	var termErr error
+	hook.fn = func() { _, termErr = w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked) }
+	if err := w.ps.Approve(ctx, id, Grant{}); !errors.Is(err, ErrResolved) {
+		t.Fatalf("approve: %v, want ErrResolved", err)
+	}
+	if termErr == nil || !strings.Contains(termErr.Error(), "transient update failure") {
+		t.Fatalf("termination err = %v, want the failed update reported", termErr)
+	}
+	p, err := w.ps.PendingRequest(ctx, id)
+	if err != nil || p.Result == nil {
+		t.Fatalf("pending %+v %v", p, err)
+	}
+	if p.Result.Status == http.StatusOK || strings.Contains(string(p.Result.Body), "granted") {
+		t.Fatalf("granted after termination: %d %s", p.Result.Status, p.Result.Body)
+	}
+	if !strings.Contains(string(p.Result.Body), aauth.MissionErrTerminated) {
+		t.Fatalf("result %s, want mission_terminated", p.Result.Body)
+	}
+}

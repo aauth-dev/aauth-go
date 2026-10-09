@@ -180,3 +180,48 @@ func TestMemoryStore(t *testing.T) {
 		t.Fatal(ps, err)
 	}
 }
+
+func TestMemoryStoreResolvePendingIfMissionActive(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	a := AgentRef{Issuer: "https://ap.example", Subject: "aauth:a@ap.example"}
+	if err := m.CreateMission(ctx, &MissionRecord{S256: "m1", Owner: a, Status: MissionActive}); err != nil {
+		t.Fatal(err)
+	}
+	p := &Pending{ID: "p1", Kind: KindPermission, MissionS256: "m1", State: StatePending}
+	if err := m.CreatePending(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	p, err := m.Pending(ctx, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.TerminateMission(ctx, "m1", "revoked"); err != nil {
+		t.Fatal(err)
+	}
+	p.State = StateDone
+	if err := m.ResolvePendingIfMissionActive(ctx, p); !errors.Is(err, ErrMissionTerminated) {
+		t.Fatalf("terminated mission: %v, want ErrMissionTerminated", err)
+	}
+	if cur, _ := m.Pending(ctx, "p1"); cur.State == StateDone {
+		t.Fatal("pending was resolved despite the terminated mission")
+	}
+
+	// Active mission: version-checked update.
+	if err := m.CreateMission(ctx, &MissionRecord{S256: "m2", Owner: a, Status: MissionActive}); err != nil {
+		t.Fatal(err)
+	}
+	q := &Pending{ID: "p2", Kind: KindPermission, MissionS256: "m2", State: StatePending}
+	if err := m.CreatePending(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	q, _ = m.Pending(ctx, "p2")
+	stale := *q
+	q.State = StateDone
+	if err := m.ResolvePendingIfMissionActive(ctx, q); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ResolvePendingIfMissionActive(ctx, &stale); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale version: %v, want ErrConflict", err)
+	}
+}

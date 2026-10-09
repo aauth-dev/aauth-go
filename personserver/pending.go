@@ -277,6 +277,12 @@ func (s *Server) changed(ctx context.Context, p *Pending) {
 // mutate loads pending id, applies fn, and stores the result, retrying on
 // version conflicts. fn returning an error aborts without storing.
 func (s *Server) mutate(ctx context.Context, id string, fn func(p *Pending) error) (*Pending, error) {
+	return s.mutateWith(ctx, id, fn, s.cfg.Store.UpdatePending)
+}
+
+// mutateWith is mutate storing the change through update, which a caller
+// publishing a grant makes [PendingStore.ResolvePendingIfMissionActive].
+func (s *Server) mutateWith(ctx context.Context, id string, fn func(p *Pending) error, update func(context.Context, *Pending) error) (*Pending, error) {
 	for range 8 {
 		p, err := s.cfg.Store.Pending(ctx, id)
 		if err != nil {
@@ -285,7 +291,7 @@ func (s *Server) mutate(ctx context.Context, id string, fn func(p *Pending) erro
 		if err := fn(p); err != nil {
 			return p, err
 		}
-		err = s.cfg.Store.UpdatePending(ctx, p)
+		err = update(ctx, p)
 		if errors.Is(err, ErrConflict) {
 			continue
 		}
@@ -758,8 +764,42 @@ func (s *Server) Approve(ctx context.Context, id string, g Grant) error {
 		})
 		return err
 	}
-	_, err = s.resolve(ctx, id, res)
-	return err
+	return s.resolveApproval(ctx, p, res)
+}
+
+// resolveApproval publishes the result of an approved request. A grant for a
+// request that belongs to a mission is stored only if the mission is still
+// active, atomically (the check in completeGovernance can be overtaken by a
+// termination); if it is not, the request ends as terminated instead and the
+// approval reports ErrResolved. A mission completion is exempt: it is what
+// ends the mission.
+func (s *Server) resolveApproval(ctx context.Context, p *Pending, res *Result) error {
+	guarded := p.MissionS256 != "" && (p.Kind == KindPermission || p.Kind == KindInteraction || p.Kind == KindMissionUpdate)
+	if !guarded {
+		_, err := s.resolve(ctx, p.ID, res)
+		return err
+	}
+	_, err := s.mutateWith(ctx, p.ID, func(p *Pending) error {
+		if !p.Open() {
+			return ErrResolved
+		}
+		p.State, p.Result, p.Question = StateDone, res, nil
+		return nil
+	}, s.cfg.Store.ResolvePendingIfMissionActive)
+	if !errors.Is(err, ErrMissionTerminated) {
+		return err
+	}
+	reason := ""
+	if m, merr := s.cfg.Store.Mission(ctx, p.MissionS256); merr == nil {
+		reason = m.TerminationReason
+	}
+	ended := errorResult(&aauth.MissionStatusError{
+		Code: aauth.MissionErrTerminated, MissionStatus: aauth.MissionStatusTerminated, TerminationReason: reason,
+	})
+	if _, rerr := s.resolve(ctx, p.ID, ended); rerr != nil && !errors.Is(rerr, ErrResolved) {
+		return rerr
+	}
+	return ErrResolved
 }
 
 // Deny resolves pending id as denied by the person or approver: denied

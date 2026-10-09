@@ -387,6 +387,24 @@ func (m *MemoryStore) UpdatePending(_ context.Context, p *Pending) error {
 	return m.putPending(p)
 }
 
+// ResolvePendingIfMissionActive implements PendingStore.
+func (m *MemoryStore) ResolvePendingIfMissionActive(_ context.Context, p *Pending) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mr, ok := m.missions[p.MissionS256]; !ok || mr.Status != MissionActive {
+		return ErrMissionTerminated
+	}
+	cur, err := m.getPending(p.ID)
+	if err != nil {
+		return err
+	}
+	if cur.Version != p.Version {
+		return ErrConflict
+	}
+	p.Version++
+	return m.putPending(p)
+}
+
 // PendingForResourceToken implements PendingStore.
 func (m *MemoryStore) PendingForResourceToken(_ context.Context, iss, jti string) ([]*Pending, error) {
 	m.mu.Lock()

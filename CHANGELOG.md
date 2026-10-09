@@ -159,8 +159,11 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
 - Deferred permission and interaction requests recheck their mission before
   completing, and terminating or expiring a mission resolves its open pending
   requests (first resolution wins), so an approval racing the termination
-  cannot end in `granted`. `PendingStore` gains `PendingForMission`; custom
-  stores must implement it.
+  cannot end in `granted`. `PendingStore` gains `PendingForMission` and
+  `ResolvePendingIfMissionActive`, which stores a granted result only while
+  the mission is still active, atomically, so an approval cannot publish a
+  grant after a termination even when the termination could not resolve it;
+  custom stores must implement both.
   Completing a mission does the same and also revokes the auth tokens issued
   under it, unless a concurrent termination won, in which case the completion
   reports the mission's actual status. If ending the pending requests fails,

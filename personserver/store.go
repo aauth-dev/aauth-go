@@ -304,6 +304,13 @@ type PendingStore interface {
 	// UpdatePending replaces p if its Version matches (ErrConflict
 	// otherwise) and increments p.Version.
 	UpdatePending(ctx context.Context, p *Pending) error
+	// ResolvePendingIfMissionActive is UpdatePending for a request that
+	// belongs to a mission (p.MissionS256), done only if that mission is
+	// still active: otherwise it returns ErrMissionTerminated and changes
+	// nothing. The mission check and the update MUST be one atomic step with
+	// respect to TerminateMission, so that a request is never resolved with a
+	// grant after its mission ended.
+	ResolvePendingIfMissionActive(ctx context.Context, p *Pending) error
 	// PendingForResourceToken returns the unresolved pending requests
 	// started for the resource token (iss, jti) (§11.12.4).
 	PendingForResourceToken(ctx context.Context, iss, jti string) ([]*Pending, error)
