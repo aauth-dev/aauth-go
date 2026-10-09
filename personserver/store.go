@@ -29,9 +29,12 @@ var (
 	// ErrRevoked means the person token at the root of a grant has been
 	// revoked, so an auth token issued under it was not recorded.
 	ErrRevoked = errors.New("personserver: person token revoked")
-	// ErrMissionTerminated means the mission an auth token was issued
-	// under has been terminated, so the auth token was not recorded.
+	// ErrMissionTerminated means the mission a token was issued under has
+	// been terminated, so the token was not recorded.
 	ErrMissionTerminated = errors.New("personserver: mission terminated")
+	// ErrBindingRevoked means the agent's binding no longer names the
+	// person a person token was issued for, so the token was not recorded.
+	ErrBindingRevoked = errors.New("personserver: agent binding revoked")
 )
 
 // AgentRef identifies an agent the way a PS recognizes it: by its agent
@@ -145,6 +148,19 @@ type TokenStore interface {
 	// ErrNotFound.
 	AgentToken(ctx context.Context, iss, jti string) (*AgentTokenRecord, error)
 
+	// RecordPersonToken records a person token the PS issued, unless
+	// issuing it is no longer allowed: for a token not issued on an
+	// upstream token, the agent r.Agent is no longer bound to r.Person
+	// (ErrBindingRevoked); for one issued on an upstream token, that token
+	// (r.UpstreamIssuer, r.UpstreamJTI) has been revoked (ErrRevoked); and
+	// in either case its mission r.MissionS256 has been terminated
+	// (ErrMissionTerminated). Then it records nothing. As with
+	// RecordAuthToken, the checks and the insert MUST be atomic with
+	// respect to Unbind, Revoke and TerminateMission, so that a revocation
+	// stored before the insert is seen here and one stored after it finds
+	// r through TokensForAgent, PersonTokensFromUpstream or the mission's
+	// tokens. Otherwise an issuance racing a revocation escapes the
+	// cascade (§11.12.4).
 	RecordPersonToken(ctx context.Context, r PersonTokenRecord) error
 	// PersonToken returns the issued person token jti, or ErrNotFound.
 	PersonToken(ctx context.Context, jti string) (*PersonTokenRecord, error)

@@ -207,7 +207,19 @@ func (s *Server) mintPersonToken(ctx context.Context, j *personTokenJob, g Grant
 	if j.upstream != nil {
 		rec.UpstreamIssuer, rec.UpstreamJTI = j.upstream.issuer, j.upstream.jti
 	}
-	if err := s.cfg.Store.RecordPersonToken(ctx, rec); err != nil {
+	// Unbound, revoked or terminated while the request was being decided:
+	// the token is never delivered (§11.12.4).
+	switch err := s.cfg.Store.RecordPersonToken(ctx, rec); {
+	case errors.Is(err, ErrBindingRevoked):
+		return "", nil, &aauth.ProblemError{Status: http.StatusForbidden, Code: aauth.PollErrDenied, Detail: "the agent's binding to the person was revoked"}
+	case errors.Is(err, ErrRevoked):
+		return "", nil, &aauth.TokenError{Code: aauth.TokenErrRevokedUpstreamToken, Err: errors.New("the upstream token was revoked")}
+	case errors.Is(err, ErrMissionTerminated):
+		if _, merr := s.activeMission(ctx, claims.MissionS256); merr != nil {
+			return "", nil, merr
+		}
+		return "", nil, &aauth.MissionStatusError{Code: aauth.MissionErrTerminated, MissionStatus: aauth.MissionStatusTerminated}
+	case err != nil:
 		return "", nil, storeErr("record person token", err)
 	}
 	s.missionLog(ctx, claims.MissionS256, LogTokenRequest, agentRef(j.agent), map[string]any{

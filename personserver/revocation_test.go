@@ -428,3 +428,67 @@ func authJTIs(rs []AuthTokenRecord) []string {
 	}
 	return out
 }
+
+// A binding revoked while a person token request is being decided must stop
+// that request's token, not only later ones.
+func TestPersonTokenIssuanceRacingBindingRevocation(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t, nil)
+	w.setDecide(func(*TokenRequest) Decision { return Allow(Grant{Person: "alice"}) })
+	if _, err := w.psClient(w.agent).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: w.resURL}); err != nil {
+		t.Fatal(err) // binds the agent to alice
+	}
+	ref := agentRefOf(w.agent)
+	w.setDecide(func(*TokenRequest) Decision {
+		if _, err := w.ps.RevokeBinding(ctx, ref); err != nil {
+			t.Errorf("revoke binding: %v", err)
+		}
+		return Allow(Grant{}) // names no new person
+	})
+	before, _, err := w.store.TokensForAgent(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, err := w.psClient(w.agent).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: "https://other.example"})
+	if err == nil {
+		t.Fatalf("issued a person token for a removed binding: %+v", pr)
+	}
+	after, _, err := w.store.TokensForAgent(ctx, ref)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("recorded %d person tokens after the binding was revoked (had %d): %v", len(after), len(before), err)
+	}
+	if _, err := w.store.BoundPerson(ctx, ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("binding survived: %v", err)
+	}
+}
+
+func TestMemoryStoreRecordPersonTokenGuards(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	a := AgentRef{Issuer: "https://ap.example", Subject: "aauth:a@ap.example"}
+	exp := time.Now().Add(time.Hour)
+	if err := m.RecordPersonToken(ctx, PersonTokenRecord{JTI: "p0", Agent: a, Person: "alice", Exp: exp}); !errors.Is(err, ErrBindingRevoked) {
+		t.Fatalf("unbound agent: %v", err)
+	}
+	if err := m.Bind(ctx, a, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RecordPersonToken(ctx, PersonTokenRecord{JTI: "p1", Agent: a, Person: "alice", Exp: exp}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RecordPersonToken(ctx, PersonTokenRecord{JTI: "p2", Agent: a, Person: "bob", Exp: exp}); !errors.Is(err, ErrBindingRevoked) {
+		t.Fatalf("other person: %v", err)
+	}
+	// A chained token needs no binding, but not a revoked upstream token.
+	chained := PersonTokenRecord{JTI: "p3", Agent: AgentRef{Issuer: "https://r1.example", Subject: "r1"}, Person: "alice", Exp: exp, UpstreamIssuer: "https://ps.example", UpstreamJTI: "u1"}
+	if err := m.Revoke(ctx, "https://ps.example", "u1", exp); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RecordPersonToken(ctx, chained); !errors.Is(err, ErrRevoked) {
+		t.Fatalf("revoked upstream: %v", err)
+	}
+	chained.UpstreamJTI = "u2"
+	if err := m.RecordPersonToken(ctx, chained); err != nil {
+		t.Fatalf("chained: %v", err)
+	}
+}

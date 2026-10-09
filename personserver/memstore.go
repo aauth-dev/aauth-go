@@ -117,6 +117,16 @@ func (m *MemoryStore) AgentToken(_ context.Context, iss, jti string) (*AgentToke
 func (m *MemoryStore) RecordPersonToken(_ context.Context, r PersonTokenRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if r.UpstreamJTI != "" {
+		if _, ok := m.revoked[[2]string{r.UpstreamIssuer, r.UpstreamJTI}]; ok {
+			return ErrRevoked
+		}
+	} else if p, ok := m.bindings[r.Agent]; !ok || p != r.Person {
+		return ErrBindingRevoked
+	}
+	if mr, ok := m.missions[r.MissionS256]; ok && r.MissionS256 != "" && mr.Status == MissionTerminated {
+		return ErrMissionTerminated
+	}
 	r.PresentedTo = slices.Clone(r.PresentedTo)
 	m.persons[r.JTI] = r
 	return nil
