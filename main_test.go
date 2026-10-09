@@ -11,5 +11,6 @@ import (
 // tests the guarded client directly.
 func TestMain(m *testing.M) {
 	defaultDiscoveryClient = http.DefaultClient
+	defaultEgressClient = http.DefaultClient
 	os.Exit(m.Run())
 }

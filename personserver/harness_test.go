@@ -177,6 +177,7 @@ func (w *world) advance(d time.Duration) {
 // psClient is a PS client for agent with short polling.
 func (w *world) psClient(agent *aauth.Agent) *aauth.PSClient {
 	c := aauth.NewPSClient(w.psURL, agent)
+	c.HTTPClient = http.DefaultClient // local test servers are plain http on loopback
 	c.PreferWaitSeconds = 2
 	if _, err := c.Discover(context.Background()); err != nil {
 		w.t.Fatal(err)

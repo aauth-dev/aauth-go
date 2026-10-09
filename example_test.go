@@ -18,6 +18,7 @@ func Example() {
 	agent, _ := aauth.NewAgent(id, aauth.WithPersonServer("http://127.0.0.1:7421"))
 
 	ps := aauth.NewPSClient("http://127.0.0.1:7421", agent)
+	ps.HTTPClient = http.DefaultClient // local development: the default client refuses http and loopback
 	_, err := ps.RequestPermission(context.Background(), aauth.PermissionRequest{
 		Action:      "WriteFile",
 		Description: "write the deploy config",

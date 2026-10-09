@@ -40,7 +40,11 @@ type PSClient struct {
 	MissionEndpoint string
 	// Agent is the identity this client acts as. Required.
 	Agent *Agent
-	// HTTPClient makes requests; nil uses http.DefaultClient.
+	// HTTPClient makes requests; nil uses [EgressClient], which reaches only
+	// public https destinations. The PS may be named by an upstream token
+	// and advertises its own endpoints, so a client that reaches internal
+	// addresses is an explicit opt-in: set HTTPClient (for example to
+	// http.DefaultClient in local development).
 	HTTPClient *http.Client
 	// PreferWaitSeconds sets `Prefer: wait=N` on requests that may defer.
 	PreferWaitSeconds int
@@ -64,9 +68,18 @@ type PSClient struct {
 	persons map[personCacheKey]cachedToken // person token cache (§7.1)
 }
 
-// NewPSClient returns a client with sane defaults.
+// NewPSClient returns a client with sane defaults. Its HTTPClient is nil,
+// so requests go through [EgressClient]; see [PSClient.HTTPClient].
 func NewPSClient(baseURL string, agent *Agent) *PSClient {
-	return &PSClient{BaseURL: baseURL, Agent: agent, HTTPClient: http.DefaultClient, PreferWaitSeconds: 45}
+	return &PSClient{BaseURL: baseURL, Agent: agent, PreferWaitSeconds: 45}
+}
+
+// httpClient returns HTTPClient, or the guarded default.
+func (c *PSClient) httpClient() *http.Client {
+	if c.HTTPClient != nil {
+		return c.HTTPClient
+	}
+	return defaultEgressClient
 }
 
 // Discover fetches the PS's metadata from {BaseURL}/.well-known/aauth-person.json
@@ -74,7 +87,7 @@ func NewPSClient(baseURL string, agent *Agent) *PSClient {
 // every endpoint not already set.
 func (c *PSClient) Discover(ctx context.Context) (*PersonServerMetadata, error) {
 	var md PersonServerMetadata
-	if err := FetchMetadata(ctx, c.HTTPClient, c.BaseURL, WellKnownPerson, &md); err != nil {
+	if err := FetchMetadata(ctx, c.httpClient(), c.BaseURL, WellKnownPerson, &md); err != nil {
 		return nil, err
 	}
 	if err := md.Validate(); err != nil {
@@ -173,13 +186,9 @@ func (c *PSClient) post(ctx context.Context, endpoint string, payload any, follo
 		return nil, fmt.Errorf("aauth: sign: %w", err)
 	}
 	if follow {
-		return DoDeferred(ctx, c.HTTPClient, req, c.deferredOptions())
+		return DoDeferred(ctx, c.httpClient(), req, c.deferredOptions())
 	}
-	hc := c.HTTPClient
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	return hc.Do(req)
+	return c.httpClient().Do(req)
 }
 
 // readErrorBody reads a bounded prefix of a non-success response body for
