@@ -203,7 +203,10 @@ func (s *Server) mintPersonToken(ctx context.Context, j *personTokenJob, g Grant
 	rec := PersonTokenRecord{
 		JTI: claims.ID, Resource: j.req.Resource, Exp: claims.ExpiresAt.Time,
 		Agent: agentRef(j.agent), Subagent: agentRef(j.subagent), Person: person, Subject: sub,
-		MissionS256: claims.MissionS256,
+		MissionS256: claims.MissionS256, AgentJTI: j.agent.ID,
+	}
+	if j.subagent != nil {
+		rec.SubagentJTI = j.subagent.ID
 	}
 	if j.upstream != nil {
 		rec.UpstreamIssuer, rec.UpstreamJTI = j.upstream.issuer, j.upstream.jti
@@ -213,6 +216,14 @@ func (s *Server) mintPersonToken(ctx context.Context, j *personTokenJob, g Grant
 	switch err := s.cfg.Store.RecordPersonToken(ctx, rec); {
 	case errors.Is(err, ErrBindingRevoked):
 		return "", nil, &aauth.ProblemError{Status: http.StatusForbidden, Code: aauth.PollErrDenied, Detail: "the agent's binding to the person was revoked"}
+	case errors.Is(err, ErrAgentRevoked):
+		// The credential the request was made with was revoked meanwhile.
+		if j.subagent != nil {
+			if revoked, _ := s.cfg.Store.IsRevoked(ctx, j.subagent.Issuer, j.subagent.ID); revoked {
+				return "", nil, &aauth.TokenError{Code: aauth.TokenErrRevokedSubagentToken}
+			}
+		}
+		return "", nil, &aauth.ProblemError{Status: http.StatusUnauthorized, Code: aauth.SigErrRevokedJWT, Detail: "the agent token was revoked by its agent provider"}
 	case errors.Is(err, ErrRevoked):
 		return "", nil, &aauth.TokenError{Code: aauth.TokenErrRevokedUpstreamToken, Err: errors.New("the upstream token was revoked")}
 	case errors.Is(err, ErrMissionTerminated):

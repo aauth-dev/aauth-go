@@ -293,9 +293,15 @@ func (s *Server) TerminateMission(ctx context.Context, s256, reason string) ([]a
 		return nil, err
 	}
 	s.missionLog(ctx, s256, LogTermination, AgentRef{}, map[string]string{"reason": reason})
-	if err := s.resolveMissionPending(ctx, s256, reason); err != nil {
-		return nil, err
-	}
+	// The mission is terminated whether or not its pending requests can be
+	// ended, so the token cascade runs regardless; both errors are reported.
+	pendingErr := s.resolveMissionPending(ctx, s256, reason)
+	out, tokensErr := s.revokeMissionTokens(ctx, s256)
+	return out, errors.Join(pendingErr, tokensErr)
+}
+
+// revokeMissionTokens revokes the auth tokens issued under mission s256.
+func (s *Server) revokeMissionTokens(ctx context.Context, s256 string) ([]aauth.RevocationOutcome, error) {
 	auths, err := s.cfg.Store.AuthTokensForMission(ctx, s256)
 	if err != nil {
 		return nil, storeErr("load auth tokens", err)

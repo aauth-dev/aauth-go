@@ -152,13 +152,17 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
   upstream token. Reaching other destinations is an explicit `HTTPClient`.
 - Sub-agent tokens verified as a `subagent_token` parameter are recorded, so
   an agent provider revoking one cascades to the sub-agent's grants. Agent
-  tokens are rechecked for revocation after being recorded, closing the window
-  between the check and the insert.
+  tokens are rechecked for revocation after being recorded, and
+  `RecordPersonToken` refuses (`ErrAgentRevoked`) a person token requested
+  with an agent or sub-agent token revoked meanwhile (`PersonTokenRecord`
+  gains `AgentJTI` and `SubagentJTI`; custom stores must check them).
 - Deferred permission and interaction requests recheck their mission before
   completing, and terminating or expiring a mission resolves its open pending
   requests (first resolution wins), so an approval racing the termination
   cannot end in `granted`. `PendingStore` gains `PendingForMission`; custom
   stores must implement it.
+  If ending the pending requests fails, `TerminateMission` still revokes the
+  mission's tokens and returns both errors.
 - `TokenStore.RecordPersonToken` must now refuse (`ErrBindingRevoked`,
   `ErrRevoked`, `ErrMissionTerminated`) atomically with `Unbind`, `Revoke`
   and `TerminateMission`, so an issuance racing a revocation cannot escape

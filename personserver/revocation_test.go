@@ -51,6 +51,11 @@ func (f *fakeRevoker) revoked(jti string) bool {
 }
 
 func newRevocationWorld(t *testing.T, accept func(aauth.ServerCaller) bool) (*world, *fakeRevoker) {
+	return newRevocationWorldWith(t, accept, nil)
+}
+
+// newRevocationWorldWith is newRevocationWorld with a further Config hook.
+func newRevocationWorldWith(t *testing.T, accept func(aauth.ServerCaller) bool, hook func(*Config)) (*world, *fakeRevoker) {
 	f := &fakeRevoker{fail: map[string]error{}}
 	var w *world
 	w = newWorld(t, func(c *Config) {
@@ -63,6 +68,9 @@ func newRevocationWorld(t *testing.T, accept func(aauth.ServerCaller) bool) (*wo
 		})
 		if accept != nil {
 			c.AcceptRevocation = func(_ context.Context, sc aauth.ServerCaller) bool { return accept(sc) }
+		}
+		if hook != nil {
+			hook(c)
 		}
 	})
 	return w, f
@@ -583,5 +591,118 @@ func TestAgentTokenRevokedWhileBeingRecorded(t *testing.T) {
 	_ = res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("agent token revoked while recorded: %d, want 401", res.StatusCode)
+	}
+}
+
+// revokeBeforePersonRecord revokes the credentials a person token was
+// requested with just before it is recorded, as when the agent provider's
+// revocation arrives after the recheck in authenticate and its cascade has
+// already finished.
+type revokeBeforePersonRecord struct {
+	Store
+	revoke atomic.Bool
+}
+
+func (s *revokeBeforePersonRecord) RecordPersonToken(ctx context.Context, r PersonTokenRecord) error {
+	if s.revoke.Load() {
+		for _, c := range []struct{ iss, jti string }{{r.Agent.Issuer, r.AgentJTI}, {r.Subagent.Issuer, r.SubagentJTI}} {
+			if c.jti == "" {
+				continue
+			}
+			if err := s.Revoke(ctx, c.iss, c.jti, r.Exp); err != nil {
+				return err
+			}
+		}
+	}
+	return s.Store.RecordPersonToken(ctx, r)
+}
+
+// A person token must not be recorded for a request whose agent token or
+// sub-agent token was revoked after the earlier checks: that cascade has
+// already run and would never see it.
+func TestPersonTokenIssuanceRacingAgentTokenRevocation(t *testing.T) {
+	ctx := context.Background()
+	var rs *revokeBeforePersonRecord
+	w := newWorld(t, func(c *Config) {
+		rs = &revokeBeforePersonRecord{Store: c.Store}
+		c.Store = rs
+	})
+	rs.revoke.Store(true)
+
+	// The signing agent's token.
+	res := w.signed(w.agent, "", http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL})
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("agent token revoked before recording: %d, want 401", res.StatusCode)
+	}
+
+	// A sub-agent token presented as a parameter, with the parent's own
+	// token left alone by revoking only the sub-agent's.
+	sub, err := w.agent.NewSubAgent("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subTok, err := sub.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentTok, err := w.agent.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.revoke.Store(false)
+	res = w.signed(w.agent, parentTok, http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL})
+	_ = res.Body.Close()
+	// Revoke only the sub-agent token inside the insert.
+	w2 := rs
+	w2.revoke.Store(true)
+	res = w.signed(w.agent, parentTok, http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL, SubagentToken: subTok})
+	if res.StatusCode == http.StatusOK {
+		_ = res.Body.Close()
+		t.Fatal("person token issued with a sub-agent token revoked before recording")
+	}
+	_ = res.Body.Close()
+
+	rs.revoke.Store(false)
+	persons, _, err := w.store.TokensForAgent(ctx, agentRefOf(w.agent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range persons {
+		if p.AgentJTI != "" && p.SubagentJTI != "" {
+			t.Fatalf("recorded a person token under a revoked sub-agent token: %+v", p)
+		}
+	}
+}
+
+// failingMissionPending is a store whose pending-request lookup fails.
+type failingMissionPending struct{ Store }
+
+func (failingMissionPending) PendingForMission(context.Context, string) ([]*Pending, error) {
+	return nil, errors.New("pending store unavailable")
+}
+
+// A failure ending a terminated mission's pending requests must not leave
+// its already-issued tokens valid: the cascade still runs and both errors
+// are reported.
+func TestTerminateMissionCascadesDespitePendingFailure(t *testing.T) {
+	ctx := context.Background()
+	w, f := newRevocationWorldWith(t, nil, func(c *Config) { c.Store = failingMissionPending{c.Store} })
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	tr := w.transport(w.agent, w.psClient(w.agent))
+	tr.MissionS256 = m.S256
+	get(t, tr, w.resURL+"/m")
+	auths, err := w.store.AuthTokensForMission(ctx, m.S256)
+	if err != nil || len(auths) == 0 {
+		t.Fatalf("auth tokens under the mission: %d %v", len(auths), err)
+	}
+	_, err = w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked)
+	if err == nil || !strings.Contains(err.Error(), "pending store unavailable") {
+		t.Fatalf("TerminateMission err = %v, want the pending failure reported", err)
+	}
+	for _, a := range auths {
+		if !f.revoked(a.JTI) {
+			t.Errorf("auth token %s not revoked after the pending cleanup failed", a.JTI)
+		}
 	}
 }

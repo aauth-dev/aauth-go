@@ -124,6 +124,16 @@ func (m *MemoryStore) RecordPersonToken(_ context.Context, r PersonTokenRecord) 
 	} else if p, ok := m.bindings[r.Agent]; !ok || p != r.Person {
 		return ErrBindingRevoked
 	}
+	if r.AgentJTI != "" {
+		if _, ok := m.revoked[[2]string{r.Agent.Issuer, r.AgentJTI}]; ok {
+			return ErrAgentRevoked
+		}
+	}
+	if r.SubagentJTI != "" {
+		if _, ok := m.revoked[[2]string{r.Subagent.Issuer, r.SubagentJTI}]; ok {
+			return ErrAgentRevoked
+		}
+	}
 	if mr, ok := m.missions[r.MissionS256]; ok && r.MissionS256 != "" && mr.Status == MissionTerminated {
 		return ErrMissionTerminated
 	}

@@ -32,6 +32,10 @@ var (
 	// ErrMissionTerminated means the mission a token was issued under has
 	// been terminated, so the token was not recorded.
 	ErrMissionTerminated = errors.New("personserver: mission terminated")
+	// ErrAgentRevoked means the agent token (or sub-agent token) a person
+	// token was requested with has been revoked, so the person token was not
+	// recorded.
+	ErrAgentRevoked = errors.New("personserver: agent token revoked")
 	// ErrBindingRevoked means the agent's binding no longer names the
 	// person a person token was issued for, so the token was not recorded.
 	ErrBindingRevoked = errors.New("personserver: agent binding revoked")
@@ -107,8 +111,14 @@ type PersonTokenRecord struct {
 	Exp      time.Time `json:"exp"`
 	Agent    AgentRef  `json:"agent"`              // the agent that requested it
 	Subagent AgentRef  `json:"subagent,omitempty"` // the sub-agent whose key it binds, if any
-	Person   string    `json:"person"`
-	Subject  string    `json:"sub"`
+	// AgentJTI and SubagentJTI are the jti of the agent token that signed
+	// the request and of the subagent_token parameter, if any; the issuers
+	// are Agent.Issuer and Subagent.Issuer. They let RecordPersonToken
+	// refuse a token requested with a credential revoked meanwhile.
+	AgentJTI    string `json:"agent_jti,omitempty"`
+	SubagentJTI string `json:"subagent_jti,omitempty"`
+	Person      string `json:"person"`
+	Subject     string `json:"sub"`
 	// MissionS256 is the mission the token was issued under.
 	MissionS256 string `json:"mission_s256,omitempty"`
 	// UpstreamIssuer and UpstreamJTI name the upstream token of a call
@@ -152,9 +162,11 @@ type TokenStore interface {
 	// issuing it is no longer allowed: for a token not issued on an
 	// upstream token, the agent r.Agent is no longer bound to r.Person
 	// (ErrBindingRevoked); for one issued on an upstream token, that token
-	// (r.UpstreamIssuer, r.UpstreamJTI) has been revoked (ErrRevoked); and
-	// in either case its mission r.MissionS256 has been terminated
-	// (ErrMissionTerminated). Then it records nothing. As with
+	// (r.UpstreamIssuer, r.UpstreamJTI) has been revoked (ErrRevoked); in
+	// either case the agent token (Agent.Issuer, r.AgentJTI) or sub-agent
+	// token (Subagent.Issuer, r.SubagentJTI) it was requested with has been
+	// revoked (ErrAgentRevoked), or its mission r.MissionS256 has been
+	// terminated (ErrMissionTerminated). Then it records nothing. As with
 	// RecordAuthToken, the checks and the insert MUST be atomic with
 	// respect to Unbind, Revoke and TerminateMission, so that a revocation
 	// stored before the insert is seen here and one stored after it finds
