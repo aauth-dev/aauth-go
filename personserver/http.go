@@ -2,6 +2,7 @@ package personserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,14 +61,43 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*caller, 
 		return nil, false
 	}
 	if claims.ID != "" {
-		if err := s.cfg.Store.RecordAgentToken(r.Context(), AgentTokenRecord{
+		err := s.recordAgentToken(r.Context(), AgentTokenRecord{
 			Issuer: claims.Issuer, JTI: claims.ID, Subject: claims.Subject, Exp: expOf(claims.ExpiresAt),
-		}); err != nil {
+		})
+		if errors.Is(err, errAgentTokenRevoked) {
+			aauth.WriteSignatureError(w, aauth.SignatureError{Code: aauth.SigErrRevokedJWT}, "the agent token was revoked by its agent provider")
+			return nil, false
+		}
+		if err != nil {
 			s.serverError(w, r, "record agent token", err)
 			return nil, false
 		}
 	}
 	return &caller{claims: claims, token: tok, ref: AgentRef{Issuer: claims.Issuer, Subject: claims.Subject}, at: at}, true
+}
+
+// errAgentTokenRevoked means an agent token was revoked while it was being
+// recorded.
+var errAgentTokenRevoked = errors.New("personserver: agent token revoked")
+
+// recordAgentToken records an accepted agent token and then looks its
+// revocation up again. The caller checked revocation before this, but a
+// revocation stored between that check and the insert would find no record
+// to cascade from (§11.12.4) while the request went on to be granted.
+// Recording first and rechecking closes it: a revocation stored before the
+// insert is seen here, and one stored after finds the record.
+func (s *Server) recordAgentToken(ctx context.Context, r AgentTokenRecord) error {
+	if err := s.cfg.Store.RecordAgentToken(ctx, r); err != nil {
+		return err
+	}
+	revoked, err := s.cfg.Store.IsRevoked(ctx, r.Issuer, r.JTI)
+	if err != nil {
+		return err
+	}
+	if revoked {
+		return errAgentTokenRevoked
+	}
+	return nil
 }
 
 // readBody reads the (bounded) request body.

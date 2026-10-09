@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -453,6 +454,9 @@ func TestPersonTokenIssuanceRacingBindingRevocation(t *testing.T) {
 	if err == nil {
 		t.Fatalf("issued a person token for a removed binding: %+v", pr)
 	}
+	if !strings.Contains(err.Error(), "binding") || strings.Contains(err.Error(), aauth.TokenErrServerError) {
+		t.Fatalf("refusal = %v, want a denial naming the revoked binding", err)
+	}
 	after, _, err := w.store.TokensForAgent(ctx, ref)
 	if err != nil || len(after) != len(before) {
 		t.Fatalf("recorded %d person tokens after the binding was revoked (had %d): %v", len(after), len(before), err)
@@ -490,5 +494,94 @@ func TestMemoryStoreRecordPersonTokenGuards(t *testing.T) {
 	chained.UpstreamJTI = "u2"
 	if err := m.RecordPersonToken(ctx, chained); err != nil {
 		t.Fatalf("chained: %v", err)
+	}
+	// A terminated mission, for bound and chained tokens alike.
+	if err := m.CreateMission(ctx, &MissionRecord{S256: "m1", Owner: a, Status: MissionActive}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.TerminateMission(ctx, "m1", aauth.TerminationRevoked); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []PersonTokenRecord{
+		{JTI: "p4", Agent: a, Person: "alice", Exp: exp, MissionS256: "m1"},
+		{JTI: "p5", Agent: chained.Agent, Person: "alice", Exp: exp, UpstreamIssuer: "https://ps.example", UpstreamJTI: "u3", MissionS256: "m1"},
+	} {
+		if err := m.RecordPersonToken(ctx, r); !errors.Is(err, ErrMissionTerminated) {
+			t.Fatalf("%s under a terminated mission: %v", r.JTI, err)
+		}
+	}
+}
+
+// A mission terminated while a person token request is being decided must
+// stop that request's token.
+func TestPersonTokenIssuanceRacingMissionTermination(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t, nil)
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	w.setDecide(func(*TokenRequest) Decision {
+		if _, err := w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked); err != nil {
+			t.Errorf("terminate: %v", err)
+		}
+		return Allow(Grant{Person: "alice"})
+	})
+	_, err := w.psClient(w.agent).RequestPersonToken(ctx, aauth.PersonTokenRequest{Resource: w.resURL, MissionS256: m.S256})
+	var mse *aauth.MissionStatusError
+	if !errors.As(err, &mse) || mse.TerminationReason != aauth.TerminationRevoked {
+		t.Fatalf("issued during termination: %v", err)
+	}
+	persons, _, err := w.store.TokensForAgent(ctx, agentRefOf(w.agent))
+	if err != nil || len(persons) != 0 {
+		t.Fatalf("recorded %d person tokens under the terminated mission (%v)", len(persons), err)
+	}
+}
+
+// revokeBeforeRecord is a store whose insert of an agent token for subject
+// is preceded by a revocation of that token, as when a revocation arrives
+// between the PS checking revocation and recording the token.
+type revokeBeforeRecord struct {
+	Store
+	subject atomic.Value // string
+}
+
+func (s *revokeBeforeRecord) RecordAgentToken(ctx context.Context, r AgentTokenRecord) error {
+	if sub, _ := s.subject.Load().(string); sub != "" && sub == r.Subject {
+		if err := s.Store.Revoke(ctx, r.Issuer, r.JTI, r.Exp); err != nil {
+			return err
+		}
+	}
+	return s.Store.RecordAgentToken(ctx, r)
+}
+
+// A revocation that lands between the revocation check and the insert of an
+// agent token would find no record to cascade from, so the token must be
+// refused: recording is followed by a recheck.
+func TestAgentTokenRevokedWhileBeingRecorded(t *testing.T) {
+	var rs *revokeBeforeRecord
+	w := newWorld(t, func(c *Config) {
+		rs = &revokeBeforeRecord{Store: c.Store}
+		c.Store = rs
+	})
+	sub, err := w.agent.NewSubAgent("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The sub-agent token a parent presents as a parameter.
+	subTok, err := sub.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.subject.Store(sub.ID.String())
+	res := w.signed(w.agent, "", http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL, SubagentToken: subTok})
+	if got := errorCode(t, res); got != aauth.TokenErrRevokedSubagentToken {
+		t.Fatalf("sub-agent token revoked while recorded: %q", got)
+	}
+
+	// The signing agent's own token.
+	rs.subject.Store(w.agent.ID.String())
+	res = w.signed(w.agent, "", http.MethodPost, "/ps/person", aauth.PersonTokenRequest{Resource: w.resURL})
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("agent token revoked while recorded: %d, want 401", res.StatusCode)
 	}
 }

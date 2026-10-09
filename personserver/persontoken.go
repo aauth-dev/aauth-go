@@ -141,7 +141,8 @@ func (s *Server) issuePersonToken(ctx context.Context, j *personTokenJob, g Gran
 		return pollError(aauth.PollErrExpired, err.Error()), nil
 	}
 	if err != nil {
-		return nil, err
+		res, _, ferr := s.failure(err) // typed refusals reach the agent as such
+		return res, ferr
 	}
 	return jsonResult(http.StatusOK, aauth.PersonTokenResponse{
 		PersonToken: tok, ExpiresIn: int64(claims.ExpiresAt.Sub(now) / time.Second),
@@ -296,9 +297,12 @@ func (s *Server) verifySubagent(ctx context.Context, token string, agent *aauth.
 	// agent provider revokes it by (iss, jti), and the cascade needs the
 	// agent identity behind that pair (§11.12.4).
 	if sub.ID != "" {
-		if err := s.cfg.Store.RecordAgentToken(ctx, AgentTokenRecord{
+		if err := s.recordAgentToken(ctx, AgentTokenRecord{
 			Issuer: sub.Issuer, JTI: sub.ID, Subject: sub.Subject, Exp: expOf(sub.ExpiresAt),
 		}); err != nil {
+			if errors.Is(err, errAgentTokenRevoked) {
+				return nil, &aauth.TokenError{Code: aauth.TokenErrRevokedSubagentToken}
+			}
 			return nil, storeErr("record subagent token", err)
 		}
 	}
