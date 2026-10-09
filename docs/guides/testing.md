@@ -42,31 +42,42 @@ Run one topology, with the steps listed:
 go test -race -v -run TestFourPartyDeployment ./e2e
 ```
 
-Each step logs a plain-English summary of its flow. To also see every HTTP
-exchange between the agent, resources, and servers, set `AAUTH_E2E_TRACE=1`:
+Each step logs a plain-English summary of its flow. To also see the HTTP
+calls between the agent, resources, and servers, set `AAUTH_E2E_TRACE=1`:
 
 ```bash
 AAUTH_E2E_TRACE=1 go test -v -run TestFourPartyDeployment ./e2e
 ```
 
 ```text
-trace: agent     GET B/ledger -> 401  AAuth-Requirement: requirement=person-token
-trace: agent     POST AP+PS/ps/person -> 200
-trace: agent     GET B/ledger -> 401  AAuth-Requirement: requirement=auth-token; resource-token="eyJhbGci…"
-trace: PS        POST AS/as/token -> 200
-trace: agent     POST AP+PS/ps/token -> 200
-trace: agent     GET B/ledger -> 200
+trace: #41  agent     GET B/ledger
+trace: #41            -> 401  AAuth-Requirement: requirement=person-token
+trace: #42  agent     POST AP+PS/ps/person
+trace: #42            -> 200
+trace: #43  agent     GET B/ledger
+trace: #43            -> 401  AAuth-Requirement: requirement=auth-token; resource-token="eyJhbGci…"
+trace: #44  agent     POST AP+PS/ps/token
+trace: #45  PS        POST AS/as/token
+trace: #45            -> 200
+trace: #44            -> 200
+trace: #46  agent     GET B/ledger
+trace: #46            -> 200
 ```
 
-Parties are named by role (`agent`, `AP+PS`, `AS`, resources `A` and `B`);
-metadata and key-set fetches are marked `(discovery)`. The
-[`e2e` workflow](https://github.com/aauth-dev/aauth-go/blob/main/.github/workflows/e2e.yml) runs the two topologies as
-separate jobs with the trace on, and each job's summary lists its steps, so
-the Actions logs show which flow each job exercises.
+Each call has a number and logs when it starts and when it returns. A call
+made while handling another, such as the PS calling the AS to answer the
+agent's `/ps/token` request (#45 inside #44), starts and ends between the outer
+call's two lines. Parties are named by role (`agent`, `AP+PS`, `AS`, and the
+resources `A` and `B`).
 
-The fixture (`newDeployment` in `e2e/fixture_test.go`) shows how to wire the
-servers and seed policy; the approvals a hosting application's UI would make
-run in the `Notify` hooks.
+`AAUTH_E2E_TRACE=1` shows the protocol calls: tokens, challenges, federation,
+and revocation. `AAUTH_E2E_TRACE=2` adds the metadata and key-set fetches
+each party makes to learn how to verify or reach another, marked
+`(discovery)`, which are about half of all requests.
+
+The [`e2e` workflow](https://github.com/aauth-dev/aauth-go/blob/main/.github/workflows/e2e.yml) runs the two topologies as
+separate jobs with the trace at level 1, and each job's summary lists its
+steps, so the Actions logs show which flow each job exercises.
 
 Wire-format golden vectors live in [`testdata/vectors`](https://github.com/aauth-dev/aauth-go/tree/main/testdata/vectors):
 language-neutral JSON (JWK thumbprints, identifiers, header codecs, metadata
