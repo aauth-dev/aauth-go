@@ -701,3 +701,60 @@ type delegating struct {
 }
 
 func (d *delegating) UpdatePending(ctx context.Context, p *Pending) error { return d.update(ctx, p) }
+
+// terminatesFirst is a store in which another termination reaches the
+// mission just before the one requested, which then keeps its reason.
+type terminatesFirst struct {
+	Store
+	first string
+}
+
+func (s terminatesFirst) TerminateMission(ctx context.Context, s256, reason string) error {
+	if err := s.Store.TerminateMission(ctx, s256, s.first); err != nil {
+		return err
+	}
+	return s.Store.TerminateMission(ctx, s256, reason)
+}
+
+// A completion that loses to a concurrent termination is reported as the
+// mission's actual status, with none of a completion's effects.
+func TestMissionCompletionLosingToTermination(t *testing.T) {
+	w, _ := newGovernedWorldWith(t, func(c *Config) { c.Store = terminatesFirst{Store: c.Store, first: aauth.TerminationRevoked} })
+	ctx := context.Background()
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	err := w.psClient(w.agent).CompleteMission(ctx, m.S256, "done")
+	var mse *aauth.MissionStatusError
+	if !errors.As(err, &mse) || mse.TerminationReason != aauth.TerminationRevoked {
+		t.Fatalf("completion lost to a revocation: %v, want a terminated mission (revoked)", err)
+	}
+	log, _ := w.ps.MissionLog(ctx, m.S256)
+	for _, e := range log {
+		if e.Kind == LogCompletion {
+			t.Fatalf("completion logged although the mission was revoked: %+v", e)
+		}
+	}
+}
+
+// Completing a mission revokes the auth tokens issued under it, as any
+// termination does.
+func TestMissionCompletionRevokesTokens(t *testing.T) {
+	f := &fakeRevoker{fail: map[string]error{}}
+	w, _ := newGovernedWorldWith(t, func(c *Config) { c.Revoker = f })
+	ctx := context.Background()
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	tr := w.transport(w.agent, w.psClient(w.agent))
+	tr.MissionS256 = m.S256
+	get(t, tr, w.resURL+"/m")
+	auths, err := w.store.AuthTokensForMission(ctx, m.S256)
+	if err != nil || len(auths) == 0 {
+		t.Fatalf("auth tokens under the mission: %d %v", len(auths), err)
+	}
+	if err := w.psClient(w.agent).CompleteMission(ctx, m.S256, "done"); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range auths {
+		if !f.revoked(a.JTI) {
+			t.Errorf("auth token %s still valid after the mission was completed", a.JTI)
+		}
+	}
+}

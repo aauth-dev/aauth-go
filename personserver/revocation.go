@@ -293,9 +293,22 @@ func (s *Server) TerminateMission(ctx context.Context, s256, reason string) ([]a
 		return nil, err
 	}
 	s.missionLog(ctx, s256, LogTermination, AgentRef{}, map[string]string{"reason": reason})
+	return s.endMissionOutcomes(ctx, s256, reason, "")
+}
+
+// endMission carries out the effects of a mission that has been terminated:
+// its open pending requests are resolved (exceptID, a request being
+// completed by the caller, is left alone) and the auth tokens issued under it
+// are revoked.
+func (s *Server) endMission(ctx context.Context, s256, reason, exceptID string) error {
+	_, err := s.endMissionOutcomes(ctx, s256, reason, exceptID)
+	return err
+}
+
+func (s *Server) endMissionOutcomes(ctx context.Context, s256, reason, exceptID string) ([]aauth.RevocationOutcome, error) {
 	// The mission is terminated whether or not its pending requests can be
 	// ended, so the token cascade runs regardless; both errors are reported.
-	pendingErr := s.resolveMissionPending(ctx, s256, reason, "")
+	pendingErr := s.resolveMissionPending(ctx, s256, reason, exceptID)
 	out, tokensErr := s.revokeMissionTokens(ctx, s256)
 	return out, errors.Join(pendingErr, tokensErr)
 }

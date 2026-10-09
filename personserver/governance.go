@@ -410,10 +410,26 @@ func (s *Server) acceptMissionAction(ctx context.Context, agent *aauth.AgentClai
 		if err := s.cfg.Store.TerminateMission(ctx, m.S256, aauth.TerminationCompleted); err != nil {
 			return nil, storeErr("terminate mission", err)
 		}
-		if err := s.resolveMissionPending(ctx, m.S256, aauth.TerminationCompleted, pendingID); err != nil {
-			return nil, err
+		// The store keeps the first termination reason. If a concurrent
+		// termination won, this completion did not happen: report the
+		// mission's actual status and leave the winner's effects alone.
+		cur, err := s.cfg.Store.Mission(ctx, m.S256)
+		if err != nil {
+			return nil, storeErr("load mission", err)
+		}
+		if cur.TerminationReason != aauth.TerminationCompleted {
+			return nil, &aauth.MissionStatusError{
+				Code: aauth.MissionErrTerminated, MissionStatus: aauth.MissionStatusTerminated, TerminationReason: cur.TerminationReason,
+			}
 		}
 		s.missionLog(ctx, m.S256, LogCompletion, agentRef(agent), map[string]string{"summary": act.Summary, "reason": aauth.TerminationCompleted})
+		// The mission is complete whatever happens next, so the cascade
+		// below cannot fail the agent's request; its errors, which the
+		// agent cannot act on, are logged for the operator.
+		if err := s.endMission(ctx, m.S256, aauth.TerminationCompleted, pendingID); err != nil {
+			s.logger().ErrorContext(ctx, "personserver: ending completed mission",
+				"mission_hash", refHash(m.S256), "error", err)
+		}
 		return jsonResult(http.StatusOK, struct{}{})
 	}
 	s256 := aauth.MissionS256(body)
