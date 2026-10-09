@@ -545,7 +545,7 @@ type revokeBeforeRecord struct {
 
 func (s *revokeBeforeRecord) RecordAgentToken(ctx context.Context, r AgentTokenRecord) error {
 	if sub, _ := s.subject.Load().(string); sub != "" && sub == r.Subject {
-		if err := s.Store.Revoke(ctx, r.Issuer, r.JTI, r.Exp); err != nil {
+		if err := s.Revoke(ctx, r.Issuer, r.JTI, r.Exp); err != nil {
 			return err
 		}
 	}
