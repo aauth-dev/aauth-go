@@ -22,11 +22,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 'stable'
-          # The scan reports standard library advisories against the toolchain
-          # that runs it. Without this, setup-go may use the newest Go cached on
-          # the runner image, which can trail a security release by days and
-          # fail the scan on advisories the latest release already fixes.
-          check-latest: true
+      # The scan reports standard library advisories against the toolchain that
+      # runs it. setup-go resolves "stable" from its own release manifest, which
+      # can trail a security release by days and fail the scan on advisories the
+      # latest release already fixes, so ask go.dev for the latest release and
+      # let the go command fetch that toolchain.
+      - name: Use the latest Go release
+        run: |
+          latest=$(curl -fsS 'https://go.dev/VERSION?m=text' | head -n1)
+          case "$latest" in
+            go1.*) ;;
+            *) echo "unexpected Go version from go.dev: $latest" >&2; exit 1 ;;
+          esac
+          echo "GOTOOLCHAIN=$latest" >> "$GITHUB_ENV"
       - name: govulncheck ./...
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
