@@ -295,4 +295,7 @@ type PendingStore interface {
 	// PendingForResourceToken returns the unresolved pending requests
 	// started for the resource token (iss, jti) (§11.12.4).
 	PendingForResourceToken(ctx context.Context, iss, jti string) ([]*Pending, error)
+	// PendingForMission returns the unresolved pending requests that
+	// belong to the mission s256 (Pending.MissionS256).
+	PendingForMission(ctx context.Context, s256 string) ([]*Pending, error)
 }

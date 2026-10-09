@@ -49,12 +49,22 @@ func (g *governance) hook(c *Config) {
 }
 
 func newGovernedWorld(t *testing.T) (*world, *governance) {
+	return newGovernedWorldWith(t, nil)
+}
+
+// newGovernedWorldWith is newGovernedWorld with a further Config hook.
+func newGovernedWorldWith(t *testing.T, hook func(*Config)) (*world, *governance) {
 	g := &governance{
 		mission:    func(*MissionRequest) Decision { return Allow(Grant{}) },
 		permission: func(*PermissionRequest) Decision { return Allow(Grant{}) },
 		relay:      func(*InteractionRequest) Decision { return Allow(Grant{Answer: "yes"}) },
 	}
-	w := newWorld(t, g.hook)
+	w := newWorld(t, func(c *Config) {
+		g.hook(c)
+		if hook != nil {
+			hook(c)
+		}
+	})
 	w.personToken(w.agent, w.resURL, "") // bind the agent to alice
 	return w, g
 }
@@ -493,7 +503,9 @@ func TestDeferredGovernanceAfterMissionEnds(t *testing.T) {
 			if _, err := w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked); err != nil {
 				t.Fatal(err)
 			}
-			if err := w.ps.Approve(ctx, id, Grant{Answer: "yes"}); err != nil {
+			// Termination already resolved the request, so approving it is
+			// refused; had it not, completion rechecks the mission.
+			if err := w.ps.Approve(ctx, id, Grant{Answer: "yes"}); err != nil && !errors.Is(err, ErrResolved) {
 				t.Fatal(err)
 			}
 			p, err := w.ps.PendingRequest(ctx, id)
@@ -504,5 +516,79 @@ func TestDeferredGovernanceAfterMissionEnds(t *testing.T) {
 				t.Fatalf("granted after termination: %d %s", p.Result.Status, p.Result.Body)
 			}
 		})
+	}
+}
+
+// logHook is a store that runs fn once, when a permission log entry is
+// appended: after completeGovernance has checked the mission and before it
+// publishes the result.
+type logHook struct {
+	Store
+	fn   func()
+	once sync.Once
+}
+
+func (s *logHook) AppendMissionLog(ctx context.Context, s256 string, e MissionLogEntry) error {
+	if e.Kind == LogPermission && s.fn != nil {
+		s.once.Do(s.fn)
+	}
+	return s.Store.AppendMissionLog(ctx, s256, e)
+}
+
+// A mission terminated after a deferred request's mission check but before
+// its result is published must not end in a grant: termination resolves the
+// mission's open requests, and resolving is first-wins.
+func TestDeferredPermissionRacingMissionTermination(t *testing.T) {
+	var hook *logHook
+	w, g := newGovernedWorldWith(t, func(c *Config) {
+		hook = &logHook{Store: c.Store}
+		c.Store = hook
+	})
+	ctx := context.Background()
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	g.set(func(g *governance) { g.permission = func(*PermissionRequest) Decision { return DeferApproval() } })
+	res := w.signed(w.agent, "", http.MethodPost, "/ps/permission", aauth.PermissionRequest{Action: "SendEmail", MissionS256: m.S256})
+	loc := res.Header.Get(aauth.HeaderLocation)
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusAccepted || loc == "" {
+		t.Fatalf("defer: %d %q", res.StatusCode, loc)
+	}
+	id := strings.TrimPrefix(loc, "/ps/pending/")
+
+	hook.fn = func() {
+		if _, err := w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked); err != nil {
+			t.Errorf("terminate: %v", err)
+		}
+	}
+	if err := w.ps.Approve(ctx, id, Grant{}); !errors.Is(err, ErrResolved) {
+		t.Fatalf("approve racing termination: %v, want ErrResolved", err)
+	}
+	p, err := w.ps.PendingRequest(ctx, id)
+	if err != nil || p.Result == nil {
+		t.Fatalf("pending %+v %v", p, err)
+	}
+	if p.Result.Status == http.StatusOK || strings.Contains(string(p.Result.Body), "granted") {
+		t.Fatalf("granted after termination: %d %s", p.Result.Status, p.Result.Body)
+	}
+}
+
+// Terminating a mission ends its open pending requests.
+func TestTerminateMissionResolvesPending(t *testing.T) {
+	w, g := newGovernedWorld(t)
+	ctx := context.Background()
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	g.set(func(g *governance) { g.permission = func(*PermissionRequest) Decision { return DeferApproval() } })
+	res := w.signed(w.agent, "", http.MethodPost, "/ps/permission", aauth.PermissionRequest{Action: "SendEmail", MissionS256: m.S256})
+	id := strings.TrimPrefix(res.Header.Get(aauth.HeaderLocation), "/ps/pending/")
+	_ = res.Body.Close()
+	if _, err := w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked); err != nil {
+		t.Fatal(err)
+	}
+	p, err := w.ps.PendingRequest(ctx, id)
+	if err != nil || p.Open() || p.Result == nil || !strings.Contains(string(p.Result.Body), aauth.MissionErrTerminated) {
+		t.Fatalf("pending %+v %v", p, err)
+	}
+	if err := w.ps.Approve(ctx, id, Grant{}); !errors.Is(err, ErrResolved) {
+		t.Fatalf("approve after termination: %v, want ErrResolved", err)
 	}
 }

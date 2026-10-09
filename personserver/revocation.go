@@ -293,6 +293,9 @@ func (s *Server) TerminateMission(ctx context.Context, s256, reason string) ([]a
 		return nil, err
 	}
 	s.missionLog(ctx, s256, LogTermination, AgentRef{}, map[string]string{"reason": reason})
+	if err := s.resolveMissionPending(ctx, s256, reason); err != nil {
+		return nil, err
+	}
 	auths, err := s.cfg.Store.AuthTokensForMission(ctx, s256)
 	if err != nil {
 		return nil, storeErr("load auth tokens", err)
@@ -317,4 +320,25 @@ func (s *Server) TerminateMission(ctx context.Context, s256, reason string) ([]a
 		}
 	}
 	return c.out, nil
+}
+
+// resolveMissionPending ends the open pending requests of a mission that
+// was terminated, so none of them can be approved into a grant afterwards.
+// Resolving is first-wins: a request approved before the termination keeps
+// its answer, and an approval racing the termination finds the request
+// already resolved (ErrResolved) instead of publishing a grant.
+func (s *Server) resolveMissionPending(ctx context.Context, s256, reason string) error {
+	ps, err := s.cfg.Store.PendingForMission(ctx, s256)
+	if err != nil {
+		return storeErr("load pending requests", err)
+	}
+	res := errorResult(&aauth.MissionStatusError{
+		Code: aauth.MissionErrTerminated, MissionStatus: aauth.MissionStatusTerminated, TerminationReason: reason,
+	})
+	for _, p := range ps {
+		if _, err := s.resolve(ctx, p.ID, res); err != nil && !errors.Is(err, ErrResolved) {
+			return err
+		}
+	}
+	return nil
 }

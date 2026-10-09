@@ -74,6 +74,9 @@ func (s *Server) liveMission(ctx context.Context, m *MissionRecord) (*MissionRec
 			return nil, storeErr("terminate mission", err)
 		}
 		s.missionLog(ctx, m.S256, LogTermination, AgentRef{}, map[string]string{"reason": aauth.TerminationExpired})
+		if err := s.resolveMissionPending(ctx, m.S256, aauth.TerminationExpired); err != nil {
+			return nil, err
+		}
 		m.Status, m.TerminationReason = MissionTerminated, aauth.TerminationExpired
 	}
 	if m.Status != MissionActive {

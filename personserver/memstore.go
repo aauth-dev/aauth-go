@@ -394,6 +394,23 @@ func (m *MemoryStore) PendingForResourceToken(_ context.Context, iss, jti string
 	return out, nil
 }
 
+// PendingForMission implements PendingStore.
+func (m *MemoryStore) PendingForMission(_ context.Context, s256 string) ([]*Pending, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*Pending
+	for id := range m.pending {
+		p, err := m.getPending(id)
+		if err != nil {
+			return nil, err
+		}
+		if p.Open() && p.MissionS256 == s256 {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 // putPending stores a copy of p; m.mu is held.
 func (m *MemoryStore) putPending(p *Pending) error {
 	b, err := json.Marshal(p)

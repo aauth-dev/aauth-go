@@ -151,9 +151,14 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
   clients built by `ChainRouter.PSClient` for a person server named by an
   upstream token. Reaching other destinations is an explicit `HTTPClient`.
 - Sub-agent tokens verified as a `subagent_token` parameter are recorded, so
-  an agent provider revoking one cascades to the sub-agent's grants.
+  an agent provider revoking one cascades to the sub-agent's grants. Agent
+  tokens are rechecked for revocation after being recorded, closing the window
+  between the check and the insert.
 - Deferred permission and interaction requests recheck their mission before
-  completing; a terminated or expired mission no longer yields `granted`.
+  completing, and terminating or expiring a mission resolves its open pending
+  requests (first resolution wins), so an approval racing the termination
+  cannot end in `granted`. `PendingStore` gains `PendingForMission`; custom
+  stores must implement it.
 - `TokenStore.RecordPersonToken` must now refuse (`ErrBindingRevoked`,
   `ErrRevoked`, `ErrMissionTerminated`) atomically with `Unbind`, `Revoke`
   and `TerminateMission`, so an issuance racing a revocation cannot escape
