@@ -45,7 +45,11 @@ markdown_extensions:
       permalink: true
   - pymdownx.highlight:
       anchor_linenums: true
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.snippets:
       base_path: .
       check_paths: true
@@ -55,6 +59,8 @@ nav:
   - User guide:
       - guides/index.md
       - Getting started: guides/getting-started.md
+      - How AAuth works: guides/how-aauth-works.md
+      - Flows: guides/flows.md
       - Agent: guides/agent.md
       - Resource: guides/resource.md
       - Hosted AP, PS, and AS: guides/servers.md
