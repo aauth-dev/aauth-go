@@ -163,7 +163,7 @@ func (s *Server) completeGovernance(ctx context.Context, p *Pending, snap snapsh
 		if m, err = s.ownedMission(ctx, p.MissionS256, agentRef(agent)); err != nil {
 			return s.failure(err)
 		}
-		res, err = s.acceptMissionAction(ctx, agent, m, p.MissionAction, snap.Body)
+		res, err = s.acceptMissionAction(ctx, agent, m, p.MissionAction, snap.Body, p.ID)
 	case KindPermission:
 		if err = s.requireLiveMission(ctx, p, agent); err != nil {
 			return s.failure(err)
@@ -392,7 +392,7 @@ func (s *Server) serveMissionAction(w http.ResponseWriter, r *http.Request) {
 	}
 	p := &Pending{Kind: kind, Person: m.Person, MissionS256: m.S256, MissionAction: &act}
 	s.dispatch(w, r, c, body, d, p, nil, func(Grant) (*Result, *FederationState, error) {
-		res, err := s.acceptMissionAction(ctx, c.claims, m, &act, body)
+		res, err := s.acceptMissionAction(ctx, c.claims, m, &act, body, "")
 		if err != nil {
 			return s.failure(err)
 		}
@@ -402,11 +402,16 @@ func (s *Server) serveMissionAction(w http.ResponseWriter, r *http.Request) {
 
 // acceptMissionAction applies an accepted update or completion. An update
 // is appended to the log with the s256 of its persisted bytes (§8.4); a
-// completion terminates the mission as completed (§8.5).
-func (s *Server) acceptMissionAction(ctx context.Context, agent *aauth.AgentClaims, m *MissionRecord, act *aauth.MissionAction, body []byte) (*Result, error) {
+// completion terminates the mission as completed (§8.5) and ends its other
+// open pending requests, as any termination does. pendingID is the deferred
+// request being completed, if any, which is left for the caller to resolve.
+func (s *Server) acceptMissionAction(ctx context.Context, agent *aauth.AgentClaims, m *MissionRecord, act *aauth.MissionAction, body []byte, pendingID string) (*Result, error) {
 	if act.Action == aauth.MissionActionCompletion {
 		if err := s.cfg.Store.TerminateMission(ctx, m.S256, aauth.TerminationCompleted); err != nil {
 			return nil, storeErr("terminate mission", err)
+		}
+		if err := s.resolveMissionPending(ctx, m.S256, aauth.TerminationCompleted, pendingID); err != nil {
+			return nil, err
 		}
 		s.missionLog(ctx, m.S256, LogCompletion, agentRef(agent), map[string]string{"summary": act.Summary, "reason": aauth.TerminationCompleted})
 		return jsonResult(http.StatusOK, struct{}{})

@@ -161,8 +161,9 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
   requests (first resolution wins), so an approval racing the termination
   cannot end in `granted`. `PendingStore` gains `PendingForMission`; custom
   stores must implement it.
-  If ending the pending requests fails, `TerminateMission` still revokes the
-  mission's tokens and returns both errors.
+  Completing a mission does the same. If ending the pending requests fails,
+  `TerminateMission` still revokes the mission's tokens, attempts every
+  request, and returns the errors together.
 - `TokenStore.RecordPersonToken` must now refuse (`ErrBindingRevoked`,
   `ErrRevoked`, `ErrMissionTerminated`) atomically with `Unbind`, `Revoke`
   and `TerminateMission`, so an issuance racing a revocation cannot escape
@@ -177,8 +178,10 @@ interoperate with v0.1. See the [migration guide](MIGRATION.md).
 - `JWKSCache` refuses new issuers with `ErrJWKSCacheFull` rather than
   exceeding `MaxEntries` while every entry has a fetch in flight, and waiting
   on a busy entry honors the request context.
-- `SignRequest` buffers a body of unknown length so its `Content-Digest` is
-  signed, instead of signing the request as if it had no body.
+- `SignRequest` buffers a body of unknown length, up to
+  `MaxSignedStreamBytes` (4 MiB), so its `Content-Digest` is signed instead of
+  signing the request as if it had no body. A longer body is an error; a
+  caller with one sets `Content-Digest` itself and the body is streamed.
 
 ## [0.1.1] - 2026-07-17
 

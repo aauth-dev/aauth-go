@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -592,3 +593,111 @@ func TestTerminateMissionResolvesPending(t *testing.T) {
 		t.Fatalf("approve after termination: %v, want ErrResolved", err)
 	}
 }
+
+// Completing a mission ends its other open pending requests, like any
+// termination, and leaves the deferred completion request itself to be
+// answered.
+func TestMissionCompletionResolvesPending(t *testing.T) {
+	for _, deferred := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deferred=%v", deferred), func(t *testing.T) {
+			w, g := newGovernedWorld(t)
+			ctx := context.Background()
+			m := w.seedMission(agentRefOf(w.agent), time.Time{})
+			g.set(func(g *governance) { g.permission = func(*PermissionRequest) Decision { return DeferApproval() } })
+			res := w.signed(w.agent, "", http.MethodPost, "/ps/permission", aauth.PermissionRequest{Action: "SendEmail", MissionS256: m.S256})
+			permID := strings.TrimPrefix(res.Header.Get(aauth.HeaderLocation), "/ps/pending/")
+			_ = res.Body.Close()
+			if res.StatusCode != http.StatusAccepted {
+				t.Fatalf("defer permission: %d", res.StatusCode)
+			}
+
+			complete := aauth.MissionAction{Action: aauth.MissionActionCompletion, Summary: "done"}
+			var complID string
+			if deferred {
+				g.set(func(g *governance) { g.mission = func(*MissionRequest) Decision { return DeferApproval() } })
+			}
+			res = w.signed(w.agent, "", http.MethodPost, "/ps/mission/"+m.S256, complete)
+			complID = strings.TrimPrefix(res.Header.Get(aauth.HeaderLocation), "/ps/pending/")
+			_ = res.Body.Close()
+			if deferred {
+				if res.StatusCode != http.StatusAccepted {
+					t.Fatalf("defer completion: %d", res.StatusCode)
+				}
+				if err := w.ps.Approve(ctx, complID, Grant{}); err != nil {
+					t.Fatalf("approve completion: %v", err)
+				}
+				p, err := w.ps.PendingRequest(ctx, complID)
+				if err != nil || p.Result == nil || p.Result.Status != http.StatusOK {
+					t.Fatalf("completion result %+v %v", p, err)
+				}
+			} else if res.StatusCode != http.StatusOK {
+				t.Fatalf("completion: %d", res.StatusCode)
+			}
+
+			p, err := w.ps.PendingRequest(ctx, permID)
+			if err != nil || p.Open() || p.Result == nil || !strings.Contains(string(p.Result.Body), aauth.MissionErrTerminated) {
+				t.Fatalf("permission request left open by completion: %+v %v", p, err)
+			}
+			if err := w.ps.Approve(ctx, permID, Grant{}); !errors.Is(err, ErrResolved) {
+				t.Fatalf("approve after completion: %v, want ErrResolved", err)
+			}
+		})
+	}
+}
+
+// failUpdate is a store whose update of one pending request fails.
+type failUpdate struct {
+	Store
+	id string
+}
+
+func (s failUpdate) UpdatePending(ctx context.Context, p *Pending) error {
+	if p.ID == s.id {
+		return errors.New("update failed")
+	}
+	return s.Store.UpdatePending(ctx, p)
+}
+
+// One pending request that cannot be resolved must not leave the mission's
+// others open.
+func TestResolveMissionPendingAttemptsAll(t *testing.T) {
+	var fu *failUpdate
+	var inner Store
+	w, g := newGovernedWorldWith(t, func(c *Config) {
+		inner = c.Store
+		c.Store = &delegating{Store: c.Store, update: func(ctx context.Context, p *Pending) error {
+			if fu != nil {
+				return fu.UpdatePending(ctx, p)
+			}
+			return inner.UpdatePending(ctx, p)
+		}}
+	})
+	ctx := context.Background()
+	m := w.seedMission(agentRefOf(w.agent), time.Time{})
+	g.set(func(g *governance) { g.permission = func(*PermissionRequest) Decision { return DeferApproval() } })
+	var ids []string
+	for range 3 {
+		res := w.signed(w.agent, "", http.MethodPost, "/ps/permission", aauth.PermissionRequest{Action: "SendEmail", MissionS256: m.S256})
+		ids = append(ids, strings.TrimPrefix(res.Header.Get(aauth.HeaderLocation), "/ps/pending/"))
+		_ = res.Body.Close()
+	}
+	fu = &failUpdate{Store: inner, id: ids[0]}
+	_, err := w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked)
+	if err == nil || !strings.Contains(err.Error(), "update failed") {
+		t.Fatalf("TerminateMission err = %v, want the failed update reported", err)
+	}
+	for _, id := range ids[1:] {
+		p, perr := w.ps.PendingRequest(ctx, id)
+		if perr != nil || p.Open() {
+			t.Errorf("pending %s left open after another failed: %+v %v", id, p, perr)
+		}
+	}
+}
+
+// delegating overrides UpdatePending of an embedded store.
+type delegating struct {
+	Store
+	update func(context.Context, *Pending) error
+}
+
+func (d *delegating) UpdatePending(ctx context.Context, p *Pending) error { return d.update(ctx, p) }
