@@ -53,17 +53,30 @@ func requestHasBody(req *http.Request) bool {
 	return req.Body != nil && req.Body != http.NoBody && req.ContentLength != 0
 }
 
+// MaxSignedStreamBytes bounds how much of a request body of unknown length
+// [SignRequest] buffers to compute its digest (4 MiB, as for
+// [Transport.MaxBodyBytes]).
+const MaxSignedStreamBytes = 4 << 20
+
 // bufferStreamingBody reads an outgoing body of unknown length (a non-nil
 // body with ContentLength zero) into memory, so its digest can be signed and
 // its length is known when sent. An empty body becomes http.NoBody.
+//
+// At most MaxSignedStreamBytes are buffered; a longer body is an error
+// rather than unbounded memory. A caller with a larger body computes its
+// Content-Digest itself and sets the header, in which case the body is not
+// read here.
 func bufferStreamingBody(req *http.Request) error {
-	if req.Body == nil || req.Body == http.NoBody || req.ContentLength != 0 {
+	if req.Body == nil || req.Body == http.NoBody || req.ContentLength != 0 || req.Header.Get("Content-Digest") != "" {
 		return nil
 	}
-	b, err := io.ReadAll(req.Body)
+	b, err := io.ReadAll(io.LimitReader(req.Body, MaxSignedStreamBytes+1))
 	cerr := req.Body.Close()
 	if err != nil {
 		return fmt.Errorf("aauth: read request body: %w", err)
+	}
+	if len(b) > MaxSignedStreamBytes {
+		return fmt.Errorf("aauth: request body of unknown length exceeds %d bytes; set ContentLength, or set Content-Digest yourself", MaxSignedStreamBytes)
 	}
 	if cerr != nil {
 		return fmt.Errorf("aauth: close request body: %w", cerr)
@@ -212,9 +225,9 @@ func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
 	if err := bufferStreamingBody(req); err != nil {
 		return err
 	}
-	// After buffering, ContentLength is zero only for a body that is absent
-	// or empty (http.NoBody), so the verifier's rule applies.
-	hasBody := requestHasBody(req)
+	// Any body left now is sent, whatever ContentLength says: a streaming
+	// body whose digest the caller supplied is still covered.
+	hasBody := req.Body != nil && req.Body != http.NoBody
 	if hasBody && req.Header.Get("Content-Digest") == "" {
 		d, err := httpsign.GenerateContentDigestHeader(&req.Body, []string{ContentDigestAlg})
 		if err != nil {
