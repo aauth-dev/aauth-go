@@ -20,6 +20,7 @@ func ChainInteraction(w http.ResponseWriter, pendingURL, interactionURL, code st
 	w.Header().Set(HeaderLocation, pendingURL)
 	w.Header().Set(HeaderRetryAfter, "0")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(HeaderRequirement, Requirement{
 		Requirement: RequirementInteraction,
 		URL:         interactionURL,
@@ -35,6 +36,7 @@ func WriteClarification(w http.ResponseWriter, pendingURL, question string, time
 	w.Header().Set(HeaderLocation, pendingURL)
 	w.Header().Set(HeaderRetryAfter, "0")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(HeaderRequirement, Requirement{Requirement: RequirementClarification}.String())
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(PendingStatus{
