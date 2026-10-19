@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -114,6 +116,11 @@ func (s *Sandbox) build() error {
 		s.res[role] = r
 		s.route(role, r)
 	}
+	for _, host := range s.cfg.UpstreamHosts() {
+		if err := s.routeUpstream(host, s.cfg.Upstreams[host]); err != nil {
+			return err
+		}
+	}
 	signer, err := s.newSigner()
 	if err != nil {
 		return fmt.Errorf("sandbox: signing helper: %w", err)
@@ -126,6 +133,30 @@ func (s *Sandbox) build() error {
 // making Location headers absolute, as the draft's examples show them.
 func (s *Sandbox) route(role string, h http.Handler) {
 	s.routes[s.cfg.Hosts[role]] = s.trace.record(role, absoluteLocation(s.cfg.URL(role), h))
+}
+
+// routeUpstream serves host by passing requests to the server at origin,
+// keeping the Host header: the server's identifier is https://<host>, and
+// AAuth signatures cover @authority. The trace names it by host.
+func (s *Sandbox) routeUpstream(host, origin string) error {
+	target, err := url.Parse(origin)
+	if err != nil {
+		return fmt.Errorf("sandbox: upstream %s: %w", host, err)
+	}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.Host = pr.In.Host
+			pr.SetXForwarded()
+		},
+		FlushInterval: -1, // long-polled responses pass through as written
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			s.logf("upstream %s at %s: %v", host, origin, err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "upstream " + host + " at " + origin + " is not reachable"})
+		},
+	}
+	s.routes[host] = s.trace.record(host, proxy)
+	return nil
 }
 
 // absoluteLocation resolves a relative Location against origin before the

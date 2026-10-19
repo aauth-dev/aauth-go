@@ -10,8 +10,11 @@ package sandbox
 
 import (
 	"fmt"
+	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -56,6 +59,13 @@ type Config struct {
 	// Remote maps a role to an external implementation's https origin;
 	// the sandbox does not serve that role and calls the URL instead.
 	Remote map[string]string
+	// Upstreams maps an extra host name to the http or https origin of a
+	// server outside the sandbox, such as a resource under development.
+	// The sandbox serves the host over TLS with its CA, records its
+	// traffic in the trace and passes requests through with their Host
+	// header, so the server's identifier is https://<host>. A name
+	// without a dot is under Domain (petstore: petstore.aauth.test).
+	Upstreams map[string]string
 	// Consent is ConsentAuto (default) or ConsentManual.
 	Consent string
 	// Person is the person approvals act for (default alice).
@@ -102,6 +112,27 @@ func (c Config) withDefaults(home string) (Config, error) {
 			return c, fmt.Errorf("sandbox: remote %s must be an https origin, not %q", r, u)
 		}
 	}
+	ups := make(map[string]string, len(c.Upstreams))
+	for h, u := range c.Upstreams {
+		h = strings.ToLower(h)
+		if !strings.Contains(h, ".") {
+			h += "." + c.Domain
+		}
+		if strings.ContainsAny(h, ":/") {
+			return c, fmt.Errorf("sandbox: upstream host %q must be a host name without a port", h)
+		}
+		for _, r := range Roles {
+			if c.Hosts[r] == h {
+				return c, fmt.Errorf("sandbox: upstream host %s is the %s role's host", h, r)
+			}
+		}
+		pu, err := url.Parse(u)
+		if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || pu.Host == "" {
+			return c, fmt.Errorf("sandbox: upstream %s must be an http or https origin, not %q", h, u)
+		}
+		ups[h] = strings.TrimSuffix(u, "/")
+	}
+	c.Upstreams = ups
 	// Every role may be remote: the sandbox then runs only the signing
 	// helper, against roles served elsewhere (one container per role).
 	return c, nil
@@ -130,8 +161,8 @@ func (c Config) Local(role string) bool {
 	return !remote
 }
 
-// LocalHosts returns the host names of the roles the sandbox serves, in
-// role order.
+// LocalHosts returns the host names the sandbox serves: its local roles'
+// in role order, then its upstreams' in name order.
 func (c Config) LocalHosts() []string {
 	var hosts []string
 	for _, r := range Roles {
@@ -139,7 +170,12 @@ func (c Config) LocalHosts() []string {
 			hosts = append(hosts, c.Hosts[r])
 		}
 	}
-	return hosts
+	return append(hosts, c.UpstreamHosts()...)
+}
+
+// UpstreamHosts returns the upstream host names in name order.
+func (c Config) UpstreamHosts() []string {
+	return slices.Sorted(maps.Keys(c.Upstreams))
 }
 
 // HostsLine returns the /etc/hosts line that points the local role names

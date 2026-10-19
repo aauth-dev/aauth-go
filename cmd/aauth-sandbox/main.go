@@ -33,16 +33,18 @@ func main() {
 
 // common are the flags every command shares.
 type common struct {
-	state  string
-	domain string
-	remote []string
-	roles  []string
+	state    string
+	domain   string
+	remote   []string
+	roles    []string
+	upstream []string
 }
 
 func (c *common) add(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&c.state, "state", "", "state directory for the CA and keys (default ~/.aauth-sandbox)")
 	cmd.PersistentFlags().StringVar(&c.domain, "domain", sandbox.DefaultDomain, "parent domain of the role host names")
 	cmd.PersistentFlags().StringSliceVar(&c.remote, "remote", nil, "role=https://origin for a role served elsewhere (repeatable)")
+	cmd.PersistentFlags().StringSliceVar(&c.upstream, "upstream", nil, "host=http://origin for a server of your own that the sandbox fronts at https://<host>, such as petstore=http://127.0.0.1:8080 (repeatable; a name without a dot is under --domain)")
 	cmd.PersistentFlags().StringSliceVar(&c.roles, "roles", nil, "roles to serve here, such as ps or ap,ps; the others are reached at their usual https://<role>.<domain> (none: serve no roles, for a signing helper on its own)")
 }
 
@@ -79,6 +81,16 @@ func (c *common) config() (sandbox.Config, error) {
 			cfg.Remote = map[string]string{}
 		}
 		cfg.Remote[role] = u
+	}
+	for _, kv := range c.upstream {
+		host, u, ok := strings.Cut(kv, "=")
+		if !ok {
+			return cfg, fmt.Errorf("--upstream %q: want host=http://origin", kv)
+		}
+		if cfg.Upstreams == nil {
+			cfg.Upstreams = map[string]string{}
+		}
+		cfg.Upstreams[host] = u
 	}
 	return cfg, nil
 }
@@ -169,6 +181,9 @@ func printBanner(w io.Writer, cfg sandbox.Config, addr, signerAddr string, noSig
 			where = "remote"
 		}
 		lines = append(lines, fmt.Sprintf("  %-8s %s (%s)", r, cfg.URL(r), where))
+	}
+	for _, h := range cfg.UpstreamHosts() {
+		lines = append(lines, fmt.Sprintf("  %-8s https://%s (upstream %s)", strings.SplitN(h, ".", 2)[0], h, cfg.Upstreams[h]))
 	}
 	lines = append(lines, "",
 		"Hosts entry:  "+cfg.HostsLine(),
