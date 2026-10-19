@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	aauth "github.com/aauth-dev/aauth-go"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // Client is the agent side of a hosted agent provider: it obtains agent
@@ -53,6 +55,48 @@ func (c *Client) Issue(ctx context.Context, key crypto.Signer, body any) (*Token
 		return nil, err
 	}
 	return c.do(req)
+}
+
+// Enroll obtains an agent token for key with [Client.Issue] and returns
+// an agent that presents provider-issued tokens: its identifier, issuer
+// and person server are read from the token, and a new token is issued
+// for key when the current one nears expiry. body is sent with every
+// issuance, as for Issue.
+func (c *Client) Enroll(ctx context.Context, key crypto.Signer, body any) (*aauth.Agent, error) {
+	first, err := c.Issue(ctx, key, body)
+	if err != nil {
+		return nil, err
+	}
+	// The agent's own provider issued this token over TLS; the agent reads
+	// it to learn its identity, and checks only that it binds key.
+	var claims aauth.AgentClaims
+	if _, _, err := jwt.NewParser().ParseUnverified(first.AgentToken, &claims); err != nil {
+		return nil, fmt.Errorf("agentprovider: reading the agent token: %w", err)
+	}
+	jwk, err := aauth.NewJWK(key.Public())
+	if err != nil {
+		return nil, err
+	}
+	if claims.Cnf.JWK == nil || claims.Cnf.JWK.Thumbprint() != jwk.Thumbprint() {
+		return nil, errors.New("agentprovider: the agent token does not bind the enrolled key")
+	}
+	id, err := aauth.ParseAgentIdentifier(claims.Subject)
+	if err != nil {
+		return nil, fmt.Errorf("agentprovider: agent token sub: %w", err)
+	}
+	pending := first // served once, then fresh tokens are issued
+	src := c.TokenSource(func(ctx context.Context) (*TokenResponse, error) {
+		if tr := pending; tr != nil {
+			pending = nil
+			return tr, nil
+		}
+		return c.Issue(ctx, key, body)
+	})
+	opts := []aauth.AgentOption{aauth.WithKey(key), aauth.WithIssuer(claims.Issuer), aauth.WithTokenSource(src)}
+	if claims.PS != "" {
+		opts = append(opts, aauth.WithPersonServer(claims.PS))
+	}
+	return aauth.NewAgent(id, opts...)
 }
 
 // Refresh performs the two-key refresh (bootstrap §8.1): durable — the
