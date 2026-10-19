@@ -44,7 +44,7 @@ Status against draft -11, by section. Legend: ✅ implemented and tested,
 | §8.1, §8.2 Creation and approval | ✅ | Exact blob bytes and `mission_s256`; approval person tokens verified and cached |
 | §8.3 Mission log | ✅ | Updates logged with verifiable digests |
 | §8.4, §8.5 Update and completion | ✅ | Completion reviewed by the person |
-| §8.6 Mission management | 🟡 | Active and terminated states with termination reasons, `personserver.Server.TerminateMission`; no mission control plane endpoint |
+| §8.6 Mission management | ✅ | Active and terminated states with termination reasons, `personserver.Server.TerminateMission`; `MissionStatusError.Repropose` and `KnownTerminationReason`; `mission_control_endpoint` carried in metadata. The control plane itself awaits its companion specification |
 | §8.7, §8.8 Errors | ✅ | `mission_not_found` with no existence oracle; `*MissionStatusError` from every PS endpoint, including the token endpoints |
 
 ## §9 Access Server federation

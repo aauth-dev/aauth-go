@@ -19,6 +19,9 @@ of the AAuth drafts.
   of person and auth token requests. Resources read them with
   `RequestCapabilities` and check `CanRaise` before raising interaction or
   clarification, and `CanRequirePayment` before answering 402.
+- `MissionStatusError.Repropose` (draft -11 §8.6, §8.8): true only for an
+  expired mission, which invites a new proposal; `KnownTerminationReason`
+  tells the defined reasons from opaque ones.
 
 ## [0.2.0] - Unreleased
 
