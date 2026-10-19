@@ -46,3 +46,14 @@ Commits implementing an item carry `Refs: RMI-AAUTHGO-<NNN>`.
   - Depends on: `RMI-AAUTHGO-027`
 - [ ] `RMI-AAUTHGO-030` Documented distributed run on minikube, with an optional CI job
   - Depends on: `RMI-AAUTHGO-029`
+
+## Phase 5 — Demo Resources
+
+**Theme:** A resource of your own behind the sandbox
+
+- [ ] `RMI-AAUTHGO-031` `ResourceGuard`: per-operation access levels that challenge for the next token
+- [ ] `RMI-AAUTHGO-032` `agentprovider.Client.Enroll`: an agent from a hosted provider's token
+- [ ] `RMI-AAUTHGO-033` Sandbox upstreams: front a server of your own at `https://<name>.aauth.test`
+  - Depends on: `RMI-AAUTHGO-019`
+- [ ] `RMI-AAUTHGO-034` Guides: protect a resource with `ResourceGuard` and run it behind the sandbox
+  - Depends on: `RMI-AAUTHGO-031`, `RMI-AAUTHGO-033`
