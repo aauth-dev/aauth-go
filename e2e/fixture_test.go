@@ -32,8 +32,17 @@ type resource struct {
 	audience func() string // the resource token's aud
 	resolver aauth.KeyResolver
 
-	mu      sync.Mutex
-	revoked map[[2]string]bool
+	mu       sync.Mutex
+	revoked  map[[2]string]bool
+	lastCaps []string // AAuth-Capabilities on the last protected request (§11.7)
+}
+
+// capabilities returns the capabilities the agent declared on the last
+// protected request.
+func (r *resource) capabilities() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastCaps
 }
 
 func newResource(t *testing.T, name, scope string, audience func() string, hc *http.Client) *resource {
@@ -94,6 +103,9 @@ func (r *resource) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	r.mu.Lock()
+	r.lastCaps = aauth.RequestCapabilities(req)
+	r.mu.Unlock()
 	tok, err := aauth.ParseSignatureKey(req)
 	if err != nil {
 		aauth.WriteSignatureFailure(w, err)
@@ -391,6 +403,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 func (d *deployment) transport(mission string) *aauth.Transport {
 	tr := aauth.NewTransport(d.agent, d.psc)
 	tr.ResourceVerify, tr.AuthVerify, tr.MissionS256 = d.verify, d.verify, mission
+	tr.Capabilities = []string{aauth.CapabilityInteraction}
 	tr.Base = d.client("agent").Transport
 	return tr
 }

@@ -348,7 +348,7 @@ Status against draft -11, by section. Legend: ✅ implemented and tested,
 | §11.4 JWKS discovery and caching | ✅ | Cache headers, one-minute refresh floor, unknown-`kid` refresh, 24-hour maximum age, backoff, bounded entries |
 | §11.5 AAuth tokens | ✅ | `typ` and `dwk` checked first, `iat` required, `exp` with no skew, `iss` a server identifier, one-hour person and auth tokens; `Ed25519` and `ES256` only |
 | §11.6 Requirement responses | ✅ | `AAuth-Requirement` as an RFC 9651 dictionary with all seven values |
-| §11.7 `AAuth-Capabilities` header | ⬜ | Not sent by `Transport` |
+| §11.7 `AAuth-Capabilities` header | ✅ | `Transport.Capabilities` (unioned with `MissionCapabilities`) sent on requests to resources and as the PS `capabilities` parameter; `RequestCapabilities` and `CanRaise` for resources |
 | §11.8 Deferred responses | ✅ | 202, `Location`, `Retry-After`, `Prefer: wait`, 429 backoff |
 | §11.9 Error responses | ✅ | signature-key-09 `Signature-Error` codes; RFC 9457 problem bodies; token endpoint and polling error codes |
 | §11.10, §11.11 Scopes and account binding | ✅ | Scope never broader than requested; `account` carried through |

@@ -50,7 +50,10 @@ import (
 //     Date header shows (up to MaxClockSkewWait) and presents the same
 //     signed request once more (signature-key §5.4.14);
 //   - on 401 expired_jwt or revoked_jwt for a cached person or auth token,
-//     drops it and falls back to the next credential (§11.12.5).
+//     drops it and falls back to the next credential (§11.12.5);
+//   - declares the agent's capabilities (§11.7): AAuth-Capabilities on every
+//     signed request to a resource, and the capabilities parameter on the
+//     person and auth token requests it makes to the PS.
 //
 // A sub-agent's Transport has the sub-agent as Agent and its parent's
 // [PSClient] as PS (§10.2.3): the sub-agent signs its own requests to
@@ -92,6 +95,17 @@ type Transport struct {
 	// auth tokens the PS returns (§9.4.4 step 1, SHOULD). A nil Resolver
 	// runs the claim checks only: the agent trusts its PS.
 	AuthVerify TokenVerifyOptions
+	// Capabilities are the capability values (§11.7) the agent handles
+	// directly or through its PS, such as [CapabilityInteraction]. They are
+	// sent, unioned with MissionCapabilities, as AAuth-Capabilities on
+	// requests to resources and as the capabilities parameter of person and
+	// auth token requests. When both are empty nothing is sent and
+	// recipients assume no capabilities.
+	Capabilities []string
+	// MissionCapabilities are the capabilities the PS reported in the
+	// mission approval (§8.2, [MissionApproval.Capabilities]); the agent
+	// unions them with its own (§11.7).
+	MissionCapabilities []string
 	// OnRequirement surfaces interaction requirements (URL + code) that
 	// arrive while a request is deferred.
 	OnRequirement func(Requirement)
@@ -250,7 +264,7 @@ func (t *Transport) authorize(ctx context.Context, resource, resourceToken, pres
 		PresentedToken:    presented,
 		UpstreamToken:     t.UpstreamToken,
 		SubagentToken:     subagent,
-		TokenRequestHints: TokenRequestHints{LoginHint: rc.LoginHint},
+		TokenRequestHints: TokenRequestHints{LoginHint: rc.LoginHint, Capabilities: t.capabilities()},
 	})
 	if err != nil {
 		return "", err
@@ -273,6 +287,7 @@ func (t *Transport) authorize(ctx context.Context, resource, resourceToken, pres
 // and for a sub-agent through its parent.
 func (t *Transport) personToken(ctx context.Context, resource string) (string, error) {
 	req := PersonTokenRequest{Resource: resource, MissionS256: t.MissionS256, UpstreamToken: t.UpstreamToken}
+	req.Capabilities = t.capabilities()
 	if t.UpstreamToken != "" {
 		req.MissionS256 = "" // the upstream token carries the mission (§7.1)
 	}
@@ -362,6 +377,9 @@ func (t *Transport) sign(req *http.Request, body []byte, credential, session str
 		credential = tok
 	}
 	AttachSignatureKey(c, credential)
+	if err := t.declareCapabilities(c); err != nil {
+		return nil, "", err
+	}
 	if session != "" {
 		c.Header.Set("Authorization", "AAuth "+session)
 	}
@@ -369,6 +387,26 @@ func (t *Transport) sign(req *http.Request, body []byte, credential, session str
 		return nil, "", err
 	}
 	return c, credential, nil
+}
+
+// capabilities is the agent's declared capability list (§11.7).
+func (t *Transport) capabilities() []string {
+	return UnionCapabilities(t.Capabilities, t.MissionCapabilities)
+}
+
+// declareCapabilities sets AAuth-Capabilities on a request to a resource
+// (§11.7), or removes a stale one when the agent declares none.
+func (t *Transport) declareCapabilities(req *http.Request) error {
+	v, err := FormatCapabilities(t.capabilities())
+	if err != nil {
+		return err
+	}
+	if v == "" {
+		req.Header.Del(HeaderCapabilities)
+		return nil
+	}
+	req.Header.Set(HeaderCapabilities, v)
+	return nil
 }
 
 // resend clones an already-signed request with a fresh body reader, to
@@ -411,6 +449,9 @@ func (t *Transport) followDeferred(req *http.Request, res *http.Response, resour
 		},
 		Sign: func(poll *http.Request) error {
 			AttachSignatureKey(poll, current)
+			if err := t.declareCapabilities(poll); err != nil {
+				return err
+			}
 			return SignRequest(poll, t.Agent.Key, "")
 		},
 	})

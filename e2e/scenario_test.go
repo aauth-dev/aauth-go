@@ -48,6 +48,9 @@ func runScenario(t *testing.T, d *deployment) {
 		if person, err := d.psStore.BoundPerson(ctx, d.agentRef()); err != nil || person != "alice" {
 			t.Fatalf("binding %q %v", person, err)
 		}
+		if caps := d.resA.capabilities(); !aauth.HasCapability(caps, aauth.CapabilityInteraction) {
+			t.Fatalf("A saw AAuth-Capabilities %q, want interaction (§11.7)", caps)
+		}
 	})
 
 	step("propose a mission", func(t *testing.T) {

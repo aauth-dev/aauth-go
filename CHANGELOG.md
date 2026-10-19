@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Until v1, a minor version may contain breaking changes; each tracks a revision
 of the AAuth drafts.
 
+## [Unreleased]
+
+### Added
+
+- `AAuth-Capabilities` (draft -11 §11.7): `CapabilityInteraction`,
+  `CapabilityClarification`, and `CapabilityPayment`; `FormatCapabilities`,
+  `ParseCapabilities`, `UnionCapabilities`, and `HasCapability`.
+  `Transport.Capabilities` and `Transport.MissionCapabilities` are sent as
+  the header on requests to resources and as the `capabilities` parameter
+  of person and auth token requests. Resources read them with
+  `RequestCapabilities` and check `CanRaise` before raising interaction or
+  clarification, and `CanRequirePayment` before answering 402.
+
 ## [0.2.0] - Unreleased
 
 Tracks `draft-hardt-oauth-aauth-protocol-11`,
