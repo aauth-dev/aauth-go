@@ -33,6 +33,12 @@ type Client struct {
 	HTTPClient *http.Client
 	// PreferWaitSeconds, when positive, is sent as Prefer: wait=N.
 	PreferWaitSeconds int
+	// Payment settles an access server's 402 Payment Required, which asks
+	// the PS to establish a billing relationship before it issues auth
+	// tokens (§9.1.2). After Settle returns the PS polls the 402's
+	// Location. Nil reports the 402 as an error wrapping
+	// [*aauth.PaymentRequiredError], and the PS answers as_unreachable.
+	Payment aauth.PaymentHandler
 
 	mu        sync.Mutex
 	endpoints map[string]string
@@ -86,7 +92,7 @@ func (c *Client) Federate(ctx context.Context, r *personserver.FederationRequest
 	if err != nil {
 		return nil, err
 	}
-	return parseResponse(req.URL, res)
+	return c.parseResponse(ctx, req.URL, res)
 }
 
 // Poll implements personserver.Federator: a signed GET of the pending URL.
@@ -95,7 +101,7 @@ func (c *Client) Poll(ctx context.Context, pendingURL string) (*personserver.Fed
 	if err != nil {
 		return nil, err
 	}
-	return parseResponse(req.URL, res)
+	return c.parseResponse(ctx, req.URL, res)
 }
 
 // Answer implements personserver.Federator: a signed POST of body to the
@@ -147,10 +153,11 @@ func drain(res *http.Response) {
 }
 
 // parseResponse maps an AS response (§9.1.2): 200 with an auth token, 202
-// with a same-origin Location and its requirement, or a terminal problem
-// to relay. Anything else — a 402 this client does not settle, a body it
-// cannot read — is an error, which the PS answers as_unreachable.
-func parseResponse(reqURL *url.URL, res *http.Response) (*personserver.FederationResponse, error) {
+// with a same-origin Location and its requirement, a 402 settled through
+// Payment (then pending at its Location), or a terminal problem to relay.
+// Anything else — a 402 without a Payment handler, a body it cannot read —
+// is an error, which the PS answers as_unreachable.
+func (c *Client) parseResponse(ctx context.Context, reqURL *url.URL, res *http.Response) (*personserver.FederationResponse, error) {
 	defer drain(res)
 	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
@@ -166,7 +173,7 @@ func parseResponse(reqURL *url.URL, res *http.Response) (*personserver.Federatio
 	case http.StatusAccepted:
 		return parsePending(reqURL, res, body)
 	case http.StatusPaymentRequired:
-		return nil, errors.New("accessserver: the access server requires payment, which this client does not settle")
+		return c.settle(ctx, reqURL, res.Header, body)
 	}
 	var pb struct {
 		Error  string `json:"error"`
@@ -179,6 +186,25 @@ func parseResponse(reqURL *url.URL, res *http.Response) (*personserver.Federatio
 		return nil, fmt.Errorf("accessserver: %s: %s", pb.Error, pb.Detail)
 	}
 	return &personserver.FederationResponse{ErrorStatus: res.StatusCode, ErrorCode: pb.Error, ErrorDetail: pb.Detail}, nil
+}
+
+// settle handles an access server's 402 (§9.1.2): it MUST name a Location,
+// which the PS polls once Payment has settled.
+func (c *Client) settle(ctx context.Context, reqURL *url.URL, h http.Header, body []byte) (*personserver.FederationResponse, error) {
+	pr, err := aauth.NewPaymentRequiredError(reqURL, h, body)
+	if err != nil {
+		return nil, fmt.Errorf("accessserver: %w", err)
+	}
+	if pr.Location == "" {
+		return nil, errors.New("accessserver: 402 without Location (§9.1.2)")
+	}
+	if c.Payment == nil {
+		return nil, fmt.Errorf("accessserver: no payment handler configured: %w", pr)
+	}
+	if err := c.Payment.Settle(ctx, pr); err != nil {
+		return nil, fmt.Errorf("accessserver: settle payment for %s: %w", pr.Server, err)
+	}
+	return &personserver.FederationResponse{PendingURL: pr.Location}, nil
 }
 
 func parsePending(reqURL *url.URL, res *http.Response, body []byte) (*personserver.FederationResponse, error) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,11 @@ import (
 //     signed request once more (signature-key §5.4.14);
 //   - on 401 expired_jwt or revoked_jwt for a cached person or auth token,
 //     drops it and falls back to the next credential (§11.12.5);
+//   - with a Payment handler, settles 402 Payment Required (§6.5, §11.8.4):
+//     a requirement=auth-token on the 402 is satisfied first, then the
+//     payment is settled and the transport polls Location, or retries the
+//     request when the 402 names none. Without a handler a 402 is returned
+//     to the caller, who can read it with [PaymentRequiredFromResponse];
 //   - declares the agent's capabilities (§11.7): AAuth-Capabilities on every
 //     signed request to a resource, and the capabilities parameter on the
 //     person and auth token requests it makes to the PS.
@@ -106,6 +112,10 @@ type Transport struct {
 	// mission approval (§8.2, [MissionApproval.Capabilities]); the agent
 	// unions them with its own (§11.7).
 	MissionCapabilities []string
+	// Payment settles 402 Payment Required responses from resources. Nil
+	// returns them to the caller. Configure it together with
+	// [CapabilityPayment] in Capabilities, so resources know they may ask.
+	Payment PaymentHandler
 	// OnRequirement surfaces interaction requirements (URL + code) that
 	// arrive while a request is deferred.
 	OnRequirement func(Requirement)
@@ -163,7 +173,8 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	skewRetried := false
-	for range maxChallenges + 1 {
+	settlements := 0
+	for range maxChallenges + maxSettlements + 1 {
 		signed, presented, err := t.sign(req, body, cred, t.cachedSession(resource))
 		if err != nil {
 			return nil, err
@@ -190,6 +201,15 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 		t.observeSession(resource, res)
+		if res.StatusCode == http.StatusPaymentRequired && t.Payment != nil && settlements < maxSettlements {
+			// A 402 without Location (one with Location was settled and
+			// polled above): settle, then send the request again.
+			settlements++
+			if cred, err = t.settle(ctx, req.URL, res, resource, presented); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if res.StatusCode != http.StatusUnauthorized {
 			return res, nil
 		}
@@ -235,6 +255,30 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 	return nil, fmt.Errorf("aauth: %s answered more than %d requirements for one request", resource, maxChallenges)
+}
+
+// settle handles a 402 from resource that names no Location (§6.5): it
+// obtains an auth token first when the 402 also carries
+// requirement=auth-token, settles the payment, and returns the credential
+// to present on the retry.
+func (t *Transport) settle(ctx context.Context, reqURL *url.URL, res *http.Response, resource, presented string) (string, error) {
+	pr, err := PaymentRequiredFromResponse(reqURL, res)
+	if err != nil {
+		return "", err
+	}
+	cred := presented
+	if pr.Requirement != nil && pr.Requirement.Requirement == RequirementAuthToken {
+		if cred, err = t.authorize(ctx, resource, pr.Requirement.ResourceToken, presented); err != nil {
+			return "", err
+		}
+	}
+	if err := t.Payment.Settle(ctx, pr); err != nil {
+		return "", fmt.Errorf("aauth: settle payment for %s: %w", pr.Server, err)
+	}
+	if typ, err := TokenType(cred); err == nil && typ == TypAgent {
+		cred = "" // the agent token is minted fresh for each request
+	}
+	return cred, nil
 }
 
 // authorize handles requirement=auth-token for resource (draft -11 §6.5):
@@ -425,12 +469,13 @@ func resend(signed *http.Request, body []byte) *http.Request {
 // presented and presents it on the following polls; the resource executes
 // the held invocation on the first poll that carries it.
 func (t *Transport) followDeferred(req *http.Request, res *http.Response, resource, presented string) (*http.Response, error) {
-	if res.StatusCode != http.StatusAccepted {
+	if res.StatusCode != http.StatusAccepted && !settleable(res, DeferredOptions{Payment: t.Payment}) {
 		return res, nil
 	}
 	ctx := req.Context()
 	current := presented
 	return FollowDeferred(ctx, &http.Client{Transport: t.base()}, req.URL, res, DeferredOptions{
+		Payment: t.Payment,
 		OnRequirement: func(r Requirement) {
 			if r.Requirement != RequirementAuthToken && t.OnRequirement != nil {
 				t.OnRequirement(r)

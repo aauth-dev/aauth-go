@@ -51,7 +51,7 @@ Status against draft -11, by section. Legend: ✅ implemented and tested,
 
 | Section | Status | Notes |
 |---|---|---|
-| §9.1 AS token endpoint | ✅ | `accessserver` over an `Authorizer`; PS side through a `Federator` with delivery checks (§9.1.3) and `as_unreachable` |
+| §9.1 AS token endpoint | ✅ | `accessserver` over an `Authorizer`; PS side through a `Federator` with delivery checks (§9.1.3) and `as_unreachable`; an AS 402 is settled through `accessserver.Client.Payment` and its `Location` polled (§9.1.2) |
 | §9.2 Claims required | ✅ | Answered by the PS through a `ClaimsProvider`, never sending `sub` |
 | §9.3 PS-AS federation | ✅ | HTTP `Client` signed under `jwks_uri`; in-process `Server.Local` for collapse (§9.3.3) |
 | §9.4 Auth token | ✅ | Draft -11 claim set; resource verification with an `(iss, sub)` hook; agent-side response checks (§9.4.4); upstream token checks (§9.4.5) |
@@ -75,10 +75,12 @@ Status against draft -11, by section. Legend: ✅ implemented and tested,
 | §11.5 AAuth tokens | ✅ | `typ` and `dwk` checked first, `iat` required, `exp` with no skew, `iss` a server identifier, one-hour person and auth tokens; `Ed25519` and `ES256` only |
 | §11.6 Requirement responses | ✅ | `AAuth-Requirement` as an RFC 9651 dictionary with all seven values |
 | §11.7 `AAuth-Capabilities` header | ✅ | `Transport.Capabilities` (unioned with `MissionCapabilities`) sent on requests to resources and as the PS `capabilities` parameter; `RequestCapabilities` and `CanRaise` for resources |
-| §11.8 Deferred responses | ✅ | 202, `Location`, `Retry-After`, `Prefer: wait`, 429 backoff |
+| §11.8 Deferred responses | ✅ | 202, `Location`, `Retry-After`, `Prefer: wait`, 429 backoff; 402 settled through a `PaymentHandler`, then `Location` polled (§11.8.4) |
 | §11.9 Error responses | ✅ | signature-key-09 `Signature-Error` codes; RFC 9457 problem bodies; token endpoint and polling error codes |
 | §11.10, §11.11 Scopes and account binding | ✅ | Scope never broader than requested; `account` carried through |
 | §11.12 Token revocation | ✅ | `RevocationClient`; recipients in every server role, with cascade and `downstream` outcomes |
 
-Not implemented: the Signature-Key `x509` scheme, Rich Resource Requests, and
-402 payment settlement (an access server's 402 is reported as an error).
+Not implemented: the Signature-Key `x509` scheme and Rich Resource Requests.
+Payment (402) is carried as protocol shape only: a `PaymentHandler` settles
+it through whatever payment protocol the server names, and the SDK polls
+`Location` or retries; no payment protocol is built in.

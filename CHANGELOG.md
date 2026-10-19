@@ -28,6 +28,19 @@ of the AAuth drafts.
   the resource token for an auth token, caching what it obtains. Resources
   serve the endpoint with `AuthorizationHandler` and `WriteAuthorized`;
   `ErrCodeInvalidScope` and `ErrCodeInvalidAccount` name its errors.
+- Payment required (draft -11 §6.5, §9.1.2, §11.6, §11.8.4):
+  `PaymentRequiredError` carries a 402's Location, AAuth-Requirement,
+  `WWW-Authenticate` challenges and body unparsed, and `PaymentHandler`
+  settles it. `DeferredOptions.Payment` and `Transport.Payment` settle and
+  then poll Location, or retry when a resource names none, obtaining an
+  auth token first when the 402 also asks for one.
+  `accessserver.Client.Payment` settles an access server's 402 so the PS
+  polls its Location.
+
+### Changed
+
+- `accessserver.Client` reports an access server's 402 as an error wrapping
+  `*aauth.PaymentRequiredError` when no `Payment` handler is configured.
 
 ## [0.2.0] - Unreleased
 

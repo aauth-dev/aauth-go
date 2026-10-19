@@ -98,7 +98,9 @@ func (l *local) convert(res *Result, p *Pending) (*personserver.FederationRespon
 	if err != nil {
 		return nil, err
 	}
-	return parseResponse(u, &http.Response{StatusCode: rec.status, Header: rec.h, Body: io.NopCloser(&rec.buf)})
+	// The access server never answers 402 itself, so no payment handler
+	// (and no context for one) is needed to parse its outcome.
+	return new(Client).parseResponse(context.Background(), u, &http.Response{StatusCode: rec.status, Header: rec.h, Body: io.NopCloser(&rec.buf)})
 }
 
 // recorder captures a response written in-process.

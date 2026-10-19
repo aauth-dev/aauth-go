@@ -231,6 +231,7 @@ type deployment struct {
 
 	asMu       sync.Mutex
 	asRequests map[string]int // requests that reached the AS's own origin, by path
+	billing    *billingGate   // four-party: the AS requires billing with the PS (§9.1.2)
 }
 
 // asHits returns how many requests reached the access server's origin at path.
@@ -258,10 +259,14 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 	d.asURL = d.psURL
 	if tp == fourParty {
 		asMux = http.NewServeMux()
+		d.billing = &billingGate{tokenPath: accessserver.DefaultPaths().Token}
 		asSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			d.asMu.Lock()
 			d.asRequests[r.URL.Path]++
 			d.asMu.Unlock()
+			if d.billing.serve(w, r, asMux) {
+				return
+			}
 			asMux.ServeHTTP(w, r)
 		}))
 		t.Cleanup(asSrv.Close)
@@ -375,6 +380,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 	} else {
 		c := accessserver.NewClient(d.ps.Signer(), d.client("PS"))
 		c.PreferWaitSeconds = 1
+		c.Payment = d.billing
 		fed.f = c
 	}
 	d.ap.Register(psMux)

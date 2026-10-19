@@ -91,6 +91,12 @@ type DeferredOptions struct {
 	// after which Sign presents the auth token on the polls. An error
 	// stops polling and is returned.
 	HandleRequirement func(Requirement) error
+	// Payment, when set, settles a 402 Payment Required that carries a
+	// Location (§11.8.4: settle payment, poll Location): an
+	// AAuth-Requirement on the 402 is handed to HandleRequirement first,
+	// then Settle runs and polling continues at Location. Without it, or
+	// without a Location, a 402 is a terminal response like any other.
+	Payment PaymentHandler
 	// OnClarification answers a requirement=clarification 202 (§7.3): given
 	// the question, it returns the agent's reply. If nil, a clarification
 	// requirement is treated as an ordinary pending state (polling continues
@@ -112,8 +118,9 @@ func DoDeferred(ctx context.Context, hc *http.Client, req *http.Request, opts De
 }
 
 // FollowDeferred continues the §11.8.4 state machine from an already-received
-// response: if res is not a 202 it is returned unchanged; otherwise the
-// pending URL is polled until a terminal response arrives. reqURL is the URL
+// response: if res is not a 202 (or a 402 that opts.Payment settles) it is
+// returned unchanged; otherwise the pending URL is polled until a terminal
+// response arrives. reqURL is the URL
 // the original request was sent to (for same-origin Location resolution).
 func FollowDeferred(ctx context.Context, hc *http.Client, reqURL *url.URL, res *http.Response, opts DeferredOptions) (*http.Response, error) {
 	if hc == nil {
@@ -124,9 +131,36 @@ func FollowDeferred(ctx context.Context, hc *http.Client, reqURL *url.URL, res *
 	}
 	backoff := time.Duration(0)
 	polls := 0
+	settlements := 0
 	lastReq := ""
 
-	for res.StatusCode == http.StatusAccepted {
+	for res.StatusCode == http.StatusAccepted || settleable(res, opts) {
+		if res.StatusCode == http.StatusPaymentRequired {
+			if settlements++; settlements > maxSettlements {
+				drainBody(res.Body)
+				return nil, fmt.Errorf("aauth: payment still required after %d settlements", maxSettlements)
+			}
+			pr, err := PaymentRequiredFromResponse(reqURL, res)
+			if err != nil {
+				return nil, err
+			}
+			if pr.Requirement != nil && opts.HandleRequirement != nil {
+				if err := opts.HandleRequirement(*pr.Requirement); err != nil {
+					return nil, err
+				}
+			}
+			if err := opts.Payment.Settle(ctx, pr); err != nil {
+				return nil, fmt.Errorf("aauth: settle payment for %s: %w", pr.Server, err)
+			}
+			pendingURL, err := url.Parse(pr.Location)
+			if err != nil {
+				return nil, err
+			}
+			if res, err = pollPending(ctx, hc, pendingURL, opts); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if rh := res.Header.Get(HeaderRequirement); rh != "" && rh != lastReq {
 			lastReq = rh
 			// A requirement this agent cannot parse is not surfaced; the
@@ -198,6 +232,12 @@ func FollowDeferred(ctx context.Context, hc *http.Client, reqURL *url.URL, res *
 		}
 	}
 	return res, nil
+}
+
+// settleable reports whether res is a 402 that opts can settle and then
+// poll: a payment handler is configured and the response names a Location.
+func settleable(res *http.Response, opts DeferredOptions) bool {
+	return res.StatusCode == http.StatusPaymentRequired && opts.Payment != nil && res.Header.Get(HeaderLocation) != ""
 }
 
 // pollPending issues one signed GET against the pending URL.
