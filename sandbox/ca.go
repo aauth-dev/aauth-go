@@ -138,7 +138,7 @@ func (ca *CA) IssueServerCert(names []string) (tls.Certificate, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: names[0]},
+		Subject:      pkix.Name{CommonName: firstOr(names, "localhost")},
 		DNSNames:     append(append([]string{}, names...), "localhost"),
 		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
 		NotBefore:    now.Add(-time.Hour),
@@ -163,4 +163,13 @@ func randomSerial() (*big.Int, error) {
 		return nil, fmt.Errorf("sandbox: generating serial number: %w", err)
 	}
 	return n, nil
+}
+
+// firstOr returns names[0], or fallback when names is empty (a sandbox that
+// serves no roles, only the signing helper).
+func firstOr(names []string, fallback string) string {
+	if len(names) == 0 {
+		return fallback
+	}
+	return names[0]
 }

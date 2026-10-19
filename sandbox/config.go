@@ -9,7 +9,6 @@
 package sandbox
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -103,9 +102,8 @@ func (c Config) withDefaults(home string) (Config, error) {
 			return c, fmt.Errorf("sandbox: remote %s must be an https origin, not %q", r, u)
 		}
 	}
-	if len(c.Remote) == len(Roles) {
-		return c, errors.New("sandbox: every role is remote; nothing to serve")
-	}
+	// Every role may be remote: the sandbox then runs only the signing
+	// helper, against roles served elsewhere (one container per role).
 	return c, nil
 }
 

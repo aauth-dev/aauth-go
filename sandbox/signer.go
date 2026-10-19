@@ -69,6 +69,11 @@ type Signer struct {
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+
+	// AnyInterface lets ListenAndServe listen on a non-loopback address.
+	// Set it only inside a container whose port is published to the
+	// host's loopback address: the helper signs anything it is sent.
+	AnyInterface bool
 }
 
 func (s *Sandbox) newSigner() (*Signer, error) {
@@ -381,13 +386,14 @@ func (sg *Signer) serveSign(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListenAndServe serves the helper on addr, which must be a loopback
-// address: the helper signs anything it is sent.
+// address unless AnyInterface is set: the helper signs anything it is
+// sent.
 func (sg *Signer) ListenAndServe(ctx context.Context, addr string) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("sandbox: signer address: %w", err)
 	}
-	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+	if ip := net.ParseIP(host); !sg.AnyInterface && host != "localhost" && (ip == nil || !ip.IsLoopback()) {
 		return fmt.Errorf("sandbox: the signing helper listens on loopback only, not %q", addr)
 	}
 	srv := &http.Server{Addr: addr, Handler: sg, ReadHeaderTimeout: 10 * time.Second}

@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -35,16 +36,40 @@ type common struct {
 	state  string
 	domain string
 	remote []string
+	roles  []string
 }
 
 func (c *common) add(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&c.state, "state", "", "state directory for the CA and keys (default ~/.aauth-sandbox)")
 	cmd.PersistentFlags().StringVar(&c.domain, "domain", sandbox.DefaultDomain, "parent domain of the role host names")
 	cmd.PersistentFlags().StringSliceVar(&c.remote, "remote", nil, "role=https://origin for a role served elsewhere (repeatable)")
+	cmd.PersistentFlags().StringSliceVar(&c.roles, "roles", nil, "roles to serve here, such as ps or ap,ps; the others are reached at their usual https://<role>.<domain> (none: serve no roles, for a signing helper on its own)")
 }
 
 func (c *common) config() (sandbox.Config, error) {
 	cfg := sandbox.Config{StateDir: c.state, Domain: c.domain}
+	if len(c.roles) > 0 {
+		local := map[string]bool{}
+		for _, r := range c.roles {
+			if r == "none" {
+				continue
+			}
+			if !slices.Contains(sandbox.Roles, r) {
+				return cfg, fmt.Errorf("--roles: unknown role %q (want %s or none)", r, strings.Join(sandbox.Roles, ", "))
+			}
+			local[r] = true
+		}
+		domain := c.domain
+		if domain == "" {
+			domain = sandbox.DefaultDomain
+		}
+		cfg.Remote = map[string]string{}
+		for _, r := range sandbox.Roles {
+			if !local[r] {
+				cfg.Remote[r] = "https://" + r + "." + domain
+			}
+		}
+	}
 	for _, kv := range c.remote {
 		role, u, ok := strings.Cut(kv, "=")
 		if !ok {
@@ -67,13 +92,13 @@ func newRoot() *cobra.Command {
 		SilenceErrors: false,
 	}
 	c.add(root)
-	root.AddCommand(newServe(c), newCA(c), newHosts(c), newTrace(c))
+	root.AddCommand(newServe(c), newInit(c), newCA(c), newHosts(c), newTrace(c), newHealth(c))
 	return root
 }
 
 func newServe(c *common) *cobra.Command {
 	var listen, signerAddr, consent, person string
-	var noSigner bool
+	var noSigner, signerAnyInterface bool
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve the roles on one TLS listener, and the signing helper",
@@ -92,19 +117,26 @@ func newServe(c *common) *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			ln, err := net.Listen("tcp", listen)
-			if err != nil {
-				return fmt.Errorf("listening on %s: %w (port 443 needs no privileges on macOS; on Linux grant CAP_NET_BIND_SERVICE or use a container)", listen, err)
-			}
 			errs := make(chan error, 2)
-			go func() { errs <- sb.Serve(ctx, ln) }()
+			addr := "(no roles served here)"
+			if len(cfg.LocalHosts()) > 0 {
+				ln, err := net.Listen("tcp", listen)
+				if err != nil {
+					return fmt.Errorf("listening on %s: %w (port 443 needs no privileges on macOS; on Linux grant CAP_NET_BIND_SERVICE or use a container)", listen, err)
+				}
+				addr = ln.Addr().String()
+				go func() { errs <- sb.Serve(ctx, ln) }()
+			} else if noSigner {
+				return errors.New("nothing to serve: --roles none needs the signing helper")
+			}
 			if !noSigner {
+				sb.Signer().AnyInterface = signerAnyInterface
 				go func() { errs <- sb.Signer().ListenAndServe(ctx, signerAddr) }()
 			}
 			if _, err := sb.Signer().AgentToken(ctx); err != nil {
 				logger.Warn("the test agent has no agent token yet", "error", err)
 			}
-			printBanner(cmd.OutOrStdout(), cfg, ln.Addr().String(), signerAddr, noSigner)
+			printBanner(cmd.OutOrStdout(), cfg, addr, signerAddr, noSigner)
 			select {
 			case <-ctx.Done():
 				return nil
@@ -116,6 +148,7 @@ func newServe(c *common) *cobra.Command {
 	cmd.Flags().StringVar(&listen, "listen", ":443", "TLS listen address for the roles; identifiers have no port, so clients reach port 443")
 	cmd.Flags().StringVar(&signerAddr, "signer", sandbox.DefaultSignerAddr, "signing helper address (loopback only)")
 	cmd.Flags().BoolVar(&noSigner, "no-signer", false, "do not run the signing helper")
+	cmd.Flags().BoolVar(&signerAnyInterface, "signer-any-interface", false, "let the signing helper listen on a non-loopback address; only inside a container whose port is published to the host's loopback address")
 	cmd.Flags().StringVar(&consent, "consent", sandbox.ConsentAuto, "auto approves every interaction; manual waits for a person or /sandbox/approve")
 	cmd.Flags().StringVar(&person, "person", sandbox.DefaultPerson, "the person approvals act for")
 	return cmd
@@ -258,4 +291,86 @@ func newTrace(c *common) *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:443", "address the sandbox listens on")
 	cmd.Flags().BoolVar(&clear, "clear", false, "clear the trace instead of printing it")
 	return cmd
+}
+
+func newInit(c *common) *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "Create the CA and every key in the state directory, once, before starting several sandbox processes that share it",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := c.config()
+			if err != nil {
+				return err
+			}
+			cfg, err = sandbox.Init(cfg)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), "initialized "+cfg.StateDir)
+			return err
+		},
+	}
+}
+
+// newHealth checks the roles this process serves (each answers its trace
+// endpoint) and, with --signer, the signing helper. It needs no shell or
+// curl, so container images without them can use it as a health check.
+func newHealth(c *common) *cobra.Command {
+	var addr, signer string
+	cmd := &cobra.Command{
+		Use:   "health",
+		Short: "Exit 0 when the local roles, and the signing helper if given, answer",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := c.defaults()
+			if err != nil {
+				return err
+			}
+			authority, err := sandbox.LoadOrCreateCA(cfg.StateDir)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
+			defer cancel()
+			client := sandbox.NewClient(cfg, authority, addr)
+			for _, r := range sandbox.Roles {
+				if !cfg.Local(r) {
+					continue
+				}
+				if err := healthGet(ctx, client, cfg.URL(r)+sandbox.PathTrace, nil); err != nil {
+					return fmt.Errorf("%s: %w", r, err)
+				}
+			}
+			if signer != "" {
+				h := http.Header{"X-Sandbox-Present": {"none"}}
+				if err := healthGet(ctx, http.DefaultClient, "http://"+signer+"/"+cfg.URL(sandbox.RolePS)+sandbox.PathTrace, h); err != nil {
+					return fmt.Errorf("signing helper: %w", err)
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:443", "address the local roles listen on")
+	cmd.Flags().StringVar(&signer, "signer", "", "signing helper address to check, such as 127.0.0.1:8099")
+	return cmd
+}
+
+func healthGet(ctx context.Context, client *http.Client, url string, h http.Header) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	for k, v := range h {
+		req.Header[k] = v
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	if cerr := res.Body.Close(); cerr != nil {
+		return cerr
+	}
+	if res.StatusCode != http.StatusOK {
+		return errors.New(res.Status)
+	}
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	aauth "github.com/aauth-dev/aauth-go"
 )
@@ -61,8 +62,72 @@ func loadOrCreateKey(dir, name string) (crypto.Signer, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("sandbox: creating key directory: %w", err)
 	}
-	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
-		return nil, fmt.Errorf("sandbox: writing %s: %w", path, err)
+	created, err := writeExclusive(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	if err != nil {
+		return nil, err
+	}
+	if !created {
+		// Another process created the key first; use theirs, so every
+		// process sharing the state directory signs with the same key.
+		return loadOrCreateKey(dir, name)
 	}
 	return key, nil
+}
+
+// writeExclusive writes data to path only if path does not exist, without
+// ever exposing a partly written file: it writes a temporary file and
+// links it into place. created is false when path already existed.
+func writeExclusive(path string, data []byte) (created bool, err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-"+filepath.Base(path)+"-*")
+	if err != nil {
+		return false, fmt.Errorf("sandbox: writing %s: %w", path, err)
+	}
+	defer func() {
+		if rerr := os.Remove(tmp.Name()); rerr != nil && !errors.Is(rerr, os.ErrNotExist) && err == nil {
+			err = fmt.Errorf("sandbox: removing %s: %w", tmp.Name(), rerr)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		closeErr := tmp.Close()
+		return false, fmt.Errorf("sandbox: writing %s: %w", path, errors.Join(err, closeErr))
+	}
+	if err := tmp.Sync(); err != nil {
+		closeErr := tmp.Close()
+		return false, fmt.Errorf("sandbox: writing %s: %w", path, errors.Join(err, closeErr))
+	}
+	if err := tmp.Close(); err != nil {
+		return false, fmt.Errorf("sandbox: writing %s: %w", path, err)
+	}
+	if err := os.Link(tmp.Name(), path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("sandbox: writing %s: %w", path, err)
+	}
+	return true, nil
+}
+
+// Init creates the certificate authority and every key the sandbox uses
+// in cfg's state directory, if they do not exist. Run it once before
+// starting several sandbox processes that share a state directory, such as
+// one container per role.
+func Init(cfg Config) (Config, error) {
+	cfg, err := cfg.WithDefaults()
+	if err != nil {
+		return cfg, err
+	}
+	if _, err := LoadOrCreateCA(cfg.StateDir); err != nil {
+		return cfg, err
+	}
+	names := make([]string, 0, len(keyAlg))
+	for name := range keyAlg {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if _, err := loadOrCreateKey(cfg.StateDir, name); err != nil {
+			return cfg, err
+		}
+	}
+	return cfg, nil
 }
