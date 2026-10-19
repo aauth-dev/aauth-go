@@ -113,3 +113,16 @@ func TestRolesFlag(t *testing.T) {
 		t.Fatal("unknown role accepted")
 	}
 }
+
+func TestUpstreamFlag(t *testing.T) {
+	cfg, err := (&common{upstream: []string{"petstore=http://127.0.0.1:8080"}}).config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Upstreams["petstore"] != "http://127.0.0.1:8080" {
+		t.Fatalf("upstreams = %v", cfg.Upstreams)
+	}
+	if _, err := (&common{upstream: []string{"petstore"}}).config(); err == nil {
+		t.Fatal("an upstream without an origin was accepted")
+	}
+}
