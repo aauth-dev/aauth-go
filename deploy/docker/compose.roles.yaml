@@ -1,0 +1,95 @@
+# One container per AAuth role, plus the signing helper in its own
+# container, on a shared network where each role answers at its
+# .aauth.test name. Traffic between roles crosses the network as it would
+# in a real deployment.
+#
+#   docker compose -f deploy/docker/compose.roles.yaml up -d --wait
+#
+# Only the signing helper is published to the host. For a browser or a
+# client that talks to the roles directly, use compose.yaml instead.
+
+name: aauth-sandbox-roles
+
+x-sandbox: &sandbox
+  image: aauth-sandbox:dev
+  volumes:
+    - state:/state
+  depends_on:
+    init:
+      condition: service_completed_successfully
+
+services:
+  # Creates the CA and every key once, so the roles share them without
+  # racing to create them.
+  init:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: aauth-sandbox:dev
+    command: ["init", "--state", "/state"]
+    volumes:
+      - state:/state
+
+  ap:
+    <<: *sandbox
+    command: ["serve", "--state", "/state", "--roles", "ap", "--no-signer"]
+    networks: {aauth: {aliases: [ap.aauth.test]}}
+    healthcheck: &health
+      test: ["CMD", "aauth-sandbox", "health", "--state", "/state", "--roles", "ap"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  ps:
+    <<: *sandbox
+    command: ["serve", "--state", "/state", "--roles", "ps", "--no-signer"]
+    networks: {aauth: {aliases: [ps.aauth.test]}}
+    healthcheck:
+      <<: *health
+      test: ["CMD", "aauth-sandbox", "health", "--state", "/state", "--roles", "ps"]
+
+  as:
+    <<: *sandbox
+    command: ["serve", "--state", "/state", "--roles", "as", "--no-signer"]
+    networks: {aauth: {aliases: [as.aauth.test]}}
+    healthcheck:
+      <<: *health
+      test: ["CMD", "aauth-sandbox", "health", "--state", "/state", "--roles", "as"]
+
+  resource:
+    <<: *sandbox
+    command: ["serve", "--state", "/state", "--roles", "resource", "--no-signer"]
+    networks: {aauth: {aliases: [resource.aauth.test]}}
+    healthcheck:
+      <<: *health
+      test: ["CMD", "aauth-sandbox", "health", "--state", "/state", "--roles", "resource"]
+
+  docs:
+    <<: *sandbox
+    command: ["serve", "--state", "/state", "--roles", "docs", "--no-signer"]
+    networks: {aauth: {aliases: [docs.aauth.test]}}
+    healthcheck:
+      <<: *health
+      test: ["CMD", "aauth-sandbox", "health", "--state", "/state", "--roles", "docs"]
+
+  signer:
+    <<: *sandbox
+    command: ["serve", "--state", "/state", "--roles", "none", "--signer", "0.0.0.0:8099", "--signer-any-interface"]
+    networks: [aauth]
+    ports:
+      - "127.0.0.1:${SIGNER_PORT:-8099}:8099"
+    depends_on:
+      ap: {condition: service_healthy}
+      ps: {condition: service_healthy}
+      as: {condition: service_healthy}
+      resource: {condition: service_healthy}
+      docs: {condition: service_healthy}
+    healthcheck:
+      <<: *health
+      test: ["CMD", "aauth-sandbox", "health", "--state", "/state", "--roles", "none", "--signer", "127.0.0.1:8099"]
+
+networks:
+  aauth: {}
+
+volumes:
+  state:
