@@ -125,6 +125,9 @@ func newServe(c *common) *cobra.Command {
 					return fmt.Errorf("listening on %s: %w (port 443 needs no privileges on macOS; on Linux grant CAP_NET_BIND_SERVICE or use a container)", listen, err)
 				}
 				addr = ln.Addr().String()
+				// Record the address before serving: the agent token request
+				// below dials the roles through it.
+				sb.SetAddr(addr)
 				go func() { errs <- sb.Serve(ctx, ln) }()
 			} else if noSigner {
 				return errors.New("nothing to serve: --roles none needs the signing helper")

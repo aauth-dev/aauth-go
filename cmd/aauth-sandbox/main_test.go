@@ -61,6 +61,7 @@ func TestTrace(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
+	sb.SetAddr(ln.Addr().String()) // before any request dials the roles
 	go func() { done <- sb.Serve(ctx, ln) }()
 	defer func() {
 		cancel()
