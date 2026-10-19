@@ -22,6 +22,12 @@ of the AAuth drafts.
 - `MissionStatusError.Repropose` (draft -11 §8.6, §8.8): true only for an
   expired mission, which invites a new proposal; `KnownTerminationReason`
   tells the defined reasons from opaque ones.
+- Authorization endpoint (draft -11 §6.6): `Transport.Authorize` requests
+  access ahead of a call with a person token, follows deferred
+  interaction, and returns the granted scope and session token or redeems
+  the resource token for an auth token, caching what it obtains. Resources
+  serve the endpoint with `AuthorizationHandler` and `WriteAuthorized`;
+  `ErrCodeInvalidScope` and `ErrCodeInvalidAccount` name its errors.
 
 ## [0.2.0] - Unreleased
 

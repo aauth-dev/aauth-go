@@ -20,7 +20,7 @@ Status against draft -11, by section. Legend: ✅ implemented and tested,
 | §6.3 `AAuth-Access` session token | ✅ | Signature-bound, rolling refresh |
 | §6.4 Person token required | ✅ | `ChallengePersonToken`, `VerifyAndExtractPerson`; `Transport` obtains person tokens |
 | §6.5 Auth token required | ✅ | 401 challenges and 202 deferred delivery (§6.5.1) |
-| §6.6 Authorization endpoint | 🟡 | Metadata member and `IssueResourceToken` for the response; no agent-side client |
+| §6.6 Authorization endpoint | ✅ | `Transport.Authorize` (person token, deferred interaction, `AAuth-Access`, or a resource token redeemed at the PS) and `AuthorizationHandler`, `WriteAuthorized`; `invalid_scope` and `invalid_account` |
 | §6.7 Resource token | ✅ | Issued only against a verified person or auth token; PS and AS verification with the presented-token cross-check (§6.7.2); agent-side challenge verification (§6.7.3) |
 
 ## §7 Person Server

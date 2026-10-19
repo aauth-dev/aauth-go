@@ -73,10 +73,27 @@ func (r *resource) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	switch req.URL.Path {
 	case "/.well-known/" + aauth.WellKnownResource:
 		writeJSON(w, aauth.ResourceMetadata{
-			ServerMetadata:     aauth.ServerMetadata{Issuer: r.url, JWKSURI: r.url + "/jwks"},
-			AccessMode:         aauth.AccessModeAuthToken,
-			RevocationEndpoint: r.url + "/revoke",
+			ServerMetadata:        aauth.ServerMetadata{Issuer: r.url, JWKSURI: r.url + "/jwks"},
+			AccessMode:            aauth.AccessModeAuthToken,
+			RevocationEndpoint:    r.url + "/revoke",
+			AuthorizationEndpoint: r.url + "/authorize",
 		})
+		return
+	case "/authorize":
+		// §6.6.2: authorization ahead of a call answers with a resource
+		// token, as the auth-token challenge does.
+		(&aauth.AuthorizationHandler{
+			Resource: r.url,
+			Verify:   r.opts(),
+			Decide: func(_ context.Context, _ *http.Request, pc *aauth.PersonClaims, ar aauth.AuthorizeRequest) (aauth.AuthorizeDecision, error) {
+				if ar.Scope != r.scope {
+					return aauth.AuthorizeDecision{}, &aauth.ProblemError{Status: http.StatusBadRequest, Code: aauth.ErrCodeInvalidScope}
+				}
+				rt, err := aauth.IssueResourceToken(aauth.ResourceTokenParams{Resource: r.url, Audience: r.audience(), Scope: ar.Scope},
+					pc, r.key.Key, r.key.JWK().Kid)
+				return aauth.AuthorizeDecision{ResourceToken: rt}, err
+			},
+		}).ServeHTTP(w, req)
 		return
 	case "/jwks":
 		writeJSON(w, r.key.JWKS())
