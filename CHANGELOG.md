@@ -9,6 +9,11 @@ of the AAuth drafts.
 
 ## [Unreleased]
 
+### Fixed
+
+- `aauth-sandbox serve` records its listener address before serving, so its
+  first agent token request no longer dials the default port.
+
 ### Added
 
 - `sandbox` package and `aauth-sandbox` command: every role from this
@@ -26,6 +31,20 @@ of the AAuth drafts.
   roles, `--signer-any-interface` lets the helper listen inside a
   container, and `aauth-sandbox health` is the containers' health check.
   `deploy/docker/smoke.sh` drives all five access modes with curl.
+
+- `ResourceGuard`: middleware for resources in which each operation declares
+  the least it requires (`AccessAgent`, `AccessPerson`, or `AccessAuth` with
+  a scope). It verifies the presented token, answers with the next
+  requirement when it falls short, and passes a `Caller` to the handler
+  (`CallerFromContext`). `TrustIssuers` limits the person and access
+  servers it accepts, and `WellKnown` serves its metadata and keys.
+- `agentprovider.Client.Enroll`: an `aauth.Agent` from a hosted agent
+  provider, with the identifier and person server its token names and
+  tokens issued again as they near expiry.
+- Sandbox upstreams: `--upstream petstore=http://127.0.0.1:8080` (or
+  `Config.Upstreams`) serves a server of your own at
+  `https://petstore.aauth.test`, traced and reachable through the signing
+  helper.
 
 - `examples/walkthrough`: tested Go code for each step of the AAuth
   walkthroughs (agent token, person token, consent, agent identity,

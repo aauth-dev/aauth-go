@@ -157,6 +157,40 @@ aauth-sandbox serve --remote ps=https://ps.example.com
 
 The sandbox stops serving that role and calls the external origin instead: agent tokens name it as the agent's PS, and resources name it as the audience of their resource tokens.
 
+## Front Your Own Server
+
+Run a resource you are developing behind the sandbox with `--upstream`:
+
+```bash
+petstore-server --listen 127.0.0.1:8080 &
+aauth-sandbox serve --upstream petstore=http://127.0.0.1:8080
+```
+
+The sandbox serves `https://petstore.aauth.test` with its CA and passes each
+request to the server with its `Host` header, so the server's identifier is
+`https://petstore.aauth.test` and signatures over `@authority` still verify.
+Its traffic appears in the trace, and the signing helper reaches it like a
+role. Add the name to your hosts entry (`aauth-sandbox hosts --upstream
+petstore=...` prints it). The server itself fetches the PS's keys from
+`https://ps.aauth.test`, so it must trust the sandbox CA.
+
+An agent of your own enrolls at the sandbox's agent provider with
+`agentprovider.Client.Enroll`, then calls the server through
+`aauth.Transport`:
+
+```go
+ap := &agentprovider.Client{BaseURL: "https://ap.aauth.test",
+	Paths: agentprovider.Paths{Token: sandbox.PathEnroll}, HTTPClient: hc}
+agent, err := ap.Enroll(ctx, key, nil)
+if err != nil {
+	return err
+}
+ps := aauth.NewPSClient(agent.PS, agent)
+ps.HTTPClient = hc
+client := &http.Client{Transport: aauth.NewTransport(agent, ps)}
+res, err := client.Get("https://petstore.aauth.test/pets")
+```
+
 ## State
 
 `~/.aauth-sandbox` (or `--state`) holds the CA (`ca.pem`, `ca-key.pem`) and each role's key under `keys/`. Keys persist across restarts, so tokens and thumbprints stay stable. Delete the directory to start over.
