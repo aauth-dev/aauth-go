@@ -66,6 +66,7 @@ nav:
       - Hosted AP, PS, and AS: guides/servers.md
       - Design and security notes: guides/design-and-security.md
       - Testing: guides/testing.md
+      - Sandbox: guides/sandbox.md
       - Migrating from v0.1: guides/migrating-from-v0.1.md
   - Specifications:
       - specs/index.md

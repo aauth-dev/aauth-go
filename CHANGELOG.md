@@ -11,6 +11,15 @@ of the AAuth drafts.
 
 ### Added
 
+- `sandbox` package and `aauth-sandbox` command: every role from this
+  module on one TLS listener, routed by host (`ap`, `ps`, `as`, `resource`
+  and `docs` under `aauth.test`), with a development certificate
+  authority, persisted role keys, automatic or manual consent and a
+  headless approval endpoint, a message trace at `/sandbox/trace`, demo
+  resources for all five access modes, and a loopback signing helper that
+  signs requests for HTTP clients that cannot sign. Any role can point at
+  an external implementation with `--remote`. See the sandbox guide.
+
 - `examples/walkthrough`: tested Go code for each step of the AAuth
   walkthroughs (agent token, person token, consent, agent identity,
   resource-managed access, person identity, PS authorization, federated
@@ -49,6 +58,11 @@ of the AAuth drafts.
 
 - `accessserver.Client` reports an access server's 402 as an error wrapping
   `*aauth.PaymentRequiredError` when no `Payment` handler is configured.
+
+### Fixed
+
+- `ChainInteraction` and `WriteClarification` set `Content-Type:
+  application/json` on their 202 bodies.
 
 ## [0.2.0] - Unreleased
 

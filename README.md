@@ -46,6 +46,7 @@ interactive tour of the protocol, see
 - [Protocol coverage](#protocol-coverage)
 - [Design notes](#design-notes)
 - [Security notes](#security-notes)
+- [Sandbox](#sandbox)
 - [Testing](#testing)
 - [License](#license)
 
@@ -72,6 +73,7 @@ import aauth "github.com/aauth-dev/aauth-go"
 | [`agentprovider`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/agentprovider) | Hosted agent provider: agent token issuance, two-key and single-key refresh, sub-agent tokens, and a `Client` with a `TokenSource` for agents. |
 | [`ratelimit`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/ratelimit) | In-memory token bucket implementing `aauth.Limiter` for single-instance deployments. |
 | [`interactioncode`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/interactioncode) | Interaction code generation and canonicalization (Crockford base32). |
+| [`sandbox`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/sandbox) | Every role together for development, behind the `aauth-sandbox` command: development CA, consent pages, message trace and a signing helper. |
 
 ## Quick start: agent
 
@@ -402,6 +404,18 @@ it through whatever payment protocol the server names, and the SDK polls
   it in production.
 - **Keep the PS `SubjectKey` stable and secret.** It derives every directed
   `sub`; changing it changes every person's identifier at every resource.
+
+## Sandbox
+
+`aauth-sandbox` runs every role from this module on your machine, on `https://*.aauth.test`, with a development certificate authority, consent pages, a message trace and a signing helper for HTTP clients that cannot sign:
+
+```bash
+go install github.com/aauth-dev/aauth-go/cmd/aauth-sandbox@latest
+aauth-sandbox serve
+curl http://127.0.0.1:8099/https://resource.aauth.test/api/documents
+```
+
+See the [sandbox guide](docs/guides/sandbox.md).
 
 ## Testing
 

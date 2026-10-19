@@ -72,3 +72,17 @@ A `RoundTripper` wrapper on outgoing clients and a middleware on role handlers r
 - Unit tests for configuration, CA issuance, routing, the signing helper and the trace.
 - An end-to-end test runs `sandbox.New` in-process with an in-memory listener and drives the five access modes through the signing helper.
 - CI builds the image and runs the end-to-end flow against Compose; the minikube run is documented and optional in CI.
+
+## Implementation Notes
+
+Phases 1 and 2 as built, where they differ from or refine the design above:
+
+- **Configuration is flags, not YAML,** for now: `--state`, `--domain`, `--remote role=https://origin`, `--listen`, `--signer`, `--no-signer`, `--consent` and `--person`. `sandbox.Config` holds the same settings for library use; a YAML file can map onto it later without new dependencies in the library.
+- **Paths follow the draft-11 examples:** agent provider `POST /agent-token` (two-key refresh, `jkt-jwt`) and `POST /enroll` (`hwk`); PS `POST /person`, `POST /token`, `/pending/{id}`, `/interaction`; AS `POST /token`, `/pending/{id}`; resources `GET /api/documents`, `GET /api/data`, `POST /authorize`, `/pending/{id}`, `/interaction`; every role's JWKS at `/jwks.json`.
+- **One demo resource serves every access mode it can:** `/api/documents` accepts an agent, person or auth token; `/api/data` is resource-managed. The session token is accepted as `Authorization: AAuth` (draft-11 §6.3) or `AAuth-Access`.
+- **Location headers are made absolute** by the sandbox router, as the draft's examples show them, so clients can follow them without knowing which server answered.
+- **The signing helper declares the agent's capabilities:** `AAuth-Capabilities: interaction` to the resources, and a `capabilities` member in JSON object bodies sent to the PS when the body has none (draft-11 §7.1, §7.2), before computing the digest. `X-Sandbox-Capabilities` overrides or empties the list. Without this, the draft's `/token` example body would be answered `user_unreachable`.
+- **Presentation modes** are `agent`, `person`, `auth`, `hwk`, `jkt-jwt` and `none`. The helper's agent has a durable and a current key; agent tokens from `/agent-token` through the helper are bound to the current key, so a client can pass them back in `X-Sandbox-Token`.
+- **Trace types** (`sandbox.Exchange`, `sandbox.Message`) live in the sandbox package; the end-to-end JSON trace (`RMI-AAUTHGO-016`) can adopt them.
+- **Fixed walkthrough keys are not implemented yet.** Keys are generated on first run and persisted, which keeps thumbprints stable across restarts.
+- **Automatic consent** approves at the moment an interaction is created; a request that waits (`Prefer: wait`) may therefore answer `200` directly instead of `202`, and clients handle both.
