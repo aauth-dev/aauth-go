@@ -37,12 +37,20 @@ func TestConfigDefaults(t *testing.T) {
 		"consent":      {Consent: "sometimes"},
 		"unknown host": {Hosts: map[string]string{"cache": "x.test"}},
 		"http remote":  {Remote: map[string]string{RoleAS: "http://as.example"}},
-		"all remote": {Remote: map[string]string{RoleAP: "https://a.example", RolePS: "https://b.example", RoleAS: "https://c.example",
-			RoleResource: "https://d.example", RoleDocs: "https://e.example"}},
 	} {
 		if _, err := bad.withDefaults("/srv/root"); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	// Every role remote is a signing helper on its own.
+	allRemote := Config{Remote: map[string]string{RoleAP: "https://a.example", RolePS: "https://b.example", RoleAS: "https://c.example",
+		RoleResource: "https://d.example", RoleDocs: "https://e.example"}}
+	cfg, err = allRemote.withDefaults("/srv/root")
+	if err != nil {
+		t.Fatalf("all remote: %v", err)
+	}
+	if len(cfg.LocalHosts()) != 0 {
+		t.Errorf("all remote: local hosts %v", cfg.LocalHosts())
 	}
 }
 

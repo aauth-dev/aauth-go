@@ -85,3 +85,30 @@ func TestTrace(t *testing.T) {
 		t.Fatalf("%d exchanges after clear", n)
 	}
 }
+
+func TestRolesFlag(t *testing.T) {
+	c := &common{domain: "aauth.test", roles: []string{"ps"}}
+	cfg, err := c.config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Remote["ps"]; ok {
+		t.Fatal("ps should be local")
+	}
+	if cfg.Remote["as"] != "https://as.aauth.test" || len(cfg.Remote) != 4 {
+		t.Fatalf("remote = %v", cfg.Remote)
+	}
+
+	c = &common{roles: []string{"none"}, remote: []string{"ps=https://ps.example.com"}}
+	cfg, err = c.config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Remote) != 5 || cfg.Remote["ps"] != "https://ps.example.com" || cfg.Remote["ap"] != "https://ap.aauth.test" {
+		t.Fatalf("remote = %v (--remote should override the default)", cfg.Remote)
+	}
+
+	if _, err := (&common{roles: []string{"nope"}}).config(); err == nil {
+		t.Fatal("unknown role accepted")
+	}
+}
