@@ -19,6 +19,13 @@ of the AAuth drafts.
   resources for all five access modes, and a loopback signing helper that
   signs requests for HTTP clients that cannot sign. Any role can point at
   an external implementation with `--remote`. See the sandbox guide.
+- Sandbox in Docker: an image (`deploy/docker/Dockerfile`, distroless and
+  non-root), a Compose file with every role in one container, and one
+  with a container per role on a shared network. `aauth-sandbox init`
+  creates the CA and keys ahead of time, `--roles` serves a subset of
+  roles, `--signer-any-interface` lets the helper listen inside a
+  container, and `aauth-sandbox health` is the containers' health check.
+  `deploy/docker/smoke.sh` drives all five access modes with curl.
 
 - `examples/walkthrough`: tested Go code for each step of the AAuth
   walkthroughs (agent token, person token, consent, agent identity,

@@ -41,6 +41,34 @@ aauth-sandbox hosts | sudo tee -a /etc/hosts
 
 The sandbox's own server-to-server requests, and requests through the signing helper, reach the roles without hosts entries. You need them only to open the consent pages in a browser or to call the roles directly.
 
+## Run It in Docker
+
+Docker runs the sandbox without a Go toolchain. Two Compose files are in `deploy/docker/`:
+
+| File | Layout | Use it for |
+|------|--------|------------|
+| `compose.yaml` | Every role and the signing helper in one container; port 443 and the helper published on `127.0.0.1` | Day-to-day development, Postman, browsers |
+| `compose.roles.yaml` | One container per role on a shared network, each answering at its `.aauth.test` name, plus the helper in its own container | Seeing traffic between roles cross a real network; testing a role in isolation |
+
+```bash
+# Every role in one container
+docker compose -f deploy/docker/compose.yaml up -d --build --wait
+
+# One container per role
+docker compose -f deploy/docker/compose.roles.yaml up -d --build --wait
+
+# Drive all five access modes through the signing helper
+deploy/docker/smoke.sh http://127.0.0.1:8099
+```
+
+- **Ports.** `SIGNER_PORT` and `SANDBOX_HTTPS_PORT` change the host ports, for example `SIGNER_PORT=8199 docker compose -f deploy/docker/compose.yaml up -d`. Both are published on `127.0.0.1` only: the helper signs anything it is sent.
+- **State.** The CA and keys live in a Compose volume, so they survive restarts. `docker compose … down -v` removes them. With one container per role, an `init` service creates the CA and every key before the roles start, so they never race to create them.
+- **CA certificate.** `docker compose -f deploy/docker/compose.yaml exec sandbox aauth-sandbox ca export --state /state > aauth-sandbox-ca.pem`.
+- **Health.** Each container's health check is `aauth-sandbox health`, which asks the roles it serves (and, with `--signer`, the helper) to answer. The image has no shell or curl.
+- **Image.** `deploy/docker/Dockerfile` builds a static binary on a distroless, non-root image: `docker build -f deploy/docker/Dockerfile -t aauth-sandbox:dev .`
+
+The CLI options the Compose files use are available outside Docker too: `--roles ps` serves only the person server and reaches the other roles at their usual names; `--roles none` runs only the signing helper; `aauth-sandbox init` creates the CA and every key ahead of time.
+
 ## Trust the Certificate Authority
 
 On first run the sandbox creates a certificate authority in `~/.aauth-sandbox` and a certificate for the role names. Export it and trust it where you need it:
