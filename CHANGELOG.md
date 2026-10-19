@@ -11,6 +11,14 @@ of the AAuth drafts.
 
 ### Added
 
+- `examples/walkthrough`: tested Go code for each step of the AAuth
+  walkthroughs (agent token, person token, consent, agent identity,
+  resource-managed access, person identity, PS authorization, federated
+  authorization), run against servers built from this module. Each snippet
+  is marked as a named region (`pidl:begin`/`pidl:end`, named
+  `<scenario>.<step>.<role>`) so documentation tools can quote it; a test
+  keeps the region list in the package documentation and the markers in
+  step.
 - `AAuth-Capabilities` (draft -11 §11.7): `CapabilityInteraction`,
   `CapabilityClarification`, and `CapabilityPayment`; `FormatCapabilities`,
   `ParseCapabilities`, `UnionCapabilities`, and `HasCapability`.
