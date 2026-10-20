@@ -16,6 +16,9 @@ type authorizeWorld struct {
 	*threePartyWorld
 	decide func(ctx context.Context, r *http.Request, person *PersonClaims, req AuthorizeRequest) (AuthorizeDecision, error)
 	noEP   bool // publish no authorization_endpoint
+	// refuse, when set, may answer an authorization request before the
+	// handler does, returning true when it did.
+	refuse func(rw http.ResponseWriter) bool
 }
 
 func newAuthorizeWorld(t *testing.T) *authorizeWorld {
@@ -36,7 +39,12 @@ func newAuthorizeWorld(t *testing.T) *authorizeWorld {
 			return w.decide(ctx, r, p, req)
 		},
 	}
-	mux.Handle("/authorize", ah)
+	mux.Handle("/authorize", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if w.refuse != nil && w.refuse(rw) {
+			return
+		}
+		ah.ServeHTTP(rw, r)
+	}))
 	mux.HandleFunc("GET /pending/authz", func(rw http.ResponseWriter, _ *http.Request) {
 		WriteAuthorized(rw, "files:read", "sess-after-interaction")
 	})
@@ -233,5 +241,76 @@ func TestAuthorizationHandlerRejects(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAuthorizeReplacesARefusedPersonToken(t *testing.T) {
+	refusals := map[string]func(rw http.ResponseWriter){
+		"person-token requirement": ChallengePersonToken,
+		"expired person token": func(rw http.ResponseWriter) {
+			WriteSignatureError(rw, SignatureError{Code: SigErrExpiredJWT}, "expired")
+		},
+		"revoked person token": func(rw http.ResponseWriter) {
+			WriteSignatureError(rw, SignatureError{Code: SigErrRevokedJWT}, "revoked")
+		},
+	}
+	for name, refuse := range refusals {
+		t.Run(name, func(t *testing.T) {
+			w := newAuthorizeWorld(t)
+			w.decide = func(_ context.Context, _ *http.Request, p *PersonClaims, req AuthorizeRequest) (AuthorizeDecision, error) {
+				return w.issueRT(req, p)
+			}
+			first := true
+			w.refuse = func(rw http.ResponseWriter) bool {
+				if !first {
+					return false
+				}
+				first = false
+				refuse(rw)
+				return true
+			}
+			res, err := w.transport().Authorize(context.Background(), w.resourceURL, AuthorizeRequest{Scope: "files:read"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.AuthToken == "" {
+				t.Fatalf("result %+v", res)
+			}
+			if p := w.personRequests.Load(); p != 2 {
+				t.Fatalf("person token requests %d, want 2: the refused token is replaced once", p)
+			}
+		})
+	}
+}
+
+func TestAuthorizeDoesNotRetryOtherRefusals(t *testing.T) {
+	w := newAuthorizeWorld(t)
+	w.decide = func(_ context.Context, _ *http.Request, p *PersonClaims, req AuthorizeRequest) (AuthorizeDecision, error) {
+		return w.issueRT(req, p)
+	}
+	refusals := 0
+	w.refuse = func(rw http.ResponseWriter) bool {
+		refusals++
+		WriteSignatureError(rw, SignatureError{Code: SigErrInvalidSignature}, "bad signature")
+		return true
+	}
+	if _, err := w.transport().Authorize(context.Background(), w.resourceURL, AuthorizeRequest{Scope: "files:read"}); err == nil {
+		t.Fatal("an invalid_signature refusal succeeded")
+	}
+	if refusals != 1 || w.personRequests.Load() != 1 {
+		t.Fatalf("refusals %d, person token requests %d; want one of each", refusals, w.personRequests.Load())
+	}
+
+	// A refused replacement is not replaced again.
+	w2 := newAuthorizeWorld(t)
+	w2.refuse = func(rw http.ResponseWriter) bool {
+		ChallengePersonToken(rw)
+		return true
+	}
+	if _, err := w2.transport().Authorize(context.Background(), w2.resourceURL, AuthorizeRequest{Scope: "files:read"}); err == nil {
+		t.Fatal("a resource refusing every person token was authorized")
+	}
+	if p := w2.personRequests.Load(); p != 2 {
+		t.Fatalf("person token requests %d, want 2", p)
 	}
 }
