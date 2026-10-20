@@ -71,6 +71,9 @@ nav:
   - Specifications:
       - specs/index.md
       - Protocol coverage: specs/protocol-coverage.md
+  - Announcements:
+      - announcements/index.md
+      - v0.3.0: announcements/v0.3.0.md
   - Release notes:
       - releases/index.md
       - v0.3.0: releases/v0.3.0.md
