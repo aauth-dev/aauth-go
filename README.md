@@ -47,6 +47,7 @@ interactive tour of the protocol, see
 - [Design notes](#design-notes)
 - [Security notes](#security-notes)
 - [Sandbox](#sandbox)
+- [Examples](#examples)
 - [Testing](#testing)
 - [License](#license)
 
@@ -70,7 +71,7 @@ import aauth "github.com/aauth-dev/aauth-go"
 | [`aauth`](https://pkg.go.dev/github.com/aauth-dev/aauth-go) | The protocol vocabulary shared by every role: identifiers, keys, tokens (mint, issue, verify), HTTP message signatures, metadata, requirements, deferred responses, revocation, errors, and the agent-side `PSClient` and `Transport`. Resources use it directly. |
 | [`personserver`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/personserver) | Person Server as an `http.Handler`: person and auth token endpoints, pending requests, missions, permission, audit, interaction, revocation, and federation to access servers. |
 | [`accessserver`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/accessserver) | Access Server as an `http.Handler` (AS token endpoint, revocation), plus `Client` (PS to AS over HTTP) and `Server.Local` (in-process PS-AS collapse). |
-| [`agentprovider`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/agentprovider) | Hosted agent provider: agent token issuance, two-key and single-key refresh, sub-agent tokens, and a `Client` with a `TokenSource` for agents. |
+| [`agentprovider`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/agentprovider) | Hosted agent provider: agent token issuance, two-key and single-key refresh, sub-agent tokens, and a `Client` for agents (`Enroll`, `TokenSource`). |
 | [`ratelimit`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/ratelimit) | In-memory token bucket implementing `aauth.Limiter` for single-instance deployments. |
 | [`interactioncode`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/interactioncode) | Interaction code generation and canonicalization (Crockford base32). |
 | [`sandbox`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/sandbox) | Every role together for development, behind the `aauth-sandbox` command: development CA, consent pages, message trace and a signing helper. |
@@ -142,8 +143,13 @@ if !perm.Granted() {
 
 ## Quick start: resource
 
-A resource verifies whichever token a request presents and challenges for the
-next one. With PS authorization (three-party), an agent token is answered
+For most resources, `aauth.ResourceGuard` is enough: each operation declares
+the least it requires (the agent's identity, the person, or an auth token for
+a scope), and the guard verifies the presented token and challenges for the
+next one. See the [resource guide](docs/guides/resource.md#protect-operations-with-resourceguard).
+
+Without the guard, a resource verifies whichever token a request presents and
+challenges for the next one. With PS authorization (three-party), an agent token is answered
 with `requirement=person-token`, a person token with a resource token
 challenge (`requirement=auth-token`), and an auth token is served:
 
@@ -415,7 +421,11 @@ aauth-sandbox serve
 curl http://127.0.0.1:8099/https://resource.aauth.test/api/documents
 ```
 
-See the [sandbox guide](docs/guides/sandbox.md).
+It also runs in Docker (`deploy/docker`), one container for every role or one per role, and fronts a resource of your own at `https://<name>.aauth.test` with `--upstream`. See the [sandbox guide](docs/guides/sandbox.md).
+
+## Examples
+
+[`examples/walkthrough`](examples/walkthrough) has tested Go code for each step of the AAuth walkthroughs, from enrollment to federated authorization, for every role involved: agent, resource, person server, access server and agent provider. Each snippet is a named region that documentation tools can quote; the [PIDL](https://github.com/grokify/pidl) walkthrough viewer shows them next to the HTTP messages.
 
 ## Testing
 

@@ -34,8 +34,83 @@ token at the PS, verifies what it receives, caches tokens per resource with a
 five-minute refresh margin, and retries. Set `Transport.OnRequirement` to
 show the user an interaction URL and code while a request waits for them.
 
-An agent whose tokens come from a hosted provider uses
-`aauth.WithTokenSource`, for example with `agentprovider.Client.TokenSource`.
+## Get Tokens from a Hosted Agent Provider
+
+An agent whose tokens come from a hosted provider enrolls its key there.
+`agentprovider.Client.Enroll` issues the first agent token and returns an
+`aauth.Agent` with the identifier, issuer and person server that token names;
+new tokens are issued for the same key as the current one nears expiry:
+
+```go
+ap := &agentprovider.Client{BaseURL: "https://ap.example"}
+agent, err := ap.Enroll(ctx, key, nil) // key: the agent's crypto.Signer
+if err != nil {
+	return err
+}
+ps := aauth.NewPSClient(agent.PS, agent)
+hc := &http.Client{Transport: aauth.NewTransport(agent, ps)}
+```
+
+For other refresh schemes, such as the two-key refresh, pass
+`agentprovider.Client.TokenSource` to `aauth.WithTokenSource`.
+
+## Declare Capabilities
+
+A resource or person server may ask the person to act (interaction), ask the
+agent a question (clarification), or ask for payment only when the agent says
+it can handle that (§11.7). Declare what your agent handles on the transport;
+it is sent as `AAuth-Capabilities` on requests to resources and as the
+`capabilities` parameter of person and auth token requests:
+
+```go
+tr := aauth.NewTransport(agent, ps)
+tr.Capabilities = []string{aauth.CapabilityInteraction}
+tr.OnRequirement = func(r aauth.Requirement) {
+	if r.Requirement == aauth.RequirementInteraction {
+		fmt.Printf("Approve at %s (code %s)\n", r.URL, r.Code)
+	}
+}
+```
+
+Without a declaration, recipients assume the agent can do none of these and
+refuse rather than wait for a person who will never be asked.
+
+## Request Access Ahead of a Call
+
+A resource with an authorization endpoint (§6.6) can be asked for a scope
+before the first call. `Transport.Authorize` presents a person token, follows
+any wait for the person, and caches what it obtains, so the next request is
+served directly:
+
+```go
+res, err := tr.Authorize(ctx, "https://files.example", aauth.AuthorizeRequest{Scope: "files:write"})
+if err != nil {
+	return err // a *aauth.ProblemError for invalid_scope or invalid_account
+}
+// res.AuthToken (a resource token redeemed at the PS), or res.Scope and
+// res.SessionToken when the resource authorized the agent itself.
+```
+
+## Pay When a Resource Asks
+
+A resource or access server answers 402 Payment Required when access costs
+money (§6.5, §11.8.4). The SDK carries the payment protocol's challenge and
+leaves settling it to you: set `Transport.Payment` and declare
+`CapabilityPayment`, and the transport settles, then polls `Location` or
+retries the request:
+
+```go
+tr.Capabilities = append(tr.Capabilities, aauth.CapabilityPayment)
+tr.Payment = aauth.PaymentHandlerFunc(func(ctx context.Context, p *aauth.PaymentRequiredError) error {
+	// p.Challenges (WWW-Authenticate) and p.Body name the payment protocol,
+	// such as x402; pay through it, then return nil.
+	return payWith(ctx, p)
+})
+```
+
+Without a handler, a 402 is returned to the caller.
+
+## Missions and Permissions
 
 Governance is optional and uses the same client:
 

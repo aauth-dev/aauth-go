@@ -115,3 +115,29 @@ An agent using `aauth.Transport` answers each challenge itself. The
 challenge for a missing scope also asks for the scope the agent already
 holds, because the agent keeps one auth token per resource: the new token
 replaces the old one without losing access.
+
+## Ask Only What the Agent Can Answer
+
+Before deferring a request for the person, check that the agent declared it
+can involve them (§11.7); otherwise refuse, so the agent is not left waiting:
+
+```go
+if !aauth.CanRaise(r, aauth.RequirementInteraction) {
+	aauth.WriteProblem(w, http.StatusForbidden, aauth.TokenErrUserUnreachable,
+		"declare the interaction capability so the person can approve")
+	return
+}
+```
+
+`aauth.CanRequirePayment` is the same check before answering 402.
+
+## Serve an Authorization Endpoint
+
+Agents can ask for a scope before calling (§6.6). `aauth.AuthorizationHandler`
+verifies the person token and the signature and asks your `Decide` function.
+Its `AuthorizeDecision` holds one of: a `ResourceToken` for the agent to
+redeem at its person server; a granted `Scope`, with an optional
+`SessionToken`, when the resource authorizes the agent itself; or `Pending`,
+to wait for the person first. Publish its URL as `authorization_endpoint` in the resource metadata.
+The compile-checked version is the PS authorization step of
+[`examples/walkthrough`](https://github.com/aauth-dev/aauth-go/tree/main/examples/walkthrough).
