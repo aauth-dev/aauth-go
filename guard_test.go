@@ -1,7 +1,10 @@
 package aauth
 
 import (
+	"context"
+	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -244,5 +247,206 @@ func getJSON(t *testing.T, url string, v any) {
 	}
 	if !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") {
 		t.Errorf("GET %s: Content-Type %q", url, res.Header.Get("Content-Type"))
+	}
+}
+
+// failingSigner has a valid public key but cannot sign, so a guard using
+// it cannot issue resource tokens.
+type failingSigner struct{ crypto.Signer }
+
+func (failingSigner) Sign(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
+	return nil, errors.New("signer unavailable")
+}
+
+// guardOnly serves one operation behind a guard built from cfg at the
+// world's resource URL, and returns that URL.
+func guardOnly(t *testing.T, w *threePartyWorld, cfg ResourceGuardConfig, access Access) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	w.resourceURL = srv.URL
+	cfg.Resource = srv.URL
+	if cfg.Verify.Resolver == nil {
+		cfg.Verify = localOpts(w.resolver())
+	}
+	g, err := NewResourceGuard(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux.Handle("/op", g.Require(access, http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		writeBody(t, rw, "ok")
+	})))
+	mux.Handle("/", g.WellKnown())
+	return srv.URL
+}
+
+func TestResourceGuardRejectsBadRequests(t *testing.T) {
+	w := guardedWorld(t)
+	agentTok, err := w.agent.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A signature that does not match the request.
+	req, err := http.NewRequest(http.MethodGet, w.resourceURL+"/pets", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	AttachSignatureKey(req, agentTok)
+	if err := SignRequest(req, w.agent.Key, ""); err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(HeaderSignature, "sig=:AAAA:")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeBody(res.Body)
+	if res.StatusCode != http.StatusUnauthorized || !strings.Contains(res.Header.Get(HeaderSignatureError), SigErrInvalidSignature) {
+		t.Errorf("tampered signature: %d %q", res.StatusCode, res.Header.Get(HeaderSignatureError))
+	}
+
+	// A Signature-Key scheme agents may not use.
+	req, err = http.NewRequest(http.MethodGet, w.resourceURL+"/pets", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(HeaderSignatureKey, `sig=jwks_uri;jwks_uri="https://agent.example/jwks.json";kid="k"`)
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeBody(res.Body)
+	if res.StatusCode != http.StatusUnauthorized || !strings.Contains(res.Header.Get(HeaderSignatureError), SigErrUnsupportedScheme) {
+		t.Errorf("jwks_uri scheme: %d %q", res.StatusCode, res.Header.Get(HeaderSignatureError))
+	}
+
+	// A token that is not an agent, person or auth token: a resource token.
+	rt, err := IssueResourceToken(ResourceTokenParams{Resource: w.resourceURL, Scope: "pets:write"},
+		verifiedPerson(t, w), w.resourceKey.Key, w.resourceKey.JWK().Kid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res = signedCall(t, w.agent, http.MethodGet, w.resourceURL+"/pets", rt)
+	closeBody(res.Body)
+	if res.StatusCode != http.StatusUnauthorized || !strings.Contains(res.Header.Get(HeaderSignatureError), SigErrInvalidJWT) {
+		t.Errorf("resource token presented: %d %q", res.StatusCode, res.Header.Get(HeaderSignatureError))
+	}
+
+	// A token that is not a JWT at all.
+	res = signedCall(t, w.agent, http.MethodGet, w.resourceURL+"/pets", "not-a-jwt")
+	closeBody(res.Body)
+	if res.StatusCode != http.StatusUnauthorized || res.Header.Get(HeaderSignatureError) == "" {
+		t.Errorf("malformed token: %d %q", res.StatusCode, res.Header.Get(HeaderSignatureError))
+	}
+}
+
+// verifiedPerson returns the world's person token for its resource,
+// verified, as a presented token.
+func verifiedPerson(t *testing.T, w *threePartyWorld) *PersonClaims {
+	t.Helper()
+	pc, err := VerifyPersonToken(context.Background(), w.personToken(t, w.resourceURL), w.resourceURL, localOpts(w.resolver()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pc
+}
+
+func TestResourceGuardRejectsUntrustedAuthToken(t *testing.T) {
+	// The agent obtains an auth token at an operation of a guard that
+	// trusts its PS; a second guard on the same resource does not.
+	w := newThreePartyWorld(t)
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	w.resourceURL = srv.URL
+	cfg := ResourceGuardConfig{
+		Resource: srv.URL, Key: w.resourceKey.Key, KeyID: w.resourceKey.JWK().Kid,
+		Verify: localOpts(w.resolver()), AgentResolver: SelfSignedResolver{}, TrustIssuer: TrustIssuers(w.psURL),
+	}
+	trusting, err := NewResourceGuard(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.TrustIssuer = TrustIssuers("https://other-ps.example")
+	strict, err := NewResourceGuard(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) { writeBody(t, rw, "ok") })
+	mux.Handle("/write", trusting.Require(Access{Level: AccessAuth, Scope: "pets:write"}, ok))
+	mux.Handle("/strict", strict.Require(Access{Level: AccessAgent}, ok))
+
+	hc := &http.Client{Transport: w.transport()}
+	if code, body := guardCall(t, hc, http.MethodPost, srv.URL+"/write"); code != http.StatusOK {
+		t.Fatalf("write: %d %s", code, body)
+	}
+	// The transport now presents its cached auth token.
+	code, _ := guardCall(t, hc, http.MethodGet, srv.URL+"/strict")
+	if code != http.StatusForbidden {
+		t.Fatalf("auth token from an untrusted PS: %d, want 403", code)
+	}
+}
+
+func TestResourceGuardWithoutTrustRefusesPersonTokens(t *testing.T) {
+	// An agent-level guard needs no TrustIssuer, and then accepts no
+	// person or auth tokens.
+	w := newThreePartyWorld(t)
+	url := guardOnly(t, w, ResourceGuardConfig{}, Access{Level: AccessAgent})
+	res := signedCall(t, w.agent, http.MethodGet, url+"/op", w.personToken(t, url))
+	defer closeBody(res.Body)
+	b, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusForbidden || !strings.Contains(string(b), "accepts no person or auth tokens") {
+		t.Fatalf("person token without TrustIssuer: %d %s", res.StatusCode, b)
+	}
+	// Agent tokens resolve through Verify.Resolver when no AgentResolver
+	// is set; it does not know this self-hosted agent.
+	agentTok, err := w.agent.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res2 := signedCall(t, w.agent, http.MethodGet, url+"/op", agentTok)
+	closeBody(res2.Body)
+	if res2.StatusCode != http.StatusUnauthorized || res2.Header.Get(HeaderSignatureError) == "" {
+		t.Fatalf("agent token from an unknown issuer: %d %q", res2.StatusCode, res2.Header.Get(HeaderSignatureError))
+	}
+}
+
+func TestResourceGuardResourceTokenFailure(t *testing.T) {
+	w := newThreePartyWorld(t)
+	url := guardOnly(t, w, ResourceGuardConfig{
+		Key: failingSigner{w.resourceKey.Key}, TrustIssuer: TrustIssuers(w.psURL),
+	}, Access{Level: AccessAuth, Scope: "pets:write"})
+	res := signedCall(t, w.agent, http.MethodPost, url+"/op", w.personToken(t, url))
+	closeBody(res.Body)
+	if res.StatusCode != http.StatusInternalServerError || res.Header.Get(HeaderRequirement) != "" {
+		t.Fatalf("resource token signing failure: %d %q", res.StatusCode, res.Header.Get(HeaderRequirement))
+	}
+}
+
+func TestResourceGuardWellKnownWithoutKey(t *testing.T) {
+	w := newThreePartyWorld(t)
+	url := guardOnly(t, w, ResourceGuardConfig{JWKSPath: "/keys"}, Access{Level: AccessAgent})
+	var meta ResourceMetadata
+	getJSON(t, url+"/.well-known/"+WellKnownResource, &meta)
+	if meta.Issuer != url || meta.JWKSURI != "" {
+		t.Errorf("metadata without a key = %+v", meta)
+	}
+	for _, path := range []string{"/keys", "/elsewhere"} {
+		res, err := http.Get(url + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closeBody(res.Body)
+		if res.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s: %d, want 404", path, res.StatusCode)
+		}
+	}
+	if (AccessLevel(7)).String() != "AccessLevel(7)" {
+		t.Error("String of an unknown level")
 	}
 }
