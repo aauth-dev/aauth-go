@@ -97,6 +97,14 @@ Control headers, removed before forwarding:
 | `X-Sandbox-Token` | The token to present. For `agent` it replaces the helper's own agent token |
 | `X-Sandbox-Capabilities` | The capabilities the agent declares (default `interaction`; empty for none) |
 
+Without `X-Sandbox-Present` or `X-Sandbox-Token`, the helper signs as the request's own `Signature-Key` says, the way a signing proxy receives requests from clients that cannot sign, such as Postman collections that [pidl](https://github.com/grokify/pidl) generates with `--signer proxy`:
+
+| `Signature-Key` received | The helper |
+|--------------------------|------------|
+| `sig=jwt;jwt="<token>"` | Presents the token as the agent, person or auth token its `typ` names |
+| `sig=jwt`, or none | Presents its own agent token |
+| `sig=hwk`, `sig=jkt-jwt` | Signs with that scheme |
+
 The helper adds `Content-Digest` to bodies and signs `@method`, `@authority`, `@path`, `signature-key`, and `content-digest`, `content-type` and `authorization` when present. It declares the agent's capabilities as `AAuth-Capabilities` to the resources, and as a `capabilities` member in JSON bodies sent to the PS when the body has none. Responses come back unchanged.
 
 `POST /sign` with `{"method", "url", "headers": [[name, value]], "body", "present", "token"}` returns the headers to add, for clients that send requests themselves.
