@@ -55,6 +55,10 @@
         },
         {
           "description": "Sandbox upstreams: `--upstream petstore=http://127.0.0.1:8080` (or `Config.Upstreams`) serves a server of your own at `https://petstore.aauth.test`, traced and reachable through the signing helper."
+        },
+        {
+          "description": "The sandbox signing helper signs as a request's own `Signature-Key` names when no `X-Sandbox-Present` or `X-Sandbox-Token` is sent: `hwk` and `jkt-jwt` sign with that scheme, and `jwt` presents its token as the agent, person or auth token its `typ` names, or the helper's own agent token",
+          "commit": "7bc64e0"
         }
       ],
       "changed": [
