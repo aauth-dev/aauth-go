@@ -210,6 +210,35 @@ func TestAccessModes(t *testing.T) {
 		h.authorize(RoleResource)
 	})
 
+	// A client that cannot sign, such as a generated Postman collection,
+	// names what to present in Signature-Key instead of the sandbox
+	// headers.
+	t.Run("presented by Signature-Key", func(t *testing.T) {
+		h.t = t
+		sigKey := func(token string) map[string]string {
+			return map[string]string{"Signature-Key": `sig=jwt;jwt="` + token + `"`}
+		}
+		status, _, body := h.call(http.MethodPost, h.url(RoleAP, PathAgentToken), map[string]string{"Signature-Key": "sig=jkt-jwt"}, map[string]any{})
+		want(t, "agent token", status, http.StatusOK, body)
+		agent, _ := body["agent_token"].(string)
+		person := h.personToken(agent, h.url(RoleResource, ""))
+		status, _, body = h.call(http.MethodGet, h.url(RoleResource, "/api/documents"), sigKey(person), nil)
+		want(t, "documents as the person", status, http.StatusOK, body)
+
+		status, _, body = h.call(http.MethodPost, h.url(RoleResource, "/authorize"), sigKey(person), map[string]any{"scope": "data.read"})
+		want(t, "authorize", status, http.StatusOK, body)
+		rt, _ := body["resource_token"].(string)
+		status, hdr, body := h.call(http.MethodPost, h.url(RolePS, PathToken), map[string]string{"Signature-Key": `sig=jwt;jwt="` + agent + `"`, "Prefer": "wait=10"},
+			map[string]any{"resource_token": rt, "presented_token": person})
+		for i := 0; status == http.StatusAccepted && i < 20; i++ {
+			status, hdr, body = h.call(http.MethodGet, hdr.Get("Location"), map[string]string{"Signature-Key": "sig=jwt", "Prefer": "wait=10"}, nil)
+		}
+		want(t, "auth token", status, http.StatusOK, body)
+		at, _ := body["auth_token"].(string)
+		status, _, body = h.call(http.MethodGet, h.url(RoleResource, "/api/documents"), sigKey(at), nil)
+		want(t, "documents with the auth token", status, http.StatusOK, body)
+	})
+
 	t.Run("federated authorization", func(t *testing.T) {
 		h.t = t
 		h.sb.Trace().Clear()
