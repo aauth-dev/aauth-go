@@ -744,7 +744,11 @@ func TestResourceRevokesAtAS(t *testing.T) {
 }
 
 func TestClientParsing(t *testing.T) {
+	ctx := context.Background()
 	base, _ := url.Parse("https://as.example/as/token")
+	parse := func(r *http.Response) (*personserver.FederationResponse, error) {
+		return new(Client).parseResponse(ctx, base, r)
+	}
 	mk := func(status int, h map[string]string, body string) *http.Response {
 		r := &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}
 		for k, v := range h {
@@ -762,29 +766,53 @@ func TestClientParsing(t *testing.T) {
 		"no error":       mk(http.StatusBadRequest, nil, `oops`),
 		"server error":   mk(http.StatusInternalServerError, nil, `{"error":"server_error"}`),
 	} {
-		if _, err := parseResponse(base, r); err == nil {
+		if _, err := parse(r); err == nil {
 			t.Errorf("%s: no error", name)
 		}
 	}
-	out, err := parseResponse(base, mk(http.StatusAccepted, map[string]string{"Location": "/as/pending/1", "Retry-After": "3",
+	out, err := parse(mk(http.StatusAccepted, map[string]string{"Location": "/as/pending/1", "Retry-After": "3",
 		"AAuth-Requirement": "requirement=clarification"}, `{"status":"pending","clarification":"Why?","options":["a"],"timeout":9}`))
 	if err != nil || out.PendingURL != "https://as.example/as/pending/1" || out.RetryAfter != 3 || out.Question.Text != "Why?" {
 		t.Fatalf("%+v %v", out, err)
 	}
-	out, err = parseResponse(base, mk(http.StatusForbidden, nil, `{"error":"denied","detail":"no"}`))
+	out, err = parse(mk(http.StatusForbidden, nil, `{"error":"denied","detail":"no"}`))
 	if err != nil || out.ErrorCode != "denied" || out.ErrorStatus != http.StatusForbidden {
 		t.Fatalf("%+v %v", out, err)
 	}
+	// 402 (§9.1.2): reported without a payment handler; settled and then
+	// pending at Location with one; a Location is required.
+	var pr *aauth.PaymentRequiredError
+	if _, err := parse(mk(http.StatusPaymentRequired, map[string]string{"Location": "/as/pending/pay"}, "")); !errors.As(err, &pr) || pr.Location != "https://as.example/as/pending/pay" {
+		t.Fatalf("402 without handler: %v", err)
+	}
+	var settled []*aauth.PaymentRequiredError
+	payer := &Client{Payment: aauth.PaymentHandlerFunc(func(_ context.Context, p *aauth.PaymentRequiredError) error {
+		settled = append(settled, p)
+		return nil
+	})}
+	out, err = payer.parseResponse(ctx, base, mk(http.StatusPaymentRequired, map[string]string{
+		"Location": "/as/pending/pay", "WWW-Authenticate": `Payment id="x7Tg2pLq", method="example", request="eyJh"`,
+	}, ""))
+	if err != nil || out.PendingURL != "https://as.example/as/pending/pay" || len(settled) != 1 || settled[0].Server != "https://as.example" || len(settled[0].PaymentChallenges()) != 1 {
+		t.Fatalf("402 with handler: %+v %v %+v", out, err, settled)
+	}
+	if _, err := payer.parseResponse(ctx, base, mk(http.StatusPaymentRequired, nil, "")); err == nil {
+		t.Fatal("402 without Location accepted")
+	}
+	refusing := &Client{Payment: aauth.PaymentHandlerFunc(func(context.Context, *aauth.PaymentRequiredError) error { return errors.New("card declined") })}
+	if _, err := refusing.parseResponse(ctx, base, mk(http.StatusPaymentRequired, map[string]string{"Location": "/p"}, "")); err == nil || !strings.Contains(err.Error(), "card declined") {
+		t.Fatalf("settle error: %v", err)
+	}
 	// Discovery failures and answer errors.
 	c := NewClient(aauth.ServerSigner{}, nil)
-	if _, err := c.Federate(context.Background(), &personserver.FederationRequest{AccessServer: "http://127.0.0.1:1"}); err == nil {
+	if _, err := c.Federate(ctx, &personserver.FederationRequest{AccessServer: "http://127.0.0.1:1"}); err == nil {
 		t.Fatal("unreachable AS")
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
 	defer srv.Close()
 	key, _ := aauth.GenerateKey(aauth.AlgEd25519)
 	c = NewClient(aauth.ServerSigner{Issuer: "https://ps.example", DWK: aauth.WellKnownPerson, Kid: "k", Key: key}, nil)
-	if err := c.Answer(context.Background(), srv.URL+"/p", map[string]string{}); err == nil {
+	if err := c.Answer(ctx, srv.URL+"/p", map[string]string{}); err == nil {
 		t.Fatal("answer error swallowed")
 	}
 }

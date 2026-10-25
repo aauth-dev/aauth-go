@@ -1,0 +1,53 @@
+name: sandbox-docker
+
+# Builds the AAuth sandbox image and drives the five access modes through
+# its signing helper, first with every role in one container, then with
+# one container per role on a shared network.
+on:
+  push:
+    paths:
+      - "sandbox/**"
+      - "cmd/aauth-sandbox/**"
+      - "deploy/docker/**"
+      - "go.mod"
+      - "go.sum"
+      - "*.go"
+      - ".github/workflows/sandbox-docker.yml"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  all-in-one:
+    name: sandbox in one container
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start
+        run: docker compose -f deploy/docker/compose.yaml up -d --build --wait
+      - name: Five access modes through the signing helper
+        run: deploy/docker/smoke.sh http://127.0.0.1:8099
+      - name: Logs
+        if: always()
+        run: docker compose -f deploy/docker/compose.yaml logs
+      - name: Stop
+        if: always()
+        run: docker compose -f deploy/docker/compose.yaml down -v
+
+  per-role:
+    name: sandbox with one container per role
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and start
+        run: docker compose -f deploy/docker/compose.roles.yaml up -d --build --wait
+      - name: Five access modes through the signing helper
+        run: deploy/docker/smoke.sh http://127.0.0.1:8099
+      - name: Logs
+        if: always()
+        run: docker compose -f deploy/docker/compose.roles.yaml logs
+      - name: Stop
+        if: always()
+        run: docker compose -f deploy/docker/compose.roles.yaml down -v

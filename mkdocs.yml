@@ -66,12 +66,17 @@ nav:
       - Hosted AP, PS, and AS: guides/servers.md
       - Design and security notes: guides/design-and-security.md
       - Testing: guides/testing.md
+      - Sandbox: guides/sandbox.md
       - Migrating from v0.1: guides/migrating-from-v0.1.md
   - Specifications:
       - specs/index.md
       - Protocol coverage: specs/protocol-coverage.md
+  - Announcements:
+      - announcements/index.md
+      - v0.3.0: announcements/v0.3.0.md
   - Release notes:
       - releases/index.md
+      - v0.3.0: releases/v0.3.0.md
       - v0.2.0: releases/v0.2.0.md
       - v0.1.1: releases/v0.1.1.md
       - v0.1.0: releases/v0.1.0.md

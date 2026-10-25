@@ -2,6 +2,7 @@
 
 | Version | Draft implemented | Summary |
 |---|---|---|
+| [v0.3.0](v0.3.0.md) | `draft-hardt-oauth-aauth-protocol-11` | Capabilities, authorization endpoint, payment, `ResourceGuard`, and the sandbox. Compatible with v0.2. |
 | [v0.2.0](v0.2.0.md) | `draft-hardt-oauth-aauth-protocol-11` | All server roles, draft -11 wire format, new module path. Breaking. |
 | [v0.1.1](v0.1.1.md) | `draft-hardt-oauth-aauth-protocol-09` | Module path change. |
 | [v0.1.0](v0.1.0.md) | `draft-hardt-oauth-aauth-protocol-09` | Initial release. |

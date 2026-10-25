@@ -1,0 +1,7 @@
+.git
+.github
+site
+docs
+deploy/k8s
+coverage.out
+*.test

@@ -46,6 +46,8 @@ interactive tour of the protocol, see
 - [Protocol coverage](#protocol-coverage)
 - [Design notes](#design-notes)
 - [Security notes](#security-notes)
+- [Sandbox](#sandbox)
+- [Examples](#examples)
 - [Testing](#testing)
 - [License](#license)
 
@@ -69,9 +71,10 @@ import aauth "github.com/aauth-dev/aauth-go"
 | [`aauth`](https://pkg.go.dev/github.com/aauth-dev/aauth-go) | The protocol vocabulary shared by every role: identifiers, keys, tokens (mint, issue, verify), HTTP message signatures, metadata, requirements, deferred responses, revocation, errors, and the agent-side `PSClient` and `Transport`. Resources use it directly. |
 | [`personserver`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/personserver) | Person Server as an `http.Handler`: person and auth token endpoints, pending requests, missions, permission, audit, interaction, revocation, and federation to access servers. |
 | [`accessserver`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/accessserver) | Access Server as an `http.Handler` (AS token endpoint, revocation), plus `Client` (PS to AS over HTTP) and `Server.Local` (in-process PS-AS collapse). |
-| [`agentprovider`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/agentprovider) | Hosted agent provider: agent token issuance, two-key and single-key refresh, sub-agent tokens, and a `Client` with a `TokenSource` for agents. |
+| [`agentprovider`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/agentprovider) | Hosted agent provider: agent token issuance, two-key and single-key refresh, sub-agent tokens, and a `Client` for agents (`Enroll`, `TokenSource`). |
 | [`ratelimit`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/ratelimit) | In-memory token bucket implementing `aauth.Limiter` for single-instance deployments. |
 | [`interactioncode`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/interactioncode) | Interaction code generation and canonicalization (Crockford base32). |
+| [`sandbox`](https://pkg.go.dev/github.com/aauth-dev/aauth-go/sandbox) | Every role together for development, behind the `aauth-sandbox` command: development CA, consent pages, message trace and a signing helper. |
 
 ## Quick start: agent
 
@@ -140,8 +143,13 @@ if !perm.Granted() {
 
 ## Quick start: resource
 
-A resource verifies whichever token a request presents and challenges for the
-next one. With PS authorization (three-party), an agent token is answered
+For most resources, `aauth.ResourceGuard` is enough: each operation declares
+the least it requires (the agent's identity, the person, or an auth token for
+a scope), and the guard verifies the presented token and challenges for the
+next one. See the [resource guide](docs/guides/resource.md#protect-operations-with-resourceguard).
+
+Without the guard, a resource verifies whichever token a request presents and
+challenges for the next one. With PS authorization (three-party), an agent token is answered
 with `requirement=person-token`, a person token with a resource token
 challenge (`requirement=auth-token`), and an auth token is served:
 
@@ -294,7 +302,7 @@ Status against draft -11, by section. Legend: ✅ implemented and tested,
 | §6.3 `AAuth-Access` session token | ✅ | Signature-bound, rolling refresh |
 | §6.4 Person token required | ✅ | `ChallengePersonToken`, `VerifyAndExtractPerson`; `Transport` obtains person tokens |
 | §6.5 Auth token required | ✅ | 401 challenges and 202 deferred delivery (§6.5.1) |
-| §6.6 Authorization endpoint | 🟡 | Metadata member and `IssueResourceToken` for the response; no agent-side client |
+| §6.6 Authorization endpoint | ✅ | `Transport.Authorize` (person token, deferred interaction, `AAuth-Access`, or a resource token redeemed at the PS) and `AuthorizationHandler`, `WriteAuthorized`; `invalid_scope` and `invalid_account` |
 | §6.7 Resource token | ✅ | Issued only against a verified person or auth token; PS and AS verification with the presented-token cross-check (§6.7.2); agent-side challenge verification (§6.7.3) |
 
 ### §7 Person Server
@@ -318,14 +326,14 @@ Status against draft -11, by section. Legend: ✅ implemented and tested,
 | §8.1, §8.2 Creation and approval | ✅ | Exact blob bytes and `mission_s256`; approval person tokens verified and cached |
 | §8.3 Mission log | ✅ | Updates logged with verifiable digests |
 | §8.4, §8.5 Update and completion | ✅ | Completion reviewed by the person |
-| §8.6 Mission management | 🟡 | Active and terminated states with termination reasons, `personserver.Server.TerminateMission`; no mission control plane endpoint |
+| §8.6 Mission management | ✅ | Active and terminated states with termination reasons, `personserver.Server.TerminateMission`; `MissionStatusError.Repropose` and `KnownTerminationReason`; `mission_control_endpoint` carried in metadata. The control plane itself awaits its companion specification |
 | §8.7, §8.8 Errors | ✅ | `mission_not_found` with no existence oracle; `*MissionStatusError` from every PS endpoint, including the token endpoints |
 
 ### §9 Access Server federation
 
 | Section | Status | Notes |
 |---|---|---|
-| §9.1 AS token endpoint | ✅ | `accessserver` over an `Authorizer`; PS side through a `Federator` with delivery checks (§9.1.3) and `as_unreachable` |
+| §9.1 AS token endpoint | ✅ | `accessserver` over an `Authorizer`; PS side through a `Federator` with delivery checks (§9.1.3) and `as_unreachable`; an AS 402 is settled through `accessserver.Client.Payment` and its `Location` polled (§9.1.2) |
 | §9.2 Claims required | ✅ | Answered by the PS through a `ClaimsProvider`, never sending `sub` |
 | §9.3 PS-AS federation | ✅ | HTTP `Client` signed under `jwks_uri`; in-process `Server.Local` for collapse (§9.3.3) |
 | §9.4 Auth token | ✅ | Draft -11 claim set; resource verification with an `(iss, sub)` hook; agent-side response checks (§9.4.4); upstream token checks (§9.4.5) |
@@ -348,14 +356,16 @@ Status against draft -11, by section. Legend: ✅ implemented and tested,
 | §11.4 JWKS discovery and caching | ✅ | Cache headers, one-minute refresh floor, unknown-`kid` refresh, 24-hour maximum age, backoff, bounded entries |
 | §11.5 AAuth tokens | ✅ | `typ` and `dwk` checked first, `iat` required, `exp` with no skew, `iss` a server identifier, one-hour person and auth tokens; `Ed25519` and `ES256` only |
 | §11.6 Requirement responses | ✅ | `AAuth-Requirement` as an RFC 9651 dictionary with all seven values |
-| §11.7 `AAuth-Capabilities` header | ⬜ | Not sent by `Transport` |
-| §11.8 Deferred responses | ✅ | 202, `Location`, `Retry-After`, `Prefer: wait`, 429 backoff |
+| §11.7 `AAuth-Capabilities` header | ✅ | `Transport.Capabilities` (unioned with `MissionCapabilities`) sent on requests to resources and as the PS `capabilities` parameter; `RequestCapabilities` and `CanRaise` for resources |
+| §11.8 Deferred responses | ✅ | 202, `Location`, `Retry-After`, `Prefer: wait`, 429 backoff; 402 settled through a `PaymentHandler`, then `Location` polled (§11.8.4) |
 | §11.9 Error responses | ✅ | signature-key-09 `Signature-Error` codes; RFC 9457 problem bodies; token endpoint and polling error codes |
 | §11.10, §11.11 Scopes and account binding | ✅ | Scope never broader than requested; `account` carried through |
 | §11.12 Token revocation | ✅ | `RevocationClient`; recipients in every server role, with cascade and `downstream` outcomes |
 
-Not implemented: the Signature-Key `x509` scheme, Rich Resource Requests, and
-402 payment settlement (an access server's 402 is reported as an error).
+Not implemented: the Signature-Key `x509` scheme and Rich Resource Requests.
+Payment (402) is carried as protocol shape only: a `PaymentHandler` settles
+it through whatever payment protocol the server names, and the SDK polls
+`Location` or retries; no payment protocol is built in.
 
 ## Design notes
 
@@ -400,6 +410,22 @@ Not implemented: the Signature-Key `x509` scheme, Rich Resource Requests, and
   it in production.
 - **Keep the PS `SubjectKey` stable and secret.** It derives every directed
   `sub`; changing it changes every person's identifier at every resource.
+
+## Sandbox
+
+`aauth-sandbox` runs every role from this module on your machine, on `https://*.aauth.test`, with a development certificate authority, consent pages, a message trace and a signing helper for HTTP clients that cannot sign:
+
+```bash
+go install github.com/aauth-dev/aauth-go/cmd/aauth-sandbox@latest
+aauth-sandbox serve
+curl http://127.0.0.1:8099/https://resource.aauth.test/api/documents
+```
+
+It also runs in Docker (`deploy/docker`), one container for every role or one per role, and fronts a resource of your own at `https://<name>.aauth.test` with `--upstream`. See the [sandbox guide](docs/guides/sandbox.md).
+
+## Examples
+
+[`examples/walkthrough`](examples/walkthrough) has tested Go code for each step of the AAuth walkthroughs, from enrollment to federated authorization, for every role involved: agent, resource, person server, access server and agent provider. Each snippet is a named region that documentation tools can quote; the [PIDL](https://github.com/grokify/pidl) walkthrough viewer shows them next to the HTTP messages.
 
 ## Testing
 

@@ -35,6 +35,18 @@ func TestFourPartyDeployment(t *testing.T) {
 
 	runScenario(t, d)
 
+	t.Run("the PS established billing with the access server", func(t *testing.T) {
+		// §9.1.2: the AS answered the first token request 402; the PS's
+		// payment handler settled once, and the PS polled the Location.
+		paid := d.billing.settlements()
+		if len(paid) != 1 || paid[0].Server != d.asURL || paid[0].Location != d.asURL+billingPending || len(paid[0].PaymentChallenges()) != 1 {
+			t.Fatalf("settlements %+v", paid)
+		}
+		if d.asHits(billingPending) == 0 {
+			t.Fatal("the PS never polled the billing Location")
+		}
+	})
+
 	t.Run("federation and revocation crossed the network", func(t *testing.T) {
 		// Nothing here is in-process: the PS reached the AS's token endpoint
 		// and, on revocation, the AS's revocation endpoint over HTTP.

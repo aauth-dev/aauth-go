@@ -2,6 +2,7 @@ package e2e_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -47,6 +48,29 @@ func runScenario(t *testing.T, d *deployment) {
 		}
 		if person, err := d.psStore.BoundPerson(ctx, d.agentRef()); err != nil || person != "alice" {
 			t.Fatalf("binding %q %v", person, err)
+		}
+		if caps := d.resA.capabilities(); !aauth.HasCapability(caps, aauth.CapabilityInteraction) {
+			t.Fatalf("A saw AAuth-Capabilities %q, want interaction (§11.7)", caps)
+		}
+	})
+
+	step("authorization ahead of a call at A", func(t *testing.T) {
+		t.Log("A fresh transport asks A's authorization endpoint for files:read with a person token. A answers with a resource token, which the agent redeems at the PS; the next call to A presents the cached auth token.")
+		tr := d.transport("")
+		res, err := tr.Authorize(ctx, d.resA.url, aauth.AuthorizeRequest{Scope: "files:read"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.AuthToken == "" {
+			t.Fatalf("no auth token: %+v", res)
+		}
+		body, err := d.get(tr, d.resA.url+"/files")
+		if err != nil || !strings.Contains(body, "scope=files:read") {
+			t.Fatalf("A after authorize: %q %v", body, err)
+		}
+		var pe *aauth.ProblemError
+		if _, err := tr.Authorize(ctx, d.resA.url, aauth.AuthorizeRequest{Scope: "files:delete"}); !errors.As(err, &pe) || pe.Code != aauth.ErrCodeInvalidScope {
+			t.Fatalf("unknown scope: %v", err)
 		}
 	})
 

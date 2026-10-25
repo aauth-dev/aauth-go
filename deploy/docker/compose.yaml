@@ -1,0 +1,32 @@
+# Every AAuth role and the signing helper in one container.
+#
+#   docker compose -f deploy/docker/compose.yaml up -d --wait
+#
+# Clients that cannot sign (Postman, curl, Newman) use the helper:
+#   curl -H 'X-Sandbox-Present: agent' http://127.0.0.1:8099/https://resource.aauth.test/api/documents
+#
+# A browser or a client that talks to the roles directly needs the hosts
+# line from `aauth-sandbox hosts` and the CA from `aauth-sandbox ca export`
+# (docker compose -f deploy/docker/compose.yaml exec sandbox aauth-sandbox ca export --state /state).
+
+name: aauth-sandbox
+
+services:
+  sandbox:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: aauth-sandbox:dev
+    ports:
+      - "127.0.0.1:${SANDBOX_HTTPS_PORT:-443}:443"
+      - "127.0.0.1:${SIGNER_PORT:-8099}:8099"
+    volumes:
+      - state:/state
+    healthcheck:
+      test: ["CMD", "aauth-sandbox", "health", "--state", "/state", "--signer", "127.0.0.1:8099"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  state:

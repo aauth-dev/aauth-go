@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -50,7 +51,15 @@ import (
 //     Date header shows (up to MaxClockSkewWait) and presents the same
 //     signed request once more (signature-key §5.4.14);
 //   - on 401 expired_jwt or revoked_jwt for a cached person or auth token,
-//     drops it and falls back to the next credential (§11.12.5).
+//     drops it and falls back to the next credential (§11.12.5);
+//   - with a Payment handler, settles 402 Payment Required (§6.5, §11.8.4):
+//     a requirement=auth-token on the 402 is satisfied first, then the
+//     payment is settled and the transport polls Location, or retries the
+//     request when the 402 names none. Without a handler a 402 is returned
+//     to the caller, who can read it with [PaymentRequiredFromResponse];
+//   - declares the agent's capabilities (§11.7): AAuth-Capabilities on every
+//     signed request to a resource, and the capabilities parameter on the
+//     person and auth token requests it makes to the PS.
 //
 // A sub-agent's Transport has the sub-agent as Agent and its parent's
 // [PSClient] as PS (§10.2.3): the sub-agent signs its own requests to
@@ -92,6 +101,21 @@ type Transport struct {
 	// auth tokens the PS returns (§9.4.4 step 1, SHOULD). A nil Resolver
 	// runs the claim checks only: the agent trusts its PS.
 	AuthVerify TokenVerifyOptions
+	// Capabilities are the capability values (§11.7) the agent handles
+	// directly or through its PS, such as [CapabilityInteraction]. They are
+	// sent, unioned with MissionCapabilities, as AAuth-Capabilities on
+	// requests to resources and as the capabilities parameter of person and
+	// auth token requests. When both are empty nothing is sent and
+	// recipients assume no capabilities.
+	Capabilities []string
+	// MissionCapabilities are the capabilities the PS reported in the
+	// mission approval (§8.2, [MissionApproval.Capabilities]); the agent
+	// unions them with its own (§11.7).
+	MissionCapabilities []string
+	// Payment settles 402 Payment Required responses from resources. Nil
+	// returns them to the caller. Configure it together with
+	// [CapabilityPayment] in Capabilities, so resources know they may ask.
+	Payment PaymentHandler
 	// OnRequirement surfaces interaction requirements (URL + code) that
 	// arrive while a request is deferred.
 	OnRequirement func(Requirement)
@@ -149,7 +173,8 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	skewRetried := false
-	for range maxChallenges + 1 {
+	settlements := 0
+	for range maxChallenges + maxSettlements + 1 {
 		signed, presented, err := t.sign(req, body, cred, t.cachedSession(resource))
 		if err != nil {
 			return nil, err
@@ -176,6 +201,15 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 		t.observeSession(resource, res)
+		if res.StatusCode == http.StatusPaymentRequired && t.Payment != nil && settlements < maxSettlements {
+			// A 402 without Location (one with Location was settled and
+			// polled above): settle, then send the request again.
+			settlements++
+			if cred, err = t.settle(ctx, req.URL, res, resource, presented); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if res.StatusCode != http.StatusUnauthorized {
 			return res, nil
 		}
@@ -223,6 +257,30 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("aauth: %s answered more than %d requirements for one request", resource, maxChallenges)
 }
 
+// settle handles a 402 from resource that names no Location (§6.5): it
+// obtains an auth token first when the 402 also carries
+// requirement=auth-token, settles the payment, and returns the credential
+// to present on the retry.
+func (t *Transport) settle(ctx context.Context, reqURL *url.URL, res *http.Response, resource, presented string) (string, error) {
+	pr, err := PaymentRequiredFromResponse(reqURL, res)
+	if err != nil {
+		return "", err
+	}
+	cred := presented
+	if pr.Requirement != nil && pr.Requirement.Requirement == RequirementAuthToken {
+		if cred, err = t.authorize(ctx, resource, pr.Requirement.ResourceToken, presented); err != nil {
+			return "", err
+		}
+	}
+	if err := t.Payment.Settle(ctx, pr); err != nil {
+		return "", fmt.Errorf("aauth: settle payment for %s: %w", pr.Server, err)
+	}
+	if typ, err := TokenType(cred); err == nil && typ == TypAgent {
+		cred = "" // the agent token is minted fresh for each request
+	}
+	return cred, nil
+}
+
 // authorize handles requirement=auth-token for resource (draft -11 §6.5):
 // it verifies the resource token against the token the agent presented
 // (§6.7.3), redeems it at the PS with that token as presented_token
@@ -250,7 +308,7 @@ func (t *Transport) authorize(ctx context.Context, resource, resourceToken, pres
 		PresentedToken:    presented,
 		UpstreamToken:     t.UpstreamToken,
 		SubagentToken:     subagent,
-		TokenRequestHints: TokenRequestHints{LoginHint: rc.LoginHint},
+		TokenRequestHints: TokenRequestHints{LoginHint: rc.LoginHint, Capabilities: t.capabilities()},
 	})
 	if err != nil {
 		return "", err
@@ -273,6 +331,7 @@ func (t *Transport) authorize(ctx context.Context, resource, resourceToken, pres
 // and for a sub-agent through its parent.
 func (t *Transport) personToken(ctx context.Context, resource string) (string, error) {
 	req := PersonTokenRequest{Resource: resource, MissionS256: t.MissionS256, UpstreamToken: t.UpstreamToken}
+	req.Capabilities = t.capabilities()
 	if t.UpstreamToken != "" {
 		req.MissionS256 = "" // the upstream token carries the mission (§7.1)
 	}
@@ -362,6 +421,9 @@ func (t *Transport) sign(req *http.Request, body []byte, credential, session str
 		credential = tok
 	}
 	AttachSignatureKey(c, credential)
+	if err := t.declareCapabilities(c); err != nil {
+		return nil, "", err
+	}
 	if session != "" {
 		c.Header.Set("Authorization", "AAuth "+session)
 	}
@@ -369,6 +431,26 @@ func (t *Transport) sign(req *http.Request, body []byte, credential, session str
 		return nil, "", err
 	}
 	return c, credential, nil
+}
+
+// capabilities is the agent's declared capability list (§11.7).
+func (t *Transport) capabilities() []string {
+	return UnionCapabilities(t.Capabilities, t.MissionCapabilities)
+}
+
+// declareCapabilities sets AAuth-Capabilities on a request to a resource
+// (§11.7), or removes a stale one when the agent declares none.
+func (t *Transport) declareCapabilities(req *http.Request) error {
+	v, err := FormatCapabilities(t.capabilities())
+	if err != nil {
+		return err
+	}
+	if v == "" {
+		req.Header.Del(HeaderCapabilities)
+		return nil
+	}
+	req.Header.Set(HeaderCapabilities, v)
+	return nil
 }
 
 // resend clones an already-signed request with a fresh body reader, to
@@ -387,12 +469,13 @@ func resend(signed *http.Request, body []byte) *http.Request {
 // presented and presents it on the following polls; the resource executes
 // the held invocation on the first poll that carries it.
 func (t *Transport) followDeferred(req *http.Request, res *http.Response, resource, presented string) (*http.Response, error) {
-	if res.StatusCode != http.StatusAccepted {
+	if res.StatusCode != http.StatusAccepted && !settleable(res, DeferredOptions{Payment: t.Payment}) {
 		return res, nil
 	}
 	ctx := req.Context()
 	current := presented
 	return FollowDeferred(ctx, &http.Client{Transport: t.base()}, req.URL, res, DeferredOptions{
+		Payment: t.Payment,
 		OnRequirement: func(r Requirement) {
 			if r.Requirement != RequirementAuthToken && t.OnRequirement != nil {
 				t.OnRequirement(r)
@@ -411,6 +494,9 @@ func (t *Transport) followDeferred(req *http.Request, res *http.Response, resour
 		},
 		Sign: func(poll *http.Request) error {
 			AttachSignatureKey(poll, current)
+			if err := t.declareCapabilities(poll); err != nil {
+				return err
+			}
 			return SignRequest(poll, t.Agent.Key, "")
 		},
 	})

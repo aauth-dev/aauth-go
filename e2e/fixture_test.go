@@ -32,8 +32,17 @@ type resource struct {
 	audience func() string // the resource token's aud
 	resolver aauth.KeyResolver
 
-	mu      sync.Mutex
-	revoked map[[2]string]bool
+	mu       sync.Mutex
+	revoked  map[[2]string]bool
+	lastCaps []string // AAuth-Capabilities on the last protected request (§11.7)
+}
+
+// capabilities returns the capabilities the agent declared on the last
+// protected request.
+func (r *resource) capabilities() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastCaps
 }
 
 func newResource(t *testing.T, name, scope string, audience func() string, hc *http.Client) *resource {
@@ -64,10 +73,27 @@ func (r *resource) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	switch req.URL.Path {
 	case "/.well-known/" + aauth.WellKnownResource:
 		writeJSON(w, aauth.ResourceMetadata{
-			ServerMetadata:     aauth.ServerMetadata{Issuer: r.url, JWKSURI: r.url + "/jwks"},
-			AccessMode:         aauth.AccessModeAuthToken,
-			RevocationEndpoint: r.url + "/revoke",
+			ServerMetadata:        aauth.ServerMetadata{Issuer: r.url, JWKSURI: r.url + "/jwks"},
+			AccessMode:            aauth.AccessModeAuthToken,
+			RevocationEndpoint:    r.url + "/revoke",
+			AuthorizationEndpoint: r.url + "/authorize",
 		})
+		return
+	case "/authorize":
+		// §6.6.2: authorization ahead of a call answers with a resource
+		// token, as the auth-token challenge does.
+		(&aauth.AuthorizationHandler{
+			Resource: r.url,
+			Verify:   r.opts(),
+			Decide: func(_ context.Context, _ *http.Request, pc *aauth.PersonClaims, ar aauth.AuthorizeRequest) (aauth.AuthorizeDecision, error) {
+				if ar.Scope != r.scope {
+					return aauth.AuthorizeDecision{}, &aauth.ProblemError{Status: http.StatusBadRequest, Code: aauth.ErrCodeInvalidScope}
+				}
+				rt, err := aauth.IssueResourceToken(aauth.ResourceTokenParams{Resource: r.url, Audience: r.audience(), Scope: ar.Scope},
+					pc, r.key.Key, r.key.JWK().Kid)
+				return aauth.AuthorizeDecision{ResourceToken: rt}, err
+			},
+		}).ServeHTTP(w, req)
 		return
 	case "/jwks":
 		writeJSON(w, r.key.JWKS())
@@ -94,6 +120,9 @@ func (r *resource) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	r.mu.Lock()
+	r.lastCaps = aauth.RequestCapabilities(req)
+	r.mu.Unlock()
 	tok, err := aauth.ParseSignatureKey(req)
 	if err != nil {
 		aauth.WriteSignatureFailure(w, err)
@@ -202,6 +231,7 @@ type deployment struct {
 
 	asMu       sync.Mutex
 	asRequests map[string]int // requests that reached the AS's own origin, by path
+	billing    *billingGate   // four-party: the AS requires billing with the PS (§9.1.2)
 }
 
 // asHits returns how many requests reached the access server's origin at path.
@@ -229,10 +259,14 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 	d.asURL = d.psURL
 	if tp == fourParty {
 		asMux = http.NewServeMux()
+		d.billing = &billingGate{tokenPath: accessserver.DefaultPaths().Token}
 		asSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			d.asMu.Lock()
 			d.asRequests[r.URL.Path]++
 			d.asMu.Unlock()
+			if d.billing.serve(w, r, asMux) {
+				return
+			}
 			asMux.ServeHTTP(w, r)
 		}))
 		t.Cleanup(asSrv.Close)
@@ -346,6 +380,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 	} else {
 		c := accessserver.NewClient(d.ps.Signer(), d.client("PS"))
 		c.PreferWaitSeconds = 1
+		c.Payment = d.billing
 		fed.f = c
 	}
 	d.ap.Register(psMux)
@@ -391,6 +426,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 func (d *deployment) transport(mission string) *aauth.Transport {
 	tr := aauth.NewTransport(d.agent, d.psc)
 	tr.ResourceVerify, tr.AuthVerify, tr.MissionS256 = d.verify, d.verify, mission
+	tr.Capabilities = []string{aauth.CapabilityInteraction}
 	tr.Base = d.client("agent").Transport
 	return tr
 }

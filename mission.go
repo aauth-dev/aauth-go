@@ -50,6 +50,27 @@ func (e *MissionStatusError) Error() string {
 	return fmt.Sprintf("aauth: mission %s (%s)", e.MissionStatus, e.Code)
 }
 
+// Repropose reports whether the termination invites the agent to propose a
+// new mission to continue the work (§8.6, §8.8): only when it expired. A
+// revoked, completed, or administratively ended mission is not re-proposed;
+// a superseded one was replaced by another approved mission, which the
+// agent continues under instead. An unrecognized reason is an opaque audit
+// value and invites nothing.
+func (e *MissionStatusError) Repropose() bool {
+	return e.TerminationReason == TerminationExpired
+}
+
+// KnownTerminationReason reports whether reason is one of the termination
+// reasons draft -11 defines (§8.6). The set is open: an unrecognized reason
+// is kept as an opaque audit value and never read as a state.
+func KnownTerminationReason(reason string) bool {
+	switch reason {
+	case TerminationCompleted, TerminationRevoked, TerminationExpired, TerminationSuperseded, TerminationAdministrative:
+		return true
+	}
+	return false
+}
+
 // missionStatusErrorFrom decodes a §8.8 error from a 403 body, or nil.
 func missionStatusErrorFrom(status int, body []byte) *MissionStatusError {
 	if status != http.StatusForbidden {

@@ -560,3 +560,31 @@ func TestLimiter(t *testing.T) {
 		}
 	}
 }
+
+func TestClientEnroll(t *testing.T) {
+	ta := newAP(t, nil)
+	ctx := context.Background()
+	ta.client.HTTPClient = &http.Client{Transport: session{http.DefaultTransport}}
+	key, _ := aauth.GenerateKey(aauth.AlgEd25519)
+	agent, err := ta.client.Enroll(ctx, key, map[string]string{"device": "laptop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(agent.ID.String(), "@ap.example") || agent.Issuer != ta.url || agent.PS != "https://ps.example" {
+		t.Fatalf("agent %s, issuer %q, PS %q", agent.ID, agent.Issuer, agent.PS)
+	}
+	// The first token is the enrollment's; no second issuance yet.
+	tok, err := agent.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := ta.verify(t, tok); c.Subject != agent.ID.String() || len(ta.issued) != 1 {
+		t.Fatalf("token sub %q, %d issued", c.Subject, len(ta.issued))
+	}
+
+	// The Registrar refusing is the caller's error.
+	ta.client.HTTPClient = http.DefaultClient
+	if _, err := ta.client.Enroll(ctx, key, nil); err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("no session: %v", err)
+	}
+}
