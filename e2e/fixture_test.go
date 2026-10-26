@@ -30,6 +30,7 @@ type resource struct {
 	key      *aauth.Agent
 	scope    string
 	audience func() string // the resource token's aud
+	ps       func() string // the person server whose person tokens it accepts
 	resolver aauth.KeyResolver
 
 	mu       sync.Mutex
@@ -83,8 +84,9 @@ func (r *resource) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		// §6.6.2: authorization ahead of a call answers with a resource
 		// token, as the auth-token challenge does.
 		(&aauth.AuthorizationHandler{
-			Resource: r.url,
-			Verify:   r.opts(),
+			Resource:    r.url,
+			Verify:      r.opts(),
+			TrustIssuer: func(ctx context.Context, iss string) error { return aauth.TrustIssuers(r.ps())(ctx, iss) },
 			Decide: func(_ context.Context, _ *http.Request, pc *aauth.PersonClaims, ar aauth.AuthorizeRequest) (aauth.AuthorizeDecision, error) {
 				if ar.Scope != r.scope {
 					return aauth.AuthorizeDecision{}, &aauth.ProblemError{Status: http.StatusBadRequest, Code: aauth.ErrCodeInvalidScope}
@@ -275,6 +277,8 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 
 	d.resA = newResource(t, "files", "files:read", func() string { return d.psURL }, d.client("A"))
 	d.resB = newResource(t, "ledger", "ledger:read", func() string { return d.asURL }, d.client("B"))
+	d.resA.ps = func() string { return d.psURL }
+	d.resB.ps = d.resA.ps
 
 	// The agent provider.
 	apKey, err := aauth.GenerateKey(aauth.AlgEd25519)
