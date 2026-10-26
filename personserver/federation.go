@@ -170,8 +170,7 @@ func consentedScope(g Grant, rc *aauth.ResourceClaims) string {
 func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, consented string, resp *FederationResponse, err error) (*Result, *FederationState, error) {
 	for range maxClaimsRounds {
 		if err != nil {
-			s.logger().WarnContext(ctx, "personserver: federation", "access_server", j.as, "error", err)
-			return asUnreachable(err), nil, nil
+			return s.asUnreachable(ctx, j.as, err), nil, nil
 		}
 		switch {
 		case resp.AuthToken != "":
@@ -183,7 +182,7 @@ func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, consent
 			}
 			return problemResult(status, resp.ErrorCode, resp.ErrorDetail), nil, nil
 		case resp.PendingURL == "":
-			return asUnreachable(errors.New("the access server answered neither a token, a pending URL, nor an error")), nil, nil
+			return s.asUnreachable(ctx, j.as, errors.New("the access server answered neither a token, a pending URL, nor an error")), nil, nil
 		case resp.Requirement.Requirement == aauth.RequirementClaims:
 			// The PS answers claims itself (§9.2), then looks again.
 			claims, cerr := s.claimsFor(ctx, j, consented, resp.RequiredClaims)
@@ -200,7 +199,7 @@ func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, consent
 			Status: resp.Status, Question: resp.Question, RetryAfter: resp.RetryAfter, GrantedScope: consented,
 		}, nil
 	}
-	return asUnreachable(errors.New("the access server kept requiring claims")), nil, nil
+	return s.asUnreachable(ctx, j.as, errors.New("the access server kept requiring claims")), nil, nil
 }
 
 // claimsFor asks the ClaimsProvider for the claims the access server
@@ -240,8 +239,7 @@ func (s *Server) deliverFederated(ctx context.Context, j *authTokenJob, consente
 		err = s.checkDelivered(j, consented, ac)
 	}
 	if err != nil {
-		s.logger().WarnContext(ctx, "personserver: federated auth token failed delivery checks", "access_server", j.as, "error", err)
-		return asUnreachable(err), nil, nil
+		return s.asUnreachable(ctx, j.as, fmt.Errorf("the federated auth token failed delivery checks: %w", err)), nil, nil
 	}
 	if err := s.recordAuthToken(ctx, j, ac); err != nil {
 		return s.failure(err)
@@ -342,14 +340,23 @@ func (s *Server) forwardClarification(ctx context.Context, p *Pending, post *aau
 		return nil
 	}
 	if err := s.cfg.Federator.Answer(ctx, p.Federation.PendingURL, post); err != nil {
-		return &aauth.TokenError{Code: aauth.TokenErrASUnreachable, Err: err}
+		s.logger().WarnContext(ctx, "personserver: federation answer", "access_server", p.Federation.AccessServer, "error", err)
+		return &aauth.TokenError{Code: aauth.TokenErrASUnreachable, Err: errASUnreachable}
 	}
 	return nil
 }
 
-// asUnreachable is the as_unreachable response (§9.1.3, §11.9.3).
-func asUnreachable(err error) *Result {
-	return errorResult(&aauth.TokenError{Code: aauth.TokenErrASUnreachable, Err: err})
+// errASUnreachable is the detail the agent sees for as_unreachable; the
+// cause, which can carry the access server's response or internal
+// addresses, is logged instead.
+var errASUnreachable = errors.New("the access server could not be reached or gave an unusable response")
+
+// asUnreachable logs why the PS could not use the access server's answer
+// and returns the as_unreachable response (§9.1.3, §11.9.3) with a generic
+// detail.
+func (s *Server) asUnreachable(ctx context.Context, as string, err error) *Result {
+	s.logger().WarnContext(ctx, "personserver: federation", "access_server", as, "error", err)
+	return errorResult(&aauth.TokenError{Code: aauth.TokenErrASUnreachable, Err: errASUnreachable})
 }
 
 // presentedExp is a verified presented token's exp.
