@@ -198,6 +198,9 @@ type Server struct {
 	domain string
 	replay ReplayCache
 	mux    *http.ServeMux
+	// authority is the provider's own host, which every request signature
+	// it verifies must cover as @authority.
+	authority string
 }
 
 // New validates cfg and returns a Server.
@@ -215,7 +218,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.KeyID != "" {
 		jwk.Kid = cfg.KeyID
 	}
-	s := &Server{cfg: cfg, kid: jwk.Kid, replay: cfg.Replay}
+	authority, err := aauth.AuthorityOf(cfg.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("agentprovider: Config.Issuer: %w", err)
+	}
+	s := &Server{cfg: cfg, kid: jwk.Kid, replay: cfg.Replay, authority: authority}
 	s.jwks = aauth.JWKS{Keys: append([]aauth.JWK{jwk}, cfg.PublishedKeys...)}
 	d := DefaultPaths()
 	s.paths = cfg.Paths
@@ -381,11 +388,15 @@ type TokenResponse struct {
 	ExpiresIn  int64  `json:"expires_in"`
 }
 
-// signatureOptions require content-digest and content-type on bodies: an
-// issuance binds the public key the body carries (bootstrap §8.1).
+// signatureOptions require content-digest and content-type on bodies (an
+// issuance binds the public key the body carries, bootstrap §8.1) and
+// @authority naming this provider, so a request signed for another server
+// cannot be replayed here.
 func (s *Server) signatureOptions() aauth.RequestVerifyOptions {
 	now := s.now()
-	return aauth.RequestVerifyOptions{Window: s.cfg.SignatureWindow, RequireBodyCoverage: true, Now: func() time.Time { return now }}
+	return aauth.RequestVerifyOptions{
+		Window: s.cfg.SignatureWindow, RequireBodyCoverage: true, Now: func() time.Time { return now }, Authority: s.authority,
+	}
 }
 
 // serveIssue issues a token for the key an hwk-signed request presents:
