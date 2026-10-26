@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 
 	aauth "github.com/aauth-dev/aauth-go"
@@ -44,6 +45,10 @@ type Client struct {
 	endpoints map[string]string
 }
 
+// maxCachedEndpoints bounds the discovered endpoints a Client keeps: the
+// access servers it federates with are named by resource tokens.
+const maxCachedEndpoints = 1024
+
 // NewClient returns a Client signing with signer.
 func NewClient(signer aauth.ServerSigner, hc *http.Client) *Client {
 	return &Client{Signer: signer, HTTPClient: hc}
@@ -73,13 +78,36 @@ func (c *Client) endpoint(ctx context.Context, as string) (string, error) {
 	if err := md.Validate(); err != nil {
 		return "", err
 	}
+	// The PS signs its token request for the endpoint's host: it must be
+	// the access server's own origin, or the signed request (with the
+	// person and agent tokens) would go to a server the AS named.
+	if err := sameOrigin(as, md.AuthTokenEndpoint); err != nil {
+		return "", err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.endpoints == nil {
+	if c.endpoints == nil || len(c.endpoints) >= maxCachedEndpoints {
 		c.endpoints = map[string]string{}
 	}
 	c.endpoints[as] = md.AuthTokenEndpoint
 	return md.AuthTokenEndpoint, nil
+}
+
+// sameOrigin requires endpoint to have the scheme and host of the access
+// server as.
+func sameOrigin(as, endpoint string) error {
+	a, err := url.Parse(as)
+	if err != nil {
+		return fmt.Errorf("accessserver: access server %q: %w", as, err)
+	}
+	e, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("accessserver: auth_token_endpoint %q: %w", endpoint, err)
+	}
+	if e.Scheme != a.Scheme || !strings.EqualFold(e.Host, a.Host) {
+		return fmt.Errorf("accessserver: auth_token_endpoint %q is not on the access server's origin %q", endpoint, as)
+	}
+	return nil
 }
 
 // Federate implements personserver.Federator.
