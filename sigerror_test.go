@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -157,6 +158,38 @@ func TestSignatureErrorFor(t *testing.T) {
 	WriteSignatureFailure(rec, errors.New("dial tcp: refused"))
 	if se, err := ParseSignatureError(rec.Header().Get(HeaderSignatureError)); err != nil || se.Code != SigErrInvalidSignature || rec.Code != 401 {
 		t.Fatalf("unclassified failure: %+v, %v, %d", se, err, rec.Code)
+	}
+}
+
+// The problem detail never carries the error's own text, which for a
+// discovery failure names internal hosts and resolver results.
+func TestWriteSignatureFailureHidesErrorText(t *testing.T) {
+	const secret = "lookup internal.corp on 10.0.0.53:53: no such host"
+	for _, err := range []error{
+		errors.New(secret),
+		fmt.Errorf("%w: %s", ErrUnknownKey, secret),
+		fmt.Errorf("%w: %s", ErrInvalidToken, secret),
+		fmt.Errorf("%w: %s", ErrIssuerMismatch, secret),
+	} {
+		rec := httptest.NewRecorder()
+		WriteSignatureFailure(rec, err)
+		if strings.Contains(rec.Body.String(), "internal.corp") || strings.Contains(rec.Header().Get(HeaderSignatureError), "internal.corp") {
+			t.Fatalf("%v: response leaks the error text: %s", err, rec.Body.String())
+		}
+		var pd problemDetails
+		if jerr := json.Unmarshal(rec.Body.Bytes(), &pd); jerr != nil || pd.Detail == "" {
+			t.Fatalf("%v: problem = %+v, %v", err, pd, jerr)
+		}
+	}
+	// The missing components are reported, header and detail.
+	rec := httptest.NewRecorder()
+	WriteSignatureFailure(rec, &MissingComponentsError{Required: []string{"@method", "@query"}, Missing: []string{"@query"}})
+	se, err := ParseSignatureError(rec.Header().Get(HeaderSignatureError))
+	if err != nil || se.Code != SigErrInvalidInput || !slices.Equal(se.RequiredInput, []string{"@method", "@query"}) {
+		t.Fatalf("invalid_input: %+v, %v", se, err)
+	}
+	if !strings.Contains(rec.Body.String(), "@query") {
+		t.Fatalf("invalid_input detail: %s", rec.Body.String())
 	}
 }
 
