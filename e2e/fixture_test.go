@@ -287,7 +287,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 	}
 	d.ap, err = agentprovider.New(agentprovider.Config{
 		HTTPClient: d.client("AP"),
-		Issuer:     d.psURL, Domain: "agents.example", Key: apKey, Registrar: d.sessions,
+		Issuer:     d.psURL, Key: apKey, Registrar: d.sessions,
 		OnIssue: func(_ context.Context, it agentprovider.IssuedToken) {
 			d.sessions.mu.Lock()
 			defer d.sessions.mu.Unlock()

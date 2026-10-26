@@ -139,8 +139,9 @@ type Config struct {
 	// Issuer is the provider's server identifier: the iss of the agent
 	// tokens it issues.
 	Issuer string
-	// Domain is the domain of the agent identifiers it issues; default the
-	// issuer's host.
+	// Domain is the domain of the agent identifiers it issues. It is the
+	// issuer's host, which verifiers require of an agent token's sub;
+	// leave it empty to derive it, and New refuses any other value.
 	Domain string
 	// Key is the provider's signing key — separate from every agent's key
 	// — and KeyID its kid (default: the RFC 7638 thumbprint).
@@ -237,13 +238,15 @@ func New(cfg Config) (*Server, error) {
 			*f.dst = f.def
 		}
 	}
-	s.domain = cfg.Domain
-	if s.domain == "" {
-		u, err := url.Parse(cfg.Issuer)
-		if err != nil {
-			return nil, fmt.Errorf("agentprovider: Config.Issuer: %w", err)
-		}
-		s.domain = u.Hostname()
+	u, err := url.Parse(cfg.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("agentprovider: Config.Issuer: %w", err)
+	}
+	s.domain = strings.ToLower(u.Hostname())
+	if cfg.Domain != "" && cfg.Domain != s.domain {
+		// An agent token's sub names its provider's domain; one from
+		// another domain would let this provider speak for agents there.
+		return nil, fmt.Errorf("agentprovider: Config.Domain %q is not the issuer's host %q", cfg.Domain, s.domain)
 	}
 	if _, err := aauth.ParseAgentIdentifier("aauth:probe@" + s.domain); err != nil {
 		return nil, fmt.Errorf("agentprovider: agent identifier domain: %w", err)

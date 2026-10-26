@@ -53,8 +53,7 @@ func newAgentProvider(t *testing.T, issuer, ps string, hc *http.Client) *agentpr
 		t.Fatal(err)
 	}
 	ap, err := agentprovider.New(agentprovider.Config{
-		Issuer:     issuer,
-		Domain:     "agent.example", // agent identifiers are aauth:<name>@agent.example
+		Issuer:     issuer, // agent identifiers are aauth:<name>@<the issuer's host>
 		Key:        key,
 		Registrar:  enrollments{ps: ps}, // decides which agent each key is
 		HTTPClient: hc,
