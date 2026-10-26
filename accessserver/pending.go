@@ -72,8 +72,12 @@ type Pending struct {
 	ReceivedAt time.Time       `json:"received_at"`
 	CreatedAt  time.Time       `json:"created_at"`
 	ExpiresAt  time.Time       `json:"expires_at"`
-	Result     *Result         `json:"result,omitempty"`
-	Version    int64           `json:"version"`
+	// Result is the terminal response, once resolved. Delivered is set
+	// when the pending URL has returned it to the PS; its body is then
+	// discarded, and the pending URL answers 410 Gone (§11.8.3).
+	Result    *Result `json:"result,omitempty"`
+	Delivered bool    `json:"delivered,omitempty"`
+	Version   int64   `json:"version"`
 }
 
 // Open reports whether the request awaits resolution.
@@ -228,7 +232,49 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, p *Pending, pol
 	if wait := preferWait(r, s.cfg.MaxWait); wait > 0 && p.Open() && !actionable {
 		p = s.waitFor(ctx, p, wait)
 	}
+	if p.Result != nil {
+		res, err := s.deliver(ctx, p.ID)
+		switch {
+		case errors.Is(err, errDelivered):
+			writeGone(w)
+		case err != nil:
+			s.logger().ErrorContext(ctx, "accessserver: deliver pending result", "error", err)
+			aauth.WriteProblem(w, http.StatusInternalServerError, aauth.ErrCodeServerError, "")
+		default:
+			res.write(w)
+		}
+		return
+	}
 	s.writePending(w, p)
+}
+
+// errDelivered means a pending request's terminal response has already
+// been returned.
+var errDelivered = errors.New("accessserver: the result was already delivered")
+
+// deliver takes pending id's terminal response for the PS, once: it marks
+// the request delivered and discards the stored body, so a later request
+// to the pending URL answers 410 Gone (§11.8.3).
+func (s *Server) deliver(ctx context.Context, id string) (*Result, error) {
+	var out Result
+	_, err := s.mutate(ctx, id, func(p *Pending) error {
+		if p.Delivered || p.Result == nil {
+			return errDelivered
+		}
+		out = *p.Result
+		p.Delivered = true
+		p.Result = &Result{Status: out.Status, ContentType: out.ContentType}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// writeGone answers a pending URL whose terminal response was delivered.
+func writeGone(w http.ResponseWriter) {
+	aauth.WriteProblem(w, http.StatusGone, aauth.ErrCodeInvalidRequest, "the request's result was already delivered")
 }
 
 func (s *Server) writePending(w http.ResponseWriter, p *Pending) {
@@ -342,6 +388,10 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 		aauth.WriteProblem(w, http.StatusInternalServerError, aauth.ErrCodeServerError, "")
 		return
 	}
+	if p.Delivered {
+		writeGone(w)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		if ok, wait := s.allow(ctx, "poll:"+p.ID); !ok {
@@ -357,6 +407,12 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			writeAnswerError(w, err)
+			return
+		}
+		if !p.Open() {
+			// The answer resolved the request: the PS polls for the
+			// result, which is returned once.
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		s.writePending(w, p)

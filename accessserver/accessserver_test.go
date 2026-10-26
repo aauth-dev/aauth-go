@@ -673,13 +673,27 @@ func TestPendingURL(t *testing.T) {
 		return DeferApproval()
 	})
 	res = f.asRequest(http.MethodPost, loc, `{"action":"updated_request","resource_token":"`+rt2+`","presented_token":"`+pt2+`"}`)
-	if res.StatusCode != http.StatusOK {
+	if res.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(res.Body)
 		t.Fatalf("updated request: %d %s", res.StatusCode, b)
 	}
 	_ = res.Body.Close()
 	if p, err := f.as.PendingRequest(ctx, id); err != nil || p.Open() {
 		t.Fatalf("%+v %v", p, err)
+	}
+	// The result is returned once, then the pending URL is gone.
+	res = f.asRequest(http.MethodGet, loc, "")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("result: %d", res.StatusCode)
+	}
+	_ = res.Body.Close()
+	res = f.asRequest(http.MethodGet, loc, "")
+	if res.StatusCode != http.StatusGone {
+		t.Fatalf("result again: %d", res.StatusCode)
+	}
+	_ = res.Body.Close()
+	if p, err := f.as.PendingRequest(ctx, id); err != nil || !p.Delivered || len(p.Result.Body) != 0 {
+		t.Fatalf("after delivery %+v %v", p, err)
 	}
 	if err := f.as.Approve(ctx, id, ""); !errors.Is(err, ErrResolved) {
 		t.Fatal(err)

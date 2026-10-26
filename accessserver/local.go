@@ -54,7 +54,18 @@ func (l *local) Poll(ctx context.Context, pendingURL string) (*personserver.Fede
 		return nil, err
 	}
 	p = l.s.step(ctx, p)
-	return l.convert(p.Result, p)
+	if p.Result == nil {
+		return l.convert(nil, p)
+	}
+	res, err := l.s.deliver(ctx, p.ID)
+	if errors.Is(err, errDelivered) {
+		rec := &recorder{h: http.Header{}}
+		writeGone(rec)
+		res = &Result{Status: rec.status, ContentType: rec.h.Get("Content-Type"), Body: rec.buf.Bytes()}
+	} else if err != nil {
+		return nil, err
+	}
+	return l.convert(res, p)
 }
 
 func (l *local) Answer(ctx context.Context, pendingURL string, body any) error {
