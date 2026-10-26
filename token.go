@@ -74,7 +74,8 @@ func MintAgentToken(claims AgentClaims, key crypto.Signer, kid string) (string, 
 //   - StaticResolver: pre-configured issuer keys (air-gapped / pinned).
 //   - SelfSignedResolver: verify against the token's own cnf.jwk — the
 //     self-hosted/local shape where possession of the cnf key IS the
-//     identity and the verifier applies its own policy per agent.
+//     identity and the verifier applies its own policy per agent. It
+//     verifies top-level agent tokens only.
 //
 // ResolveKey returns the issuer's public key as a crypto.PublicKey
 // (ed25519.PublicKey or P-256 *ecdsa.PublicKey); keys decoded from a JWK
@@ -134,16 +135,44 @@ func classifyJWTError(err error) error {
 // signature (proof of possession is then established by the HTTP message
 // signature, which must use the same key). Suitable for local/self-hosted
 // agents where the verifier's policy layer decides what the identity may do.
-// It does not verify sub-agent tokens, which the parent's provider key signs
+//
+// It verifies top-level agent tokens only. Every claim of such a token,
+// including iss and sub, is asserted by the key holder itself, so key
+// policy on the key's thumbprint, not on sub. Person, auth and resource
+// tokens are refused, since the key that signs them must be the issuing
+// server's; so are sub-agent tokens, which the parent's provider key signs
 // over the sub-agent's own cnf key (§10.2.1): resolve the provider's key.
 type SelfSignedResolver struct{}
 
-// ResolveKey implements KeyResolver, returning the key from cnf.jwk.
-func (SelfSignedResolver) ResolveKey(_ context.Context, _, _, _ string, cnf *JWK) (crypto.PublicKey, error) {
+// ResolveKey implements KeyResolver, returning the key from cnf.jwk. It
+// refuses a dwk naming a server other than an agent provider.
+func (SelfSignedResolver) ResolveKey(_ context.Context, _, dwk, _ string, cnf *JWK) (crypto.PublicKey, error) {
+	if dwk != "" && dwk != WellKnownAgent {
+		return nil, fmt.Errorf("%w: a self-signed key verifies agent tokens only, not dwk %q", ErrInvalidToken, dwk)
+	}
 	if cnf == nil {
 		return nil, fmt.Errorf("%w: cnf.jwk", ErrMissingClaim)
 	}
 	return cnf.PublicKey()
+}
+
+// selfSigned marks the resolver for [jwtCheck], which refuses it for any
+// token but a top-level agent token.
+func (SelfSignedResolver) selfSigned() {}
+
+// checkSelfSigned refuses self-signed resolution of a token that a server's
+// key must sign: anything but a top-level agent token.
+func checkSelfSigned(resolver KeyResolver, typ string, claims aauthClaims) error {
+	if _, ok := resolver.(interface{ selfSigned() }); !ok {
+		return nil
+	}
+	if typ != TypAgent {
+		return fmt.Errorf("%w: a self-signed key cannot verify a %s", ErrInvalidToken, typ)
+	}
+	if ac, ok := claims.(*AgentClaims); ok && ac.IsSubAgent() {
+		return fmt.Errorf("%w: a self-signed key cannot verify a sub-agent token; resolve its provider's key", ErrInvalidToken)
+	}
+	return nil
 }
 
 // StaticResolver resolves issuers from a fixed map of iss → JWKS.

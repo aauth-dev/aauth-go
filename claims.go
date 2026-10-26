@@ -137,6 +137,9 @@ func (c jwtCheck) verify(ctx context.Context, token string, dst aauthClaims) err
 	if len(c.dwks) > 0 && !contains(c.dwks, dst.wellKnown()) {
 		return fmt.Errorf("%w: dwk %q, want one of %q", ErrInvalidToken, dst.wellKnown(), c.dwks)
 	}
+	if err := checkSelfSigned(c.resolver, c.typ, dst); err != nil {
+		return err
+	}
 	rc := dst.registered()
 	if c.issuer != nil {
 		if err := c.issuer(rc.Issuer); err != nil {
