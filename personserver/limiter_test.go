@@ -66,17 +66,20 @@ func TestLimiter(t *testing.T) {
 	// Interaction code attempts per client.
 	lim.block("code:kiosk")
 	var rle *RateLimitError
-	if _, err := w.ps.ConsumeCodeFor(ctx, "ABCD-EFGH", "kiosk"); !errors.As(err, &rle) || rle.RetryAfter != 3*time.Second || rle.Error() == "" {
+	if _, err := w.ps.LookupCode(ctx, "ABCD-EFGH", "kiosk"); !errors.As(err, &rle) || rle.RetryAfter != 3*time.Second || rle.Error() == "" {
 		t.Fatalf("code: %v", err)
 	}
-	if _, err := w.ps.ConsumeCodeFor(ctx, "ABCD-EFGH", "laptop"); !errors.Is(err, ErrInvalidCode) {
+	if _, err := w.ps.ConsumeCode(ctx, "ABCD-EFGH", "kiosk", "alice"); !errors.As(err, &rle) {
+		t.Fatalf("consume: %v", err)
+	}
+	if _, err := w.ps.LookupCode(ctx, "ABCD-EFGH", "laptop"); !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("other client: %v", err)
 	}
 
 	// Revocations per issuer: rate_limited with Retry-After.
 	lim.block("revoke:")
 	ps := w.ps
-	ps.cfg.ServerResolver = aauth.StaticResolver{agentIssuer: w.agent.JWKS()}
+	ps.servers = aauth.StaticResolver{agentIssuer: w.agent.JWKS()}
 	rc := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: aauth.ServerSigner{Issuer: agentIssuer, DWK: aauth.WellKnownAgent, Kid: w.agent.JWK().Kid, Key: w.agent.Key}}
 	_, err := rc.Revoke(ctx, w.psURL+"/ps/revoke", aauth.RevocationRequest{JTI: "x", Exp: time.Now().Add(time.Hour).Unix()})
 	var pe *aauth.ProblemError

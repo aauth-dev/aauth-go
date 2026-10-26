@@ -32,8 +32,11 @@ ps, err := personserver.New(personserver.Config{
 	Store:          personserver.NewMemoryStore(),
 	InteractionURL: issuer + "/consent",
 	Decider: personserver.DeciderFunc(func(ctx context.Context, r *personserver.TokenRequest) (personserver.Decision, error) {
-		if r.Person == "" {
+		switch {
+		case r.Person == "":
 			return personserver.DeferInteraction(), nil // a new agent: the person signs in at /consent
+		case r.Chained && r.Mission == nil:
+			return personserver.DeferApproval(), nil // call chaining: ask the person
 		}
 		return personserver.Allow(personserver.Grant{}), nil
 	}),
@@ -48,9 +51,14 @@ ps.Register(mux)
 as.Register(mux)
 ```
 
-The consent page passes the `?code=` it receives to `ps.ConsumeCode`,
-authenticates the person, and calls `ps.Approve` with a `Grant` naming the
-person, which binds the agent. `ap.IssueAgentToken` issues tokens for agent
+The consent page passes the `?code=` it receives to `ps.LookupCode` to show
+the request; looking a code up does not consume it, so a link preview cannot
+burn it. At the decision the page authenticates the person, consumes the
+code as that person with `ps.ConsumeCode`, and calls `ps.Approve` with a
+`Grant` naming the person, which binds the agent, and the `Revision` of the
+request it showed: if the agent replaced the request meanwhile, `Approve`
+fails with `ErrRequestChanged`. Code attempts are rate-limited per client
+key (the browser's session or address) when a `Limiter` is configured. `ap.IssueAgentToken` issues tokens for agent
 keys the application has authorized. The PS routes live under `/ps/` by
 default, so agents find them with `PSClient.Discover`. The full,
 compile-checked version is

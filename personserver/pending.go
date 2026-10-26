@@ -98,12 +98,15 @@ type Pending struct {
 	// Requirement is the AAuth-Requirement of the 202 (interaction,
 	// approval), and InteractionURL and Code its parameters. CodeCanonical
 	// is the canonical code PendingByCode looks up; CodeConsumed is set
-	// once the person arrived with it (single use, §11.6.3.1).
+	// once the code was used (single use, §11.6.3.1): by the person
+	// CodeConsumedBy at their decision ([Server.ConsumeCode]), or by an
+	// approval that completed the interaction out of band.
 	Requirement    string `json:"requirement,omitempty"`
 	InteractionURL string `json:"interaction_url,omitempty"`
 	Code           string `json:"code,omitempty"`
 	CodeCanonical  string `json:"code_canonical,omitempty"`
 	CodeConsumed   bool   `json:"code_consumed,omitempty"`
+	CodeConsumedBy string `json:"code_consumed_by,omitempty"`
 	RetryAfter     int    `json:"retry_after,omitempty"`
 
 	// Question is the clarification awaiting the agent's answer, asked at
@@ -139,8 +142,20 @@ type Pending struct {
 	// relay resolves even if the person has not engaged (§7.6.2).
 	RelayDeadline time.Time `json:"relay_deadline,omitzero"`
 
-	// Result is the terminal response, once resolved.
-	Result *Result `json:"result,omitempty"`
+	// Revision counts the updated_requests that replaced the request
+	// (§7.5.2.2); zero is the original. An approval names the revision the
+	// person was shown (Grant.Revision).
+	Revision int `json:"revision,omitempty"`
+	// Approving is set while [Server.Approve] completes the request, so a
+	// concurrent approval, denial, cancellation, or clarification cannot
+	// race the issuance.
+	Approving bool `json:"approving,omitempty"`
+
+	// Result is the terminal response, once resolved. Delivered is set
+	// when the pending URL has returned it to the agent; its body is then
+	// discarded, and the pending URL answers 410 Gone (§11.8.3).
+	Result    *Result `json:"result,omitempty"`
+	Delivered bool    `json:"delivered,omitempty"`
 	// Version supports optimistic updates (see PendingStore).
 	Version int64 `json:"version"`
 }
@@ -166,6 +181,17 @@ var (
 	// waits on the access server (§9.1.2); it resolves when the AS
 	// answers, not by Approve.
 	ErrFederating = errors.New("personserver: the request is waiting on the access server")
+	// ErrRequestChanged means the agent replaced the request with an
+	// updated_request after the approver was shown it: Grant.Revision is
+	// not the request's Revision. Show the request again and approve the
+	// current revision.
+	ErrRequestChanged = errors.New("personserver: the request changed since it was shown")
+	// ErrWrongPerson means the request's interaction code was consumed by
+	// another person than the one the Grant names (§11.6.3.1).
+	ErrWrongPerson = errors.New("personserver: the interaction code was consumed by another person")
+	// ErrResourceInteraction means the resource's own interaction (§7.2.3)
+	// has not completed, so the request cannot be approved yet.
+	ErrResourceInteraction = errors.New("personserver: the resource's interaction has not completed (§7.2.3)")
 )
 
 // snapshot is what a pending request keeps of the original request, so
@@ -223,17 +249,23 @@ func (s *Server) newPending(ctx context.Context, p *Pending, c *caller, body []b
 	if p.RetryAfter == 0 && d.Requirement != aauth.RequirementClarification {
 		p.RetryAfter = 1 // a person is deciding; do not poll in a tight loop
 	}
-	if err := s.applyRequirement(p, d); err != nil {
-		return err
+	for attempt := 0; ; attempt++ {
+		if err := s.applyRequirement(p, d); err != nil {
+			return err
+		}
+		if p.Federation != nil {
+			p.Federation.applyRequirement(p, now)
+		}
+		err := s.cfg.Store.CreatePending(ctx, p)
+		if errors.Is(err, ErrCodeInUse) && attempt < 4 {
+			continue // another request holds the code: draw a new one
+		}
+		if err != nil {
+			return storeErr("create pending", err)
+		}
+		s.changed(ctx, p)
+		return nil
 	}
-	if p.Federation != nil {
-		p.Federation.applyRequirement(p)
-	}
-	if err := s.cfg.Store.CreatePending(ctx, p); err != nil {
-		return storeErr("create pending", err)
-	}
-	s.changed(ctx, p)
-	return nil
 }
 
 // applyRequirement sets the 202's requirement from a Deferred decision.
@@ -283,6 +315,16 @@ func (s *Server) mutate(ctx context.Context, id string, fn func(p *Pending) erro
 // mutateWith is mutate storing the change through update, which a caller
 // publishing a grant makes [PendingStore.ResolvePendingIfMissionActive].
 func (s *Server) mutateWith(ctx context.Context, id string, fn func(p *Pending) error, update func(context.Context, *Pending) error) (*Pending, error) {
+	return s.mutateNotify(ctx, id, fn, update, true)
+}
+
+// mutateQuietly is mutate without Config.Notify, for internal bookkeeping
+// the approval UI has no use for (Approve's claim on a request).
+func (s *Server) mutateQuietly(ctx context.Context, id string, fn func(p *Pending) error) (*Pending, error) {
+	return s.mutateNotify(ctx, id, fn, s.cfg.Store.UpdatePending, false)
+}
+
+func (s *Server) mutateNotify(ctx context.Context, id string, fn func(p *Pending) error, update func(context.Context, *Pending) error, notify bool) (*Pending, error) {
 	for range 8 {
 		p, err := s.cfg.Store.Pending(ctx, id)
 		if err != nil {
@@ -298,16 +340,35 @@ func (s *Server) mutateWith(ctx context.Context, id string, fn func(p *Pending) 
 		if err != nil {
 			return nil, storeErr("update pending", err)
 		}
-		s.changed(ctx, p)
+		if notify {
+			s.changed(ctx, p)
+		} else {
+			s.waiters.notify(p.ID)
+		}
 		return p, nil
 	}
 	return nil, storeErr("update pending", ErrConflict)
 }
 
-// resolve stores res as p's terminal response.
+// resolve stores res as p's terminal response. It is how the PS ends a
+// request on its own (expiry, revocation, a terminated mission), and wins
+// over an approval in progress, whose completion then finds the request
+// resolved.
 func (s *Server) resolve(ctx context.Context, id string, res *Result) (*Pending, error) {
 	return s.mutate(ctx, id, func(p *Pending) error {
 		if !p.Open() {
+			return ErrResolved
+		}
+		p.State, p.Result, p.Question = StateDone, res, nil
+		return nil
+	})
+}
+
+// decide is resolve for a decision of the person or the application (Deny,
+// Fail): it does not overtake an approval in progress.
+func (s *Server) decide(ctx context.Context, id string, res *Result) (*Pending, error) {
+	return s.mutate(ctx, id, func(p *Pending) error {
+		if !p.Open() || p.Approving {
 			return ErrResolved
 		}
 		p.State, p.Result, p.Question = StateDone, res, nil
@@ -358,7 +419,7 @@ func (s *Server) step(ctx context.Context, p *Pending, federate bool) *Pending {
 			res = pollError(aauth.PollErrRevoked, detail)
 		}
 	}
-	if res == nil && federate && p.Federation != nil && p.Question == nil {
+	if res == nil && federate && p.Federation != nil && p.Question == nil && p.Federation.due(now) {
 		return s.pollFederation(ctx, p)
 	}
 	if res == nil {
@@ -431,12 +492,50 @@ func (s *Server) respondStep(w http.ResponseWriter, r *http.Request, p *Pending,
 	}
 	switch {
 	case p.Result != nil:
-		p.Result.write(w)
+		res, err := s.deliver(ctx, p.ID)
+		switch {
+		case errors.Is(err, errDelivered):
+			writeGone(w)
+		case err != nil:
+			s.serverError(w, r, "deliver pending result", err)
+		default:
+			res.write(w)
+		}
 	case p.State == StateCancelled:
 		aauth.WriteProblem(w, http.StatusGone, aauth.ErrCodeInvalidRequest, "the request was cancelled")
 	default:
 		s.writeAccepted(w, p)
 	}
+}
+
+// errDelivered means a pending request's terminal response has already
+// been returned.
+var errDelivered = errors.New("personserver: the result was already delivered")
+
+// deliver takes pending id's terminal response for the agent, once: it
+// marks the request delivered and discards the stored body, so a later
+// request to the pending URL answers 410 Gone (§11.8.3). Of concurrent
+// polls exactly one receives the response.
+func (s *Server) deliver(ctx context.Context, id string) (*Result, error) {
+	var out Result
+	_, err := s.mutateQuietly(ctx, id, func(p *Pending) error {
+		if p.Delivered || p.Result == nil {
+			return errDelivered
+		}
+		out = *p.Result
+		p.Delivered = true
+		p.Result = &Result{Status: out.Status, ContentType: out.ContentType}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// writeGone answers a pending URL whose terminal response was delivered.
+func writeGone(w http.ResponseWriter) {
+	aauth.WriteProblem(w, http.StatusGone, aauth.ErrCodeInvalidRequest, "the request's result was already delivered")
 }
 
 // needsAgent reports whether p should be answered at once rather than
@@ -530,6 +629,10 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 		aauth.WriteProblem(w, http.StatusGone, aauth.ErrCodeInvalidRequest, "the request was cancelled")
 		return
 	}
+	if p.Delivered {
+		writeGone(w)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		// Polling faster than allowed is slow_down (§11.9.4); the agent
@@ -554,7 +657,7 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 // pending URL answer 410 Gone.
 func (s *Server) serveCancel(w http.ResponseWriter, r *http.Request, p *Pending) {
 	_, err := s.mutate(r.Context(), p.ID, func(p *Pending) error {
-		if !p.Open() {
+		if !p.Open() || p.Approving {
 			return ErrResolved
 		}
 		p.State, p.Question = StateCancelled, nil
@@ -608,22 +711,34 @@ func (s *Server) serveClarification(w http.ResponseWriter, r *http.Request, c *c
 		}
 	}
 	np, err := s.mutate(ctx, p.ID, func(p *Pending) error {
-		if !p.Open() || p.Question == nil {
+		if !p.Open() || p.Question == nil || p.Approving {
 			return ErrResolved
 		}
 		ex := Exchange{Time: s.now(), Question: p.Question.Text, FromAS: p.QuestionFromAS}
 		if update != nil {
+			// Checked again: the PS may have consented since.
+			if err := update.check(p); err != nil {
+				return err
+			}
 			ex.Updated, ex.Justification = true, post.Justification
 			update.apply(p)
 		} else {
 			ex.Answer = post.ClarificationResponse
 		}
 		p.Transcript = append(p.Transcript, ex)
+		if p.QuestionFromAS && p.Federation != nil {
+			// The answer went to the access server: look again at once.
+			p.Federation.PolledAt = time.Time{}
+		}
 		p.Question, p.QuestionFromAS = nil, false
 		return nil
 	})
 	if errors.Is(err, ErrResolved) {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "no clarification is awaiting an answer")
+		return
+	}
+	if errors.Is(err, errBeyondConsent) {
+		writeError(w, err)
 		return
 	}
 	if err != nil {
@@ -643,24 +758,17 @@ func (s *Server) PendingRequest(ctx context.Context, id string) (*Pending, error
 	return s.advance(ctx, p), nil
 }
 
-// ConsumeCode is ConsumeCodeFor with no client key: attempts are limited
-// as one pool.
-func (s *Server) ConsumeCode(ctx context.Context, code string) (*Pending, error) {
-	return s.ConsumeCodeFor(ctx, code, "")
-}
+// ErrClientRequired means LookupCode or ConsumeCode was called without a
+// client key, which the per-client rate limit needs.
+var ErrClientRequired = errors.New("personserver: interaction code attempts need a client key")
 
-// ConsumeCodeFor is called by the interaction page when the person arrives
-// with ?code= (draft -11 §11.6.3.1). It canonicalizes the code (case,
-// hyphens, Crockford aliases), finds the pending request, consumes the code
-// (single use), and marks the request interacting. An unknown, malformed,
-// or already consumed code is ErrInvalidCode; an expired request is
-// ErrResolved. client identifies who is entering codes (the page's
-// session, or its address): with Config.Limiter set, attempts are limited
-// per client — key "code:<client>" — and a limited attempt is
-// *RateLimitError, checked before the code is looked up. The code only
-// correlates the browser with the request: the page MUST authenticate the
-// person before acting on their decision (§13.13).
-func (s *Server) ConsumeCodeFor(ctx context.Context, code, client string) (*Pending, error) {
+// codeAttempt rate-limits an interaction code attempt by client and finds
+// the open request the code names, brought up to date. An unknown or
+// malformed code is ErrInvalidCode, an expired request ErrResolved.
+func (s *Server) codeAttempt(ctx context.Context, code, client string) (*Pending, error) {
+	if client == "" {
+		return nil, ErrClientRequired
+	}
 	if ok, wait := s.allow(ctx, "code:"+client); !ok {
 		return nil, &RateLimitError{RetryAfter: wait}
 	}
@@ -678,14 +786,64 @@ func (s *Server) ConsumeCodeFor(ctx context.Context, code, client string) (*Pend
 	if p = s.advance(ctx, p); !p.Open() {
 		return nil, ErrResolved
 	}
+	if p.CodeConsumed {
+		return nil, ErrInvalidCode
+	}
+	return p, nil
+}
+
+// LookupCode is called by the interaction page when a browser arrives
+// with ?code= (draft -11 §11.6.3.1): it canonicalizes the code (case,
+// hyphens, Crockford aliases), finds the pending request for the page to
+// show, and marks it interacting. It does not consume the code, so a link
+// preview or the agent itself fetching the page cannot burn it: the code
+// is consumed by [Server.ConsumeCode] at the person's authenticated
+// decision. An unknown, malformed, or consumed code is ErrInvalidCode; an
+// expired request is ErrResolved.
+//
+// client identifies who is entering codes — the page's session, or the
+// browser's address — and must not be empty: with Config.Limiter set,
+// attempts are limited per client (key "code:<client>", checked before
+// the code is looked up), and a limited attempt is *RateLimitError. One
+// client failing does not lock out another.
+func (s *Server) LookupCode(ctx context.Context, code, client string) (*Pending, error) {
+	p, err := s.codeAttempt(ctx, code, client)
+	if err != nil || p.State != StatePending {
+		return p, err
+	}
+	return s.mutate(ctx, p.ID, func(p *Pending) error {
+		if !p.Open() {
+			return ErrResolved
+		}
+		p.State = StateInteracting
+		return nil
+	})
+}
+
+// ConsumeCode consumes an interaction code at the person's decision (draft
+// -11 §11.6.3.1): the interaction page calls it after authenticating
+// person (§13.13), then [Server.Approve] or [Server.Deny]. The code is
+// single use; it is recorded as consumed by person (Pending.CodeConsumedBy),
+// and Approve refuses a Grant for anyone else (ErrWrongPerson), so a code
+// seen by someone else cannot be approved under their account. The code
+// only correlates the browser with the request; it authorizes nothing.
+// Errors and the client key are as for [Server.LookupCode].
+func (s *Server) ConsumeCode(ctx context.Context, code, client, person string) (*Pending, error) {
+	if person == "" {
+		return nil, errors.New("personserver: ConsumeCode needs the authenticated person")
+	}
+	p, err := s.codeAttempt(ctx, code, client)
+	if err != nil {
+		return nil, err
+	}
 	return s.mutate(ctx, p.ID, func(p *Pending) error {
 		switch {
-		case !p.Open():
+		case !p.Open() || p.Approving:
 			return ErrResolved
 		case p.CodeConsumed:
 			return ErrInvalidCode
 		}
-		p.CodeConsumed, p.State = true, StateInteracting
+		p.CodeConsumed, p.CodeConsumedBy, p.State = true, person, StateInteracting
 		return nil
 	})
 }
@@ -714,7 +872,7 @@ func (s *Server) Ask(ctx context.Context, id string, q Question) error {
 	}
 	_, err := s.mutate(ctx, id, func(p *Pending) error {
 		switch {
-		case !p.Open():
+		case !p.Open() || p.Approving:
 			return ErrResolved
 		case p.Question != nil:
 			return ErrQuestionPending
@@ -735,6 +893,16 @@ func (s *Server) Ask(ctx context.Context, id string, q Question) error {
 // terminated) resolves the request with that error instead. In
 // four-party, approval of an auth token request starts federation and the
 // request stays open until the access server answers.
+//
+// g.Revision must be the Revision of the request the person was shown:
+// if the agent has since replaced it with an updated_request, Approve
+// fails with ErrRequestChanged and nothing is granted. Requests that were
+// never updated have Revision zero, so a Grant that leaves it unset
+// approves only the original request.
+//
+// Approve first claims the request (Pending.Approving), so a concurrent
+// Approve, Deny, Fail, cancellation, or clarification answer finds it
+// taken (ErrResolved) and the request is completed once.
 func (s *Server) Approve(ctx context.Context, id string, g Grant) error {
 	p, err := s.cfg.Store.Pending(ctx, id)
 	if err != nil {
@@ -743,28 +911,59 @@ func (s *Server) Approve(ctx context.Context, id string, g Grant) error {
 	if p = s.advance(ctx, p); !p.Open() {
 		return ErrResolved
 	}
-	if p.Federation != nil {
-		return ErrFederating
-	}
-	if p.ResourceInteraction != nil && !p.ResourceInteractionDone {
-		return errors.New("personserver: the resource's interaction has not completed (§7.2.3)")
+	p, err = s.mutateQuietly(ctx, id, func(p *Pending) error {
+		switch {
+		case !p.Open() || p.Approving:
+			return ErrResolved
+		case p.Federation != nil:
+			return ErrFederating
+		case p.Revision != g.Revision:
+			return ErrRequestChanged
+		case p.ResourceInteraction != nil && !p.ResourceInteractionDone:
+			return ErrResourceInteraction
+		case p.CodeConsumedBy != "" && firstNonEmpty(g.Person, p.Person) != p.CodeConsumedBy:
+			return ErrWrongPerson
+		}
+		// An approval through another channel completes the interaction,
+		// which consumes its code (§11.6.3).
+		p.Approving, p.CodeConsumed = true, p.CodeConsumed || p.CodeCanonical != ""
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	res, fed, err := s.complete(ctx, p, g)
 	if err != nil {
-		return err
+		return errors.Join(err, s.release(ctx, id))
 	}
 	if fed != nil {
 		_, err = s.mutate(ctx, id, func(p *Pending) error {
 			if !p.Open() {
 				return ErrResolved
 			}
-			p.Federation = fed
-			fed.applyRequirement(p)
+			p.Federation, p.Approving = fed, false
+			fed.applyRequirement(p, s.now())
 			return nil
 		})
 		return err
 	}
 	return s.resolveApproval(ctx, p, res)
+}
+
+// release gives up Approve's claim on pending id after a completion that
+// failed without a result, so the request can be decided again.
+func (s *Server) release(ctx context.Context, id string) error {
+	_, err := s.mutateQuietly(ctx, id, func(p *Pending) error {
+		if !p.Open() {
+			return ErrResolved
+		}
+		p.Approving = false
+		return nil
+	})
+	if errors.Is(err, ErrResolved) {
+		return nil
+	}
+	return err
 }
 
 // resolveApproval publishes the result of an approved request. A grant for a
@@ -816,7 +1015,7 @@ func (s *Server) Deny(ctx context.Context, id, reason string) error {
 			return err
 		}
 	}
-	_, err = s.resolve(ctx, id, res)
+	_, err = s.decide(ctx, id, res)
 	if err == nil {
 		s.missionLog(ctx, p.MissionS256, logKindFor(p.Kind), p.Agent, map[string]any{"pending": id, "decision": "denied", "reason": reason})
 	}
@@ -827,7 +1026,7 @@ func (s *Server) Deny(ctx context.Context, id, reason string) error {
 // aauth.PollErrAbandoned when the person opened the interaction but did not
 // complete it, aauth.PollErrExpired, or aauth.ErrCodeServerError.
 func (s *Server) Fail(ctx context.Context, id, code, detail string) error {
-	_, err := s.resolve(ctx, id, pollError(code, detail))
+	_, err := s.decide(ctx, id, pollError(code, detail))
 	return err
 }
 
@@ -912,4 +1111,14 @@ func logKindFor(k Kind) string {
 		return LogInteraction
 	}
 	return string(k)
+}
+
+// firstNonEmpty returns the first non-empty value.
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

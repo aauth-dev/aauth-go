@@ -173,7 +173,8 @@ func TestAuthTokenClarificationAndUpdate(t *testing.T) {
 				if p.Scope != "files:read" || !p.Transcript[1].Updated || p.Hints.Justification != "read only then" {
 					t.Errorf("updated request not applied: %+v", p)
 				}
-				if err := w.ps.Approve(ctx, p.ID, Grant{}); err != nil {
+				// The request was replaced once: approve what was shown.
+				if err := w.ps.Approve(ctx, p.ID, Grant{Revision: p.Revision}); err != nil {
 					t.Error(err)
 				}
 			}
@@ -364,7 +365,7 @@ func TestResourceInteraction(t *testing.T) {
 				t.Errorf("pending %+v", p)
 				return
 			}
-			if _, err := w.ps.ConsumeCode(ctx, p.Code); err != nil {
+			if _, err := w.ps.ConsumeCode(ctx, p.Code, "browser", "alice"); err != nil {
 				t.Error(err)
 				return
 			}

@@ -266,3 +266,27 @@ func TestVerifyResourceChallenge(t *testing.T) {
 		}
 	}
 }
+
+// A recipient refuses a resource token that lives longer than five
+// minutes unless it raises the ceiling.
+func TestVerifyResourceTokenLifetime(t *testing.T) {
+	f := newResourceFixture(t, "")
+	ctx := context.Background()
+	var rc ResourceClaims
+	if _, _, err := jwt.NewParser().ParseUnverified(f.issue(t, ResourceTokenParams{Scope: "data.read"}), &rc); err != nil {
+		t.Fatal(err)
+	}
+	rc.ExpiresAt = jwt.NewNumericDate(rc.IssuedAt.Add(10 * time.Minute))
+	long, err := MintResourceToken(rc, f.res.Key, f.res.JWK().Kid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := VerifyResourceToken(ctx, long, f.psVerify(f.personTok)); tokenErrorCode(err) != TokenErrInvalidResourceToken {
+		t.Fatalf("10-minute resource token: err = %v", err)
+	}
+	o := f.psVerify(f.personTok)
+	o.MaxLifetime = 15 * time.Minute
+	if _, _, err := VerifyResourceToken(ctx, long, o); err != nil {
+		t.Fatalf("raised ceiling: %v", err)
+	}
+}

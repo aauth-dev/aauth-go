@@ -5,6 +5,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sort"
@@ -44,8 +46,25 @@ func newClient(from string, cfg Config, ca *CA, addr func() string) *http.Client
 		IdleConnTimeout:     30 * time.Second,
 		TLSHandshakeTimeout: 5 * time.Second,
 	}
-	return &http.Client{Timeout: 60 * time.Second, Transport: fromHeader{from: from, base: tr}}
+	return &http.Client{Timeout: 60 * time.Second, Transport: fromHeader{from: from, base: tr}, CheckRedirect: sameOriginRedirect}
 }
+
+// sameOriginRedirect follows a redirect only to the origin of the first
+// request. The sandbox's requests carry signatures and tokens; a redirect
+// to another origin would hand them to a server the request was not for.
+func sameOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("sandbox: stopped after 10 redirects")
+	}
+	first := via[0].URL
+	if req.URL.Scheme != first.Scheme || !strings.EqualFold(req.URL.Host, first.Host) {
+		return fmt.Errorf("sandbox: refusing a redirect from %s://%s to %s://%s", first.Scheme, first.Host, req.URL.Scheme, req.URL.Host)
+	}
+	return nil
+}
+
+// noRedirect returns a redirect to the caller unchanged.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // fromHeader sets HeaderFrom on every request.
 type fromHeader struct {

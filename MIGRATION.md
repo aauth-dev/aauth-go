@@ -1,4 +1,200 @@
-# Migrating from v0.1 to v0.2
+# Migration guide
+
+- [Migrating from v0.2 to v0.3](#migrating-from-v02-to-v03)
+- [Migrating from v0.1 to v0.2](#migrating-from-v01-to-v02)
+
+## Migrating from v0.2 to v0.3
+
+v0.3 keeps the draft -11 wire format, so v0.2 and v0.3 parties
+interoperate. It verifies more strictly and changes some server APIs. The
+root package changes little; most changes are in `personserver`,
+`accessserver` and `agentprovider`.
+
+### 1. `ResourceGuard` binds requests to its resource and its access server
+
+`ResourceGuardConfig.Resource` must be a URL with a host: the guard refuses
+a request signed for another host. In four-party mode (`Audience` set to
+the access server), an auth token must be issued by that access server;
+`TrustIssuer` no longer admits it, and needs to list only person servers.
+
+```go
+// v0.2: TrustIssuer listed the PS and the AS
+guard, err := aauth.NewResourceGuard(aauth.ResourceGuardConfig{
+	Resource: "https://files.example", Audience: "https://as.example",
+	TrustIssuer: aauth.TrustIssuers("https://ps.example", "https://as.example"),
+})
+
+// v0.3: auth tokens come from Audience; TrustIssuer covers person tokens
+guard, err := aauth.NewResourceGuard(aauth.ResourceGuardConfig{
+	Resource: "https://files.example", Audience: "https://as.example",
+	TrustIssuer: aauth.TrustIssuers("https://ps.example"),
+})
+```
+
+The guard now applies `Verify.Signature` to agent-token requests too and
+verifies agent tokens with the strict provider profile unless
+`Verify.InsecureSkipIdentifierCheck` is set. New: `Caller.AgentIssuer`,
+`Caller.Account`, `Caller.Tenant`, `Caller.JTI` and
+`ResourceGuardConfig.IsRevoked`.
+
+### 2. `AuthorizationHandler` requires `TrustIssuer`
+
+Without it every person-token request is answered 500.
+
+```go
+h := &aauth.AuthorizationHandler{
+	// ...as before
+	TrustIssuer: aauth.TrustIssuers("https://ps.example"),
+}
+```
+
+### 3. Agent identifiers must be in their provider's domain
+
+`VerifyAgentToken` refuses an agent token whose `sub` domain is not the
+host of its `iss`, and `NewAgent` refuses such a self-hosted agent. Without
+`RequireProviderClaims`, an `iss` on a loopback host may still name agents
+of any domain, for local tests. `agentprovider.New` refuses a
+`Config.Domain` other than the issuer's host; leave it empty to use the
+issuer's host.
+
+### 4. `SelfSignedResolver` verifies only top-level agent tokens
+
+Use `JWKSResolver` or `StaticResolver` for person, auth, resource and
+sub-agent tokens.
+
+### 5. Verifying requests yourself
+
+Set `RequestVerifyOptions.Authority` to your own host so a request signed
+for another server is refused:
+
+```go
+authority, err := aauth.AuthorityOf("https://files.example")
+if err != nil {
+	return err
+}
+err = aauth.VerifyRequestWithOptions(req, pub, aauth.RequestVerifyOptions{Authority: authority})
+```
+
+Verification reads at most `DefaultMaxVerifyBodyBytes` (4 MiB) of a body;
+set `MaxBodySize` for more, or a negative value for no limit. Covered
+components with the `tr` or `req` parameter are refused. `SignRequest`
+covers `@query` when the URL has one, and `SignRequestCovering` covers
+extra components.
+
+Other root-package changes callers may notice:
+
+- `VerifyAgentTokenOptions.MaxLifetime` (24 h by default) and
+  `ResourceTokenVerifyOptions.MaxLifetime` (5 minutes by default) refuse
+  longer-lived tokens.
+- `WriteSignatureFailure` and `WriteTokenError` no longer copy error text
+  into the problem detail. Log the error yourself if you need it;
+  `TokenError.Detail` returns the text that is safe to send.
+- Discovery refuses a `dwk` other than the four AAuth metadata documents
+  (`ValidateDWK`) and redirects to another host (`CheckSameHostRedirect`).
+  A client you pass instead of `DiscoveryClient` should do the same.
+- `JWK.PublicKey` refuses non-canonical base64url.
+
+### 6. Person server approvals carry the revision shown
+
+`Grant.Revision` is the `Pending.Revision` of the request the person saw.
+`Approve` fails with `ErrRequestChanged` when the agent replaced the
+request after it was shown. A zero revision approves only a request that
+was never updated.
+
+```go
+// v0.2
+err := ps.Approve(ctx, p.ID, personserver.Grant{Person: person})
+
+// v0.3: pass the revision of the request the page showed
+err := ps.Approve(ctx, p.ID, personserver.Grant{Person: person, Revision: p.Revision})
+```
+
+### 7. Interaction codes are looked up, then consumed at the decision
+
+`ConsumeCodeFor` is removed. `LookupCode` shows the request without
+consuming the code, so a link preview cannot burn it; `ConsumeCode` takes
+the client key used for rate limiting (the browser's session or address)
+and the authenticated person.
+
+```go
+// v0.2
+p, err := ps.ConsumeCodeFor(ctx, code, clientIP)
+
+// v0.3: show the request...
+p, err := ps.LookupCode(ctx, code, clientIP)
+// ...and when the signed-in person decides
+p, err = ps.ConsumeCode(ctx, code, clientIP, person)
+```
+
+`accessserver.Server` has the same `LookupCode` and `ConsumeCode`.
+
+### 8. `ClaimsProvider` takes a request
+
+The provider learns which access server receives the claims, and for which
+resource, scope, mission and agent, so it can apply a release policy.
+
+```go
+// v0.2
+ClaimsProvider: func(ctx context.Context, person string, required []string) (map[string]any, error) {
+	return lookupClaims(person, required)
+},
+
+// v0.3
+ClaimsProvider: func(ctx context.Context, r *personserver.ClaimsRequest) (map[string]any, error) {
+	return lookupClaims(r.Person, r.Required)
+},
+```
+
+### 9. Call chaining is opt-in
+
+Set `personserver.Config.AllowCallChaining` to accept an `upstream_token`.
+Without it, chained requests are refused before the `Decider` runs. With
+it, a `Decider` should check `TokenRequest.Chained`; see the servers guide.
+
+### 10. Access server approvals carry the revision
+
+```go
+// v0.2
+err := as.Approve(ctx, p.ID, scope)
+
+// v0.3
+err := as.Approve(ctx, p.ID, p.Revision, scope)
+```
+
+### 11. Stores gain pruning and counts
+
+Your own `Store` implementations need:
+
+- `personserver`: `Store.Prune(ctx, cutoff)`,
+  `TokenStore.CountRevocations(ctx, iss)` and
+  `PendingStore.CountOpenPending(ctx, agent)`. `CreatePending` must refuse a
+  duplicate interaction code with `ErrCodeInUse`.
+- `accessserver`: `Store.CountRevocations(ctx, iss)`,
+  `Store.CountOpenPending(ctx, ps)` and `Store.Prune(ctx, cutoff)`.
+  `CreatePending` and `UpdatePending` must refuse a duplicate code.
+
+The servers call `Prune` every `Config.PruneInterval` (1 minute; negative
+turns it off) and cap open pending requests (`MaxPendingPerAgent`,
+`MaxPendingPerPS`) and revocations per issuer (`MaxRevocationsPerIssuer`),
+answering 429 past them. Pending URLs answer `410 Gone` once their result
+was delivered, and the stored result is discarded.
+
+### 12. Sandbox
+
+- `serve` listens on `127.0.0.1:443` by default and refuses another
+  interface without `--listen-any-interface`. The Docker image and Compose
+  files pass it.
+- The signing helper signs only for the sandbox's hosts, `--remote` origins
+  and upstreams; `--signer-any-target` lifts this, and `--signer-host` adds
+  names it answers to.
+- The CA is replaced on the first run, because the old one has no name
+  constraints. Trust the new `ca.pem` again in each tool.
+- In the `sandbox` package, `LoadOrCreateCA(dir, domains...)` takes the
+  domains the CA may sign for (default `aauth.test`); existing calls
+  compile. `Signer` gained a slice field (`Hosts`), so it can no longer be
+  compared with `==`.
+
+## Migrating from v0.1 to v0.2
 
 v0.1 implemented AAuth draft -09 with signature-key-04 and bootstrap-01. v0.2
 implements draft -11 with signature-key-09 and bootstrap-02. Draft -11
@@ -10,7 +206,7 @@ area, with before and after code. The `personserver`, `accessserver`,
 `agentprovider`, and `ratelimit` packages are new in v0.2 and have nothing to
 migrate. See the [changelog](https://github.com/aauth-dev/aauth-go/blob/main/CHANGELOG.md) for additions.
 
-## Contents
+### Contents
 
 - [Module path](#module-path)
 - [Keys and algorithms](#keys-and-algorithms) (1–8)
@@ -23,7 +219,7 @@ migrate. See the [changelog](https://github.com/aauth-dev/aauth-go/blob/main/CHA
 - [Transport](#transport) (37–38)
 - [Delegation](#delegation) (39–40)
 
-## Module path
+### Module path
 
 The repository was renamed from `auth-go` to `aauth-go`, and v0.2 has the
 module path `github.com/aauth-dev/aauth-go`. Update imports and `go.mod`:
@@ -44,9 +240,9 @@ Subpackages move the same way, for example
 `github.com/aauth-dev/aauth-go/personserver`. v0.1 releases remain available
 under the old path.
 
-## Keys and algorithms
+### Keys and algorithms
 
-### 1. `Agent.Priv` and `Agent.Pub` are replaced by `Agent.Key`
+#### 1. `Agent.Priv` and `Agent.Pub` are replaced by `Agent.Key`
 
 Keys are `crypto.Signer`s, so hardware-backed keys work. The public key is
 `Agent.Key.Public()`.
@@ -61,7 +257,7 @@ pub := agent.Key.Public()          // crypto.PublicKey
 jwk := agent.JWK()                 // as before
 ```
 
-### 2. `WithKey` takes a `crypto.Signer`
+#### 2. `WithKey` takes a `crypto.Signer`
 
 ```go
 // v0.1
@@ -73,7 +269,7 @@ agent, err := aauth.NewAgent(id, aauth.WithKey(signer))
 agent, err := aauth.NewAgent(id, aauth.WithKeyAlgorithm(aauth.AlgES256))
 ```
 
-### 3. `MintAgentToken`, `MintAuthToken`, and `MintResourceToken` take a `crypto.Signer`
+#### 3. `MintAgentToken`, `MintAuthToken`, and `MintResourceToken` take a `crypto.Signer`
 
 ```go
 // v0.1
@@ -85,7 +281,7 @@ tok, err := aauth.MintAgentToken(claims, key, kid) // key crypto.Signer
 
 The JWS `alg` follows the key: `Ed25519` or `ES256`.
 
-### 4. `SignRequest` takes a `crypto.Signer`
+#### 4. `SignRequest` takes a `crypto.Signer`
 
 ```go
 // v0.1
@@ -95,7 +291,7 @@ err := aauth.SignRequest(req, agent.Priv, "sig")
 err := aauth.SignRequest(req, agent.Key, "sig")
 ```
 
-### 5. `VerifyRequest` takes a `crypto.PublicKey`
+#### 5. `VerifyRequest` takes a `crypto.PublicKey`
 
 ```go
 // v0.1
@@ -107,7 +303,7 @@ err := aauth.VerifyRequest(req, pub) // crypto.PublicKey (ed25519.PublicKey or *
 err := aauth.VerifyRequestWithOptions(req, pub, aauth.RequestVerifyOptions{})
 ```
 
-### 6. `KeyResolver.ResolveKey` returns `crypto.PublicKey`
+#### 6. `KeyResolver.ResolveKey` returns `crypto.PublicKey`
 
 Custom resolvers change their return type. The built-in `JWKSResolver`,
 `StaticResolver`, and `SelfSignedResolver` already do.
@@ -123,7 +319,7 @@ func (r myResolver) ResolveKey(ctx context.Context, iss, dwk, kid string, cnf *a
 A resolver that caches keys can also implement `aauth.KeyRefresher`, so
 verifiers refresh once when an issuer re-keys under the same `kid`.
 
-### 7. `JWK.PublicKey` returns `crypto.PublicKey` and validates `alg` first
+#### 7. `JWK.PublicKey` returns `crypto.PublicKey` and validates `alg` first
 
 ```go
 // v0.1
@@ -134,7 +330,7 @@ pub, err := jwk.PublicKey() // crypto.PublicKey; ErrUnsupportedAlgorithm or ErrI
 edPub, ok := pub.(ed25519.PublicKey)
 ```
 
-### 8. JWS and JWK `alg` is `Ed25519`, not `EdDSA` (wire change)
+#### 8. JWS and JWK `alg` is `Ed25519`, not `EdDSA` (wire change)
 
 Tokens and keys are minted with the fully-specified `Ed25519` algorithm.
 Tokens or keys using `EdDSA`, `none`, a symmetric algorithm, or no `alg` are
@@ -151,9 +347,9 @@ hand-written JWKS with `"alg": "Ed25519"` (or `"ES256"`); `aauth.NewJWK` and
 {"kty": "OKP", "crv": "Ed25519", "x": "...", "alg": "Ed25519"}
 ```
 
-## Signatures and Signature-Error
+### Signatures and Signature-Error
 
-### 9. `WriteSignatureError` no longer takes a status code
+#### 9. `WriteSignatureError` no longer takes a status code
 
 Every signature failure is a 401. Most servers should call
 `WriteSignatureFailure`, which picks the code from the error.
@@ -168,7 +364,7 @@ aauth.WriteSignatureError(w, aauth.SignatureError{Code: aauth.SigErrInvalidSigna
 aauth.WriteSignatureFailure(w, err)
 ```
 
-### 10. `SigErrKeyNotFound` is replaced by `SigErrUnknownKey` (wire change)
+#### 10. `SigErrKeyNotFound` is replaced by `SigErrUnknownKey` (wire change)
 
 The code is now `unknown_key`, from the signature-key-09 registry. A `kid`
 missing from a JWKS or pinned key set is `aauth.ErrUnknownKey`.
@@ -181,7 +377,7 @@ if se.Code == aauth.SigErrKeyNotFound { ... }
 if se.Code == aauth.SigErrUnknownKey { ... }
 ```
 
-### 11. `SigErrExpiredSignature` is removed (wire change)
+#### 11. `SigErrExpiredSignature` is removed (wire change)
 
 signature-key-09 has no `expired_signature`. An expired token is
 `expired_jwt` (`SigErrExpiredJWT`); a signature whose `created` is older than
@@ -200,7 +396,7 @@ The other new codes are `unsupported_scheme`, `cache_miss`,
 `invalid_request`, `issuer_missing`, `issuer_mismatch`, `invalid_jwt`, and
 `revoked_jwt`.
 
-### 12. `Signature-Error` is an RFC 9651 dictionary (wire change)
+#### 12. `Signature-Error` is an RFC 9651 dictionary (wire change)
 
 `SignatureError.String` serializes a Structured Field Dictionary (string
 parameters quoted, `required_input` as an inner list of strings), and
@@ -214,7 +410,7 @@ splitting on commas. `invalid_input` exposes its components as
 Signature-Error: error=invalid_input, required_input=("content-digest" "content-type")
 ```
 
-### 13. `Signature-Key` is parsed as a dictionary keyed by label (wire change)
+#### 13. `Signature-Key` is parsed as a dictionary keyed by label (wire change)
 
 Only the member for the verified label is read. A scheme other than `jwt` at
 an agent endpoint is `unsupported_scheme` (`ErrUnsupportedScheme`), answered
@@ -222,7 +418,7 @@ with `Accept-Signature-Scheme`. `AttachSignatureKey` emits the canonical
 serialization. Code that only calls `AttachSignatureKey` and
 `ParseSignatureKey` needs no change.
 
-### 14. Signature `created` is enforced and coverage changed (wire change)
+#### 14. Signature `created` is enforced and coverage changed (wire change)
 
 Verification no longer skips the `created` check: a signature must be
 created within the validity window (default 60 seconds,
@@ -238,7 +434,7 @@ claims, err := aauth.VerifyAndExtractAgent(ctx, req, aauth.VerifyAgentTokenOptio
 })
 ```
 
-### 15. `ParseRequirement` requires an RFC 9651 dictionary (wire change)
+#### 15. `ParseRequirement` requires an RFC 9651 dictionary (wire change)
 
 A requirement given as a quoted string is rejected; the `requirement` member
 must be a Token.
@@ -254,16 +450,16 @@ AAuth-Requirement: requirement=auth-token; resource-token="..."
 Use `ChallengeAgentToken`, `ChallengePersonToken`, `ChallengeAuthToken`, or
 `Requirement.String` to produce conforming values.
 
-## Identifiers and common token rules
+### Identifiers and common token rules
 
-### 16. Agent identifiers are validated per draft -11 §5.2
+#### 16. Agent identifiers are validated per draft -11 §5.2
 
 `ParseAgentIdentifier` rejects local parts outside `A-Z a-z 0-9 - _ + .` or
 longer than 255 characters, malformed sub-agent names, and domains that are
 not lowercase A-label host names (no scheme, port, or path). Failures wrap
 `aauth.ErrInvalidIdentifier`. Identifiers remain case-sensitive.
 
-### 17. Server-issued tokens follow the common JWT rules (draft -11 §11.5)
+#### 17. Server-issued tokens follow the common JWT rules (draft -11 §11.5)
 
 `iat` is required, `exp` has no skew tolerance, `iss` must be a server
 identifier (https, host only, lowercase), `typ` and `dwk` are checked first,
@@ -277,16 +473,16 @@ which reaches only public https destinations. Against local servers, pass a
 client to `NewJWKSResolver`, `FetchMetadata`, `RevocationClient`, and each
 server's `Config.HTTPClient`.
 
-### 18. Metadata documents must carry a matching `issuer`
+#### 18. Metadata documents must carry a matching `issuer`
 
 `FetchMetadata` (and every resolver built on it) rejects a document with no
 `issuer` (`ErrIssuerMissing`) or whose `issuer` differs from the URL it was
 fetched under (`ErrIssuerMismatch`). Publish `issuer` in every
 `aauth-*.json` you serve.
 
-## Resource tokens
+### Resource tokens
 
-### 19. `IssueResourceToken` takes `ResourceTokenParams` and a verified presented token
+#### 19. `IssueResourceToken` takes `ResourceTokenParams` and a verified presented token
 
 A resource token can only be issued against a verified person token or auth
 token; its `ps`, `sub`, `jti`, `mission_s256`, and `tenant` are copied from
@@ -309,7 +505,7 @@ rt, err := aauth.IssueResourceToken(aauth.ResourceTokenParams{
 }, person, key, kid)
 ```
 
-### 20. `VerifyResourceToken` takes `ResourceTokenVerifyOptions` and returns the presented token
+#### 20. `VerifyResourceToken` takes `ResourceTokenVerifyOptions` and returns the presented token
 
 ```go
 // v0.1
@@ -327,7 +523,7 @@ rc, presented, err := aauth.VerifyResourceToken(ctx, token, aauth.ResourceTokenV
 
 Failures are `*aauth.TokenError`s with the §11.9.3 codes.
 
-### 21. `VerifyResourceChallenge` takes a context and `ResourceChallengeOptions`
+#### 21. `VerifyResourceChallenge` takes a context and `ResourceChallengeOptions`
 
 It now verifies the resource token's signature and checks `ps`, `sub`, and
 `presented_jti` against the token the agent presented. `Transport` does this
@@ -347,7 +543,7 @@ rc, err := aauth.VerifyResourceChallenge(ctx, token, aauth.ResourceChallengeOpti
 })
 ```
 
-### 22. `ResourceClaims` drops `Agent` and `Mission` (wire change)
+#### 22. `ResourceClaims` drops `Agent` and `Mission` (wire change)
 
 A resource token no longer names the agent; `agent_jkt` binds it to the
 agent's key. New members: `PS`, `PresentedJTI`, `MissionS256`, `Account`,
@@ -363,9 +559,9 @@ mission := rc.MissionS256
 ps, sub := rc.PS, rc.Subject // the person, as a directed identifier at that PS
 ```
 
-## Auth tokens
+### Auth tokens
 
-### 23. `AuthClaims` drops `Agent`, `Act`, and `Mission` (wire change)
+#### 23. `AuthClaims` drops `Agent`, `Act`, and `Mission` (wire change)
 
 An auth token carries no agent identifier and no delegation chain. It now
 carries the REQUIRED `ps` and a directed `sub`, plus optional `account` and
@@ -381,12 +577,12 @@ ps, sub := ac.PS, ac.Subject
 mission := ac.MissionS256
 ```
 
-### 24. `ActClaim`, `ActClaim.Delegators`, and `NextAct` are removed
+#### 24. `ActClaim`, `ActClaim.Delegators`, and `NextAct` are removed
 
 Draft -11 removed `act`. There is no replacement; call chaining is carried by
 `upstream_token` (see [Delegation](#delegation)).
 
-### 25. `VerifyAuthToken` and `VerifyAndExtractAuth` take `AuthTokenVerifyOptions`
+#### 25. `VerifyAuthToken` and `VerifyAndExtractAuth` take `AuthTokenVerifyOptions`
 
 ```go
 // v0.1
@@ -399,15 +595,15 @@ ac, err := aauth.VerifyAndExtractAuth(ctx, req, resourceURL, aauth.AuthTokenVeri
 })
 ```
 
-### 26. Auth and person token `cnf` and `ps` are checked more strictly
+#### 26. Auth and person token `cnf` and `ps` are checked more strictly
 
 Auth and person tokens must carry a structurally complete `cnf.jwk` that
 passes algorithm validation, and a PS-issued auth token must have `ps`
 equal to `iss`. Tokens minted by v0.1 issuers fail these checks.
 
-## PS client and metadata
+### PS client and metadata
 
-### 27. `TokenRequest`, `TokenResponse`, and `ExchangeToken` are renamed
+#### 27. `TokenRequest`, `TokenResponse`, and `ExchangeToken` are renamed
 
 They are `AuthTokenRequest`, `AuthTokenResponse`, and
 `PSClient.RequestAuthToken`. The optional request parameters move into the
@@ -429,7 +625,7 @@ res, err := ps.RequestAuthToken(ctx, aauth.AuthTokenRequest{
 })
 ```
 
-### 28. `PSClient.TokenEndpoint` is `PSClient.AuthTokenEndpoint`
+#### 28. `PSClient.TokenEndpoint` is `PSClient.AuthTokenEndpoint`
 
 ```go
 // v0.1
@@ -442,13 +638,13 @@ ps.PersonTokenEndpoint = "https://ps.example/person"
 _, err := ps.Discover(ctx)
 ```
 
-### 29. `token_endpoint` is `auth_token_endpoint` in PS metadata (wire change)
+#### 29. `token_endpoint` is `auth_token_endpoint` in PS metadata (wire change)
 
 `PersonServerMetadata.TokenEndpoint` is `AuthTokenEndpoint`, and
 `person_token_endpoint` (`PersonTokenEndpoint`) is REQUIRED.
 `PersonServerMetadata.Validate` reports missing members.
 
-### 30. Metadata types embed `ServerMetadata`
+#### 30. Metadata types embed `ServerMetadata`
 
 `Issuer` and `JWKSURI` (and the display members) moved to an embedded
 `ServerMetadata` in `AgentProviderMetadata`, `PersonServerMetadata`, and
@@ -465,7 +661,7 @@ md := aauth.ResourceMetadata{
 }
 ```
 
-### 31. Clarification updated requests carry `presented_token`
+#### 31. Clarification updated requests carry `presented_token`
 
 `ClarificationReply.PresentedToken` is REQUIRED for an `updated_request`,
 and the client refuses one without it. On the server side,
@@ -481,7 +677,7 @@ return aauth.ClarificationReply{ResourceToken: newRT}, nil
 return aauth.ClarificationReply{ResourceToken: newRT, PresentedToken: presented}, nil
 ```
 
-### 32. Token endpoints report a terminated mission as `*MissionStatusError`
+#### 32. Token endpoints report a terminated mission as `*MissionStatusError`
 
 `RequestPersonToken`, `PersonToken`, and `RequestAuthToken` return a
 `*aauth.MissionStatusError` (not a `*TokenError`) when the request names a
@@ -494,9 +690,9 @@ if errors.As(err, &mse) {
 }
 ```
 
-## Missions
+### Missions
 
-### 33. `MissionRef` is replaced by `mission_s256` (wire change)
+#### 33. `MissionRef` is replaced by `mission_s256` (wire change)
 
 A mission is identified by its PS and its s256, sent as a single
 `mission_s256` string.
@@ -509,7 +705,7 @@ req := aauth.PermissionRequest{Action: "SendEmail", Mission: &aauth.MissionRef{A
 req := aauth.PermissionRequest{Action: "SendEmail", MissionS256: s256}
 ```
 
-### 34. `AuditRequest.Mission` is `AuditRequest.MissionS256` and is REQUIRED
+#### 34. `AuditRequest.Mission` is `AuditRequest.MissionS256` and is REQUIRED
 
 ```go
 // v0.1
@@ -519,7 +715,7 @@ err := ps.Audit(ctx, aauth.AuditRequest{Mission: aauth.MissionRef{Approver: psUR
 err := ps.Audit(ctx, aauth.AuditRequest{MissionS256: s256, Action: "SendEmail"})
 ```
 
-### 35. `WriteMissionStatusError` is replaced by `WriteMissionTerminated`
+#### 35. `WriteMissionStatusError` is replaced by `WriteMissionTerminated`
 
 A mission is either active or terminated; the response carries an optional
 termination reason.
@@ -532,15 +728,15 @@ aauth.WriteMissionStatusError(w, "revoked")
 aauth.WriteMissionTerminated(w, aauth.TerminationRevoked)
 ```
 
-### 36. Mission status errors carry `termination_reason` (wire change)
+#### 36. Mission status errors carry `termination_reason` (wire change)
 
 `MissionStatusError.MissionStatus` is always `terminated`; the reason is in
 `TerminationReason` (`completed`, `revoked`, `expired`, `superseded`,
 `administrative`, or an unrecognized value kept as-is).
 
-## Transport
+### Transport
 
-### 37. `Transport.ExpiryLeeway` is `Transport.RefreshMargin`
+#### 37. `Transport.ExpiryLeeway` is `Transport.RefreshMargin`
 
 The default margin is five minutes (`aauth.DefaultRefreshMargin`): a cached
 token with less time left is not presented again.
@@ -553,7 +749,7 @@ tr.ExpiryLeeway = 30 * time.Second
 tr.RefreshMargin = 5 * time.Minute
 ```
 
-### 38. `Transport` answers `requirement=person-token`
+#### 38. `Transport` answers `requirement=person-token`
 
 A `Transport` with a `PSClient` now obtains a person token instead of
 returning an error for `requirement=person-token`, and verifies resource
@@ -561,9 +757,9 @@ token challenges against the PS client's issuer rather than the agent
 token's `ps` claim. Discover the PS (`PSClient.Discover`) or set its
 endpoints explicitly.
 
-## Delegation
+### Delegation
 
-### 39. `Agent.MintSubAgentToken` is removed
+#### 39. `Agent.MintSubAgentToken` is removed
 
 A sub-agent holds its own key, and its token is issued by the parent's
 agent provider. Sub-agent tokens are no longer verifiable with
@@ -582,7 +778,7 @@ tok, err := parent.IssueSubAgentToken("worker-1", subKey.Public())
 A sub-agent requests authorization through its parent:
 `aauth.NewTransport(sub, parentPSClient)` sends `subagent_token`.
 
-### 40. `RouteDownstream` takes a `PresentedToken` and routes by person server
+#### 40. `RouteDownstream` takes a `PresentedToken` and routes by person server
 
 Call chaining routes by the upstream token's person server: the `iss` of a
 person token or the `ps` of an auth token. `ChainRouter.Endpoint` and

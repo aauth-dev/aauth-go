@@ -100,8 +100,9 @@ func (rs *resource) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (rs *resource) authorizationEndpoint() http.Handler {
 	return &aauth.AuthorizationHandler{
-		Resource: rs.url,
-		Verify:   rs.verify,
+		Resource:    rs.url,
+		Verify:      rs.verify,
+		TrustIssuer: aauth.TrustIssuers(rs.sb.cfg.URL(RolePS)),
 		Decide: func(_ context.Context, _ *http.Request, person *aauth.PersonClaims, ar aauth.AuthorizeRequest) (aauth.AuthorizeDecision, error) {
 			if ar.Scope == "" {
 				return aauth.AuthorizeDecision{}, &aauth.ProblemError{Status: http.StatusBadRequest, Code: aauth.ErrCodeInvalidScope, Detail: "scope is required"}

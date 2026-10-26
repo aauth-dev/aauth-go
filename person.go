@@ -187,6 +187,7 @@ func VerifyPersonToken(ctx context.Context, token, resourceURL string, opts Toke
 		dwks:        []string{WellKnownPerson},
 		maxLifetime: MaxPersonTokenLifetime,
 		issuer:      func(iss string) error { return opts.checkServerIdentifier("iss", iss) },
+		trust:       opts.trust,
 		resolver:    opts.Resolver,
 		clock:       opts.Signature,
 	}

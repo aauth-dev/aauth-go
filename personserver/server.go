@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	aauth "github.com/aauth-dev/aauth-go"
@@ -113,10 +114,20 @@ type Config struct {
 	// token (dwk aauth-access.json). Roles that share an origin share an
 	// identifier, so aud alone cannot tell them apart.
 	CollocatedAS func(resource string) bool
+	// AllowCallChaining accepts call chaining requests (§10.1.1): a
+	// resource acting as an agent presents the upstream token it received,
+	// and the PS issues a token for the person behind it. Such requests
+	// reach the Decider with Chained set and Person already known, so a
+	// Decider that allows every request for a known person would grant
+	// them without the person's say. Off by default: an upstream_token is
+	// refused with invalid_upstream_token. Enable it only with a Decider
+	// that checks r.Chained.
+	AllowCallChaining bool
 	// InteractionURL is the PS's user-facing interaction page (https, no
 	// query or fragment), sent as the url of requirement=interaction. The
-	// page reads ?code= and calls [Server.ConsumeCode]. Required for
-	// requirement=interaction decisions.
+	// page reads ?code=, shows the request ([Server.LookupCode]), and at
+	// the person's authenticated decision calls [Server.ConsumeCode].
+	// Required for requirement=interaction decisions.
 	InteractionURL string
 	// Paths overrides endpoint paths; zero fields take DefaultPaths.
 	Paths Paths
@@ -162,12 +173,26 @@ type Config struct {
 	// MaxClarificationRounds bounds clarification questions per request
 	// (§7.5.3; default five).
 	MaxClarificationRounds int
+	// MaxPendingPerAgent bounds an agent's open pending requests (default
+	// [DefaultMaxPendingPerAgent]; negative: unbounded). A request that
+	// would open one more is answered 429 rate_limited.
+	MaxPendingPerAgent int
+	// MaxRevocationsPerIssuer bounds the unexpired revocations one agent
+	// provider or resource can have recorded at the revocation endpoint
+	// (default [DefaultMaxRevocationsPerIssuer]; negative: unbounded).
+	// Beyond it the endpoint answers 429 rate_limited until entries expire.
+	MaxRevocationsPerIssuer int
+	// PruneInterval is how often the server discards expired records
+	// through [Store.Prune], from the request path (default one minute;
+	// negative: never, for hosts that call [Server.Prune] themselves).
+	PruneInterval time.Duration
 	// PersonTokenTTL and AuthTokenTTL are the default token lifetimes
 	// (at most one hour; default one hour).
 	PersonTokenTTL time.Duration
 	AuthTokenTTL   time.Duration
 	// Limiter, when set, rate-limits the actions the protocol defines a
-	// refusal for: interaction code attempts per client ("code:"), polls
+	// refusal for: interaction code attempts per client ("code:", see
+	// [Server.LookupCode]), polls
 	// per pending request ("poll:", answered slow_down), revocations per
 	// issuer ("revoke:", answered rate_limited), and new resources per
 	// agent at the person token endpoint ("resources:"). See the
@@ -199,9 +224,14 @@ type Server struct {
 	jwks     aauth.JWKS
 	tokens   aauth.KeyResolver // resource tokens, AS tokens, and our own
 	agents   aauth.KeyResolver
+	servers  aauth.KeyResolver // servers signing under jwks_uri (revocations)
 	mux      *http.ServeMux
 	waiters  waiters
 	subjects subjectDeriver
+	pruned   atomic.Int64 // unix nanoseconds of the last automatic prune
+	// authority is the PS's own host, which every request signature it
+	// verifies must cover as @authority.
+	authority string
 }
 
 // New validates cfg and returns a Server.
@@ -230,7 +260,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.KeyID != "" {
 		jwk.Kid = cfg.KeyID
 	}
-	s := &Server{cfg: cfg, paths: cfg.Paths.withDefaults(), kid: jwk.Kid}
+	authority, err := aauth.AuthorityOf(cfg.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("personserver: Config.Issuer: %w", err)
+	}
+	s := &Server{cfg: cfg, paths: cfg.Paths.withDefaults(), kid: jwk.Kid, authority: authority}
 	s.jwks = aauth.JWKS{Keys: append([]aauth.JWK{jwk}, cfg.PublishedKeys...)}
 	s.subjects = subjectDeriver{key: cfg.SubjectKey}
 	hc := cfg.HTTPClient
@@ -243,6 +277,12 @@ func New(cfg Config) (*Server, error) {
 		external = aauth.NewJWKSResolver(hc)
 	}
 	s.tokens = selfResolver{issuer: cfg.Issuer, dwk: aauth.WellKnownPerson, keys: s.jwks, next: external}
+	// One resolver for the server's lifetime, so its cache and refetch
+	// floor apply across revocation requests.
+	s.servers = cfg.ServerResolver
+	if s.servers == nil {
+		s.servers = aauth.NewJWKSResolver(hc)
+	}
 	s.mux = http.NewServeMux()
 	s.Register(s.mux)
 	return s, nil
@@ -314,13 +354,16 @@ func (s *Server) logger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// signatureOptions are the HTTP signature checks for agent requests to PS
-// endpoints (§11.3.4): content-digest and content-type covered on bodies.
+// signatureOptions are the HTTP signature checks for requests to PS
+// endpoints (§11.3.4): content-digest and content-type covered on bodies,
+// and @authority naming this PS, so a request signed for another server
+// cannot be replayed here.
 func (s *Server) signatureOptions(at time.Time) aauth.RequestVerifyOptions {
 	return aauth.RequestVerifyOptions{
 		Window:              s.cfg.SignatureWindow,
 		RequireBodyCoverage: true,
 		Now:                 func() time.Time { return at },
+		Authority:           s.authority,
 	}
 }
 
@@ -406,6 +449,55 @@ func (w *waiters) notify(id string) {
 		default:
 		}
 	}
+}
+
+// Defaults for the bounds on stored state.
+const (
+	DefaultMaxPendingPerAgent      = 32
+	DefaultMaxRevocationsPerIssuer = 100_000
+	// ClockSkew is how long past their expiry records are kept (draft -11
+	// §11.12.4: until exp plus clock skew).
+	ClockSkew = 5 * time.Minute
+)
+
+// Prune discards the expired records in the Store: those whose lifetime
+// ended more than ClockSkew ago ([Store.Prune]).
+func (s *Server) Prune(ctx context.Context) error {
+	if err := s.cfg.Store.Prune(ctx, s.now().Add(-ClockSkew)); err != nil {
+		return storeErr("prune", err)
+	}
+	return nil
+}
+
+// maybePrune prunes when Config.PruneInterval has passed since the last
+// automatic prune; one caller does it, and failures are logged.
+func (s *Server) maybePrune(ctx context.Context) {
+	every := s.cfg.PruneInterval
+	if every < 0 {
+		return
+	}
+	if every == 0 {
+		every = time.Minute
+	}
+	now := s.now().UnixNano()
+	last := s.pruned.Load()
+	if now-last < int64(every) || !s.pruned.CompareAndSwap(last, now) {
+		return
+	}
+	if err := s.Prune(ctx); err != nil {
+		s.logger().ErrorContext(ctx, "personserver: prune", "error", err)
+	}
+}
+
+// limit returns n's bound: def for zero, unbounded (-1) for negative.
+func limit(n, def int) int {
+	switch {
+	case n == 0:
+		return def
+	case n < 0:
+		return -1
+	}
+	return n
 }
 
 // allow consults Config.Limiter; no limiter allows everything.

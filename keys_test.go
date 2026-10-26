@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -175,5 +176,54 @@ func TestJWSAlgMustMatchKey(t *testing.T) {
 	r := StaticResolver{"": JWKS{Keys: []JWK{ed.JWK()}}}
 	if _, err := VerifyAgentToken(context.Background(), tok, VerifyAgentTokenOptions{Resolver: r}); err == nil {
 		t.Fatal("ES256 token verified under an Ed25519 key")
+	}
+}
+
+// One key has one accepted encoding: alternate base64url encodings of x or
+// y (non-zero trailing bits, embedded line breaks) are refused, and do not
+// change the thumbprint.
+func TestJWKAlternateEncodings(t *testing.T) {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	// flipTrailingBits sets the unused low bit of the last character.
+	flipTrailingBits := func(s string) string {
+		i := strings.IndexByte(alphabet, s[len(s)-1])
+		return s[:len(s)-1] + string(alphabet[i|1])
+	}
+	for _, alg := range []string{AlgEd25519, AlgES256} {
+		key, err := GenerateKey(alg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		j, err := NewJWK(key.Public())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := j.Thumbprint()
+		variants := []func(JWK) JWK{
+			func(v JWK) JWK { v.X = flipTrailingBits(v.X); return v },
+			func(v JWK) JWK { v.X = v.X[:10] + "\n" + v.X[10:]; return v },
+			func(v JWK) JWK { v.X = v.X[:10] + "\r\n" + v.X[10:]; return v },
+		}
+		if alg == AlgES256 {
+			variants = append(variants,
+				func(v JWK) JWK { v.Y = flipTrailingBits(v.Y); return v },
+				func(v JWK) JWK { v.Y = v.Y + "\n"; return v },
+			)
+		}
+		for i, mutate := range variants {
+			v := mutate(j)
+			if v.X == j.X && v.Y == j.Y {
+				t.Fatalf("%s variant %d: no change", alg, i)
+			}
+			if _, err := v.PublicKey(); !errors.Is(err, ErrInvalidKey) {
+				t.Errorf("%s variant %d: PublicKey err = %v, want ErrInvalidKey", alg, i, err)
+			}
+			if got := v.Thumbprint(); got != want {
+				t.Errorf("%s variant %d: thumbprint %s, want %s", alg, i, got, want)
+			}
+		}
+		if _, err := j.PublicKey(); err != nil {
+			t.Fatalf("%s canonical: %v", alg, err)
+		}
 	}
 }

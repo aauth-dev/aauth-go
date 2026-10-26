@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -61,7 +62,7 @@ func (c *PSClient) RequestPermission(ctx context.Context, p PermissionRequest) (
 		return nil, endpointError("permission endpoint", final, readErrorBody(final))
 	}
 	var pr PermissionResponse
-	if err := json.NewDecoder(final.Body).Decode(&pr); err != nil {
+	if err := json.NewDecoder(io.LimitReader(final.Body, maxDocumentBytes)).Decode(&pr); err != nil {
 		return nil, err
 	}
 	return &pr, nil

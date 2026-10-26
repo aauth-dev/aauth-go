@@ -92,7 +92,8 @@ type SubagentGrant struct {
 // Registrar is the hosting application's issuance policy. It decides who
 // gets an agent token for which key, so tokens can be tied to the
 // application's own records (an enrollment, a work session). Returning an
-// error refuses the request (403 denied).
+// error refuses the request (403 denied); the error is logged, and the
+// caller sees only a generic denial.
 type Registrar interface {
 	// AuthorizeIssue authorizes an hwk-signed issuance request; r is the
 	// HTTP request, so the application can read its own authentication
@@ -138,8 +139,9 @@ type Config struct {
 	// Issuer is the provider's server identifier: the iss of the agent
 	// tokens it issues.
 	Issuer string
-	// Domain is the domain of the agent identifiers it issues; default the
-	// issuer's host.
+	// Domain is the domain of the agent identifiers it issues. It is the
+	// issuer's host, which verifiers require of an agent token's sub;
+	// leave it empty to derive it, and New refuses any other value.
 	Domain string
 	// Key is the provider's signing key — separate from every agent's key
 	// — and KeyID its kid (default: the RFC 7638 thumbprint).
@@ -159,8 +161,10 @@ type Config struct {
 	// Limiter, when set, limits issuance per presented key ("issue:"),
 	// refreshes per durable key ("refresh:"), and sub-agent requests per
 	// parent ("subagent:"), answered 429 rate_limited with Retry-After.
-	// It is checked after the request authenticates and before the
-	// Registrar is asked.
+	// It is checked after the request authenticates and before attestation
+	// is verified or the Registrar is asked. Independently of it, the
+	// default replay cache admits [DefaultReplayEntriesPerGroup] recent
+	// refreshes per durable key.
 	Limiter aauth.Limiter
 	// OnIssue is called for every token issued.
 	OnIssue func(ctx context.Context, t IssuedToken)
@@ -198,6 +202,9 @@ type Server struct {
 	domain string
 	replay ReplayCache
 	mux    *http.ServeMux
+	// authority is the provider's own host, which every request signature
+	// it verifies must cover as @authority.
+	authority string
 }
 
 // New validates cfg and returns a Server.
@@ -215,7 +222,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.KeyID != "" {
 		jwk.Kid = cfg.KeyID
 	}
-	s := &Server{cfg: cfg, kid: jwk.Kid, replay: cfg.Replay}
+	authority, err := aauth.AuthorityOf(cfg.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("agentprovider: Config.Issuer: %w", err)
+	}
+	s := &Server{cfg: cfg, kid: jwk.Kid, replay: cfg.Replay, authority: authority}
 	s.jwks = aauth.JWKS{Keys: append([]aauth.JWK{jwk}, cfg.PublishedKeys...)}
 	d := DefaultPaths()
 	s.paths = cfg.Paths
@@ -229,13 +240,15 @@ func New(cfg Config) (*Server, error) {
 			*f.dst = f.def
 		}
 	}
-	s.domain = cfg.Domain
-	if s.domain == "" {
-		u, err := url.Parse(cfg.Issuer)
-		if err != nil {
-			return nil, fmt.Errorf("agentprovider: Config.Issuer: %w", err)
-		}
-		s.domain = u.Hostname()
+	u, err := url.Parse(cfg.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("agentprovider: Config.Issuer: %w", err)
+	}
+	s.domain = strings.ToLower(u.Hostname())
+	if cfg.Domain != "" && cfg.Domain != s.domain {
+		// An agent token's sub names its provider's domain; one from
+		// another domain would let this provider speak for agents there.
+		return nil, fmt.Errorf("agentprovider: Config.Domain %q is not the issuer's host %q", cfg.Domain, s.domain)
 	}
 	if _, err := aauth.ParseAgentIdentifier("aauth:probe@" + s.domain); err != nil {
 		return nil, fmt.Errorf("agentprovider: agent identifier domain: %w", err)
@@ -333,10 +346,13 @@ func (s *Server) IssueAgentToken(ctx context.Context, p AgentTokenParams) (strin
 	if err := p.Key.Validate(); err != nil {
 		return "", nil, fmt.Errorf("agentprovider: agent key: %w", err)
 	}
-	if _, err := p.Key.PublicKey(); err != nil {
+	pub, err := p.Key.PublicKey()
+	if err != nil {
 		return "", nil, fmt.Errorf("agentprovider: agent key: %w", err)
 	}
-	if s.jwks.Keys[0].Thumbprint() == p.Key.Thumbprint() {
+	// Compared as decoded keys, so another encoding of the same key does
+	// not pass as a different one.
+	if sameKey(pub, s.cfg.Key.Public()) {
 		return "", nil, errors.New("agentprovider: an agent key must not be the provider's signing key")
 	}
 	ttl := firstPositive(p.TTL, s.cfg.TokenTTL, time.Hour)
@@ -381,11 +397,15 @@ type TokenResponse struct {
 	ExpiresIn  int64  `json:"expires_in"`
 }
 
-// signatureOptions require content-digest and content-type on bodies: an
-// issuance binds the public key the body carries (bootstrap §8.1).
+// signatureOptions require content-digest and content-type on bodies (an
+// issuance binds the public key the body carries, bootstrap §8.1) and
+// @authority naming this provider, so a request signed for another server
+// cannot be replayed here.
 func (s *Server) signatureOptions() aauth.RequestVerifyOptions {
 	now := s.now()
-	return aauth.RequestVerifyOptions{Window: s.cfg.SignatureWindow, RequireBodyCoverage: true, Now: func() time.Time { return now }}
+	return aauth.RequestVerifyOptions{
+		Window: s.cfg.SignatureWindow, RequireBodyCoverage: true, Now: func() time.Time { return now }, Authority: s.authority,
+	}
 }
 
 // serveIssue issues a token for the key an hwk-signed request presents:
@@ -400,11 +420,12 @@ func (s *Server) serveIssue(w http.ResponseWriter, r *http.Request) {
 		aauth.WriteSignatureFailure(w, err)
 		return
 	}
-	att, ok := s.attest(w, r, body, key)
-	if !ok {
+	// Limited before attestation, which may be costly or call out.
+	if !s.limit(w, r, "issue:"+key.Thumbprint()) {
 		return
 	}
-	if !s.limit(w, r, "issue:"+key.Thumbprint()) {
+	att, ok := s.attest(w, r, body, key)
+	if !ok {
 		return
 	}
 	reg, err := s.cfg.Registrar.AuthorizeIssue(r.Context(), r, &IssueRequest{Key: key, Body: body, Attestation: att})
@@ -447,6 +468,10 @@ func (s *Server) serveRefresh(w http.ResponseWriter, r *http.Request) {
 		switch fresh, err = s.replay.Remember(r.Context(), JKTURN(d.durable)+"|"+d.jti, d.exp); {
 		case errors.Is(err, ErrReplayCacheFull):
 			aauth.WriteProblem(w, http.StatusServiceUnavailable, aauth.ErrCodeServerError, "the replay cache is full; retry later")
+			return
+		case errors.Is(err, ErrReplayGroupFull):
+			w.Header().Set(aauth.HeaderRetryAfter, strconv.Itoa(int(s.maxNamingJWTLifetime()/time.Second)))
+			aauth.WriteProblem(w, http.StatusTooManyRequests, aauth.ErrCodeRateLimited, "too many recent refreshes for this key")
 			return
 		case err != nil:
 			s.serverError(w, r, err)
@@ -495,11 +520,17 @@ func (s *Server) serveSubagent(w http.ResponseWriter, r *http.Request) {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "the body must carry the sub-agent's jwk")
 		return
 	}
-	if _, err := body.JWK.PublicKey(); err != nil {
+	subPub, err := body.JWK.PublicKey()
+	if err != nil {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "jwk: "+err.Error())
 		return
 	}
-	if body.JWK.Thumbprint() == parent.Cnf.JWK.Thumbprint() {
+	parentPub, err := parent.Cnf.JWK.PublicKey()
+	if err != nil {
+		s.serverError(w, r, err) // verified above, so it decodes
+		return
+	}
+	if sameKey(subPub, parentPub) {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "a sub-agent holds its own key, never its parent's")
 		return
 	}
@@ -508,7 +539,7 @@ func (s *Server) serveSubagent(w http.ResponseWriter, r *http.Request) {
 	}
 	g, err := s.cfg.Registrar.AuthorizeSubagent(r.Context(), &SubagentRequest{Parent: parent, Key: *body.JWK, Discriminator: body.Discriminator})
 	if err != nil {
-		aauth.WriteProblem(w, http.StatusForbidden, aauth.PollErrDenied, err.Error())
+		s.deny(w, r, "sub-agent refused", err)
 		return
 	}
 	disc := body.Discriminator
@@ -586,7 +617,7 @@ func (s *Server) attest(w http.ResponseWriter, r *http.Request, body []byte, key
 	}
 	att, err := s.cfg.Attestation.VerifyAttestation(r.Context(), b.Attestation, key)
 	if err != nil {
-		aauth.WriteProblem(w, http.StatusForbidden, aauth.PollErrDenied, "attestation: "+err.Error())
+		s.deny(w, r, "attestation refused", err)
 		return nil, false
 	}
 	return att, true
@@ -595,7 +626,7 @@ func (s *Server) attest(w http.ResponseWriter, r *http.Request, body []byte, key
 // finish issues the token a Registrar authorized for key.
 func (s *Server) finish(w http.ResponseWriter, r *http.Request, reg *Registration, err error, key aauth.JWK) {
 	if err != nil {
-		aauth.WriteProblem(w, http.StatusForbidden, aauth.PollErrDenied, err.Error())
+		s.deny(w, r, "issuance refused", err)
 		return
 	}
 	tok, claims, err := s.IssueAgentToken(r.Context(), AgentTokenParams{Name: reg.Name, Key: key, PS: reg.PS, TTL: reg.TTL})
@@ -604,6 +635,14 @@ func (s *Server) finish(w http.ResponseWriter, r *http.Request, reg *Registratio
 		return
 	}
 	writeJSON(w, http.StatusOK, TokenResponse{AgentToken: tok, ExpiresIn: int64(claims.ExpiresAt.Sub(s.now()) / time.Second)})
+}
+
+// deny answers 403 denied with a generic detail and logs why: the
+// Registrar's and the attestation verifier's errors are the hosting
+// application's and may describe its records.
+func (s *Server) deny(w http.ResponseWriter, r *http.Request, what string, err error) {
+	s.logger().InfoContext(r.Context(), "agentprovider: "+what, "error", err)
+	aauth.WriteProblem(w, http.StatusForbidden, aauth.PollErrDenied, "the agent provider refused the request")
 }
 
 func (s *Server) serverError(w http.ResponseWriter, r *http.Request, err error) {
@@ -633,6 +672,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	// The status and headers are already sent; a body write error cannot
 	// change the response and there is no caller to report it to.
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// sameKey reports whether two public keys are the same key: by the keys'
+// own comparison, or by the thumbprints of their canonical JWKs.
+func sameKey(a, b crypto.PublicKey) bool {
+	if ak, ok := a.(interface{ Equal(crypto.PublicKey) bool }); ok && ak.Equal(b) {
+		return true
+	}
+	aj, aerr := aauth.NewJWK(a)
+	bj, berr := aauth.NewJWK(b)
+	return aerr == nil && berr == nil && aj.Thumbprint() == bj.Thumbprint()
 }
 
 func firstPositive(ds ...time.Duration) time.Duration {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -172,4 +173,44 @@ func TestVerifyServerRequestRequiresServerIdentifier(t *testing.T) {
 	if !errors.Is(err, ErrInvalidIdentifier) || !errors.Is(err, ErrBadSigKey) {
 		t.Fatalf("err = %v, want ErrInvalidIdentifier", err)
 	}
+}
+
+// A dwk that is not an AAuth metadata document name is refused before any
+// fetch, so it cannot steer discovery to another path on the id's origin.
+func TestVerifyServerRequestRejectsUnknownDWK(t *testing.T) {
+	s, signer := psSigner(t)
+	var fetched atomic.Int32
+	s.srv.Config.Handler = countRequests(s.srv.Config.Handler, &fetched)
+	for _, dwk := range []string{"../jwks.json", "aauth-person.json/../../jwks.json", "x", ""} {
+		req, err := http.NewRequest(http.MethodPost, "https://as.example/token", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		AttachSignatureKeyJWKSURI(req, signer.Issuer, dwk, signer.Kid)
+		if err := SignRequest(req, signer.Key, ""); err != nil {
+			t.Fatal(err)
+		}
+		_, err = VerifyServerRequest(context.Background(), req, VerifyServerOptions{InsecureSkipIdentifierCheck: true, Resolver: NewJWKSResolver(nil)})
+		if dwk != "" && !errors.Is(err, ErrUnknownDWK) {
+			t.Fatalf("dwk %q: err = %v, want ErrUnknownDWK", dwk, err)
+		}
+		if e, ok := SignatureErrorFor(err); !ok || (e.Code != SigErrInvalidKey && e.Code != SigErrInvalidSignature) {
+			t.Fatalf("dwk %q: classified as %+v (%v)", dwk, e, ok)
+		}
+	}
+	if n := fetched.Load(); n != 0 {
+		t.Fatalf("%d fetches for an unknown dwk", n)
+	}
+	bad := signer
+	bad.DWK = "../jwks.json"
+	if err := bad.SignRequest(httptest.NewRequest(http.MethodPost, "https://as.example/token", nil)); !errors.Is(err, ErrUnknownDWK) {
+		t.Fatalf("ServerSigner with unknown DWK: err = %v", err)
+	}
+}
+
+func countRequests(next http.Handler, n *atomic.Int32) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.Add(1)
+		next.ServeHTTP(w, r)
+	})
 }

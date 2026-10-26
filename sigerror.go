@@ -238,6 +238,8 @@ func SignatureErrorFor(err error) (e SignatureError, ok bool) {
 		return SignatureError{}, false
 	case errors.As(err, &mce):
 		return SignatureError{Code: SigErrInvalidInput, RequiredInput: mce.Required}, true
+	case errors.Is(err, ErrBodyTooLarge):
+		return SignatureError{Code: SigErrInvalidRequest}, true
 	case errors.Is(err, ErrClockSkew):
 		return SignatureError{Code: SigErrClockSkew}, true
 	case errors.Is(err, ErrUnsupportedScheme):
@@ -315,14 +317,56 @@ func WriteSignatureError(w http.ResponseWriter, e SignatureError, detail string)
 // the 401 Signature-Error response. An error that is not classified (such
 // as a failure to reach an issuer's metadata) is reported as
 // invalid_signature, since the request could not be authenticated.
+//
+// The problem detail is a fixed description of the Signature-Error code,
+// never err's text: errors from discovery can carry resolver, dial, or TLS
+// messages about hosts the request named, which must not reach an
+// unauthenticated caller. Only the missing components (invalid_input) and
+// the rejected scheme (unsupported_scheme) are reported as such. Log err
+// for diagnosis.
 func WriteSignatureFailure(w http.ResponseWriter, err error) {
 	e, ok := SignatureErrorFor(err)
 	if !ok {
-		e = SignatureError{Code: SigErrInvalidSignature}
+		WriteSignatureError(w, SignatureError{Code: SigErrInvalidSignature}, "the request could not be authenticated")
+		return
 	}
-	detail := ""
-	if err != nil {
-		detail = err.Error()
+	WriteSignatureError(w, e, signatureFailureDetail(err, e))
+}
+
+// signatureFailureDetail is the problem detail for a classified failure:
+// text this package controls, not err's message.
+func signatureFailureDetail(err error, e SignatureError) string {
+	var mce *MissingComponentsError
+	var use *UnsupportedSchemeError
+	switch {
+	case errors.As(err, &mce):
+		return "the signature does not cover " + strings.Join(mce.Missing, ", ")
+	case errors.As(err, &use):
+		return fmt.Sprintf("Signature-Key scheme %q is not accepted here (accepted: %s)", use.Scheme, strings.Join(use.Accepted, ", "))
+	case errors.Is(err, ErrBodyTooLarge):
+		return "the request body is too large to verify"
 	}
-	WriteSignatureError(w, e, detail)
+	if d, ok := signatureErrorDetails[e.Code]; ok {
+		return d
+	}
+	return "the request could not be authenticated"
+}
+
+// signatureErrorDetails describes each Signature-Error code for the
+// problem detail.
+var signatureErrorDetails = map[string]string{
+	SigErrUnsupportedAlgorithm: "the signing algorithm is not supported",
+	SigErrUnsupportedScheme:    "the Signature-Key scheme is not supported",
+	SigErrCacheMiss:            "the cached key identifier is not known",
+	SigErrInvalidSignature:     "the request signature is missing, malformed, stale, or does not verify",
+	SigErrInvalidInput:         "the signature does not cover the required components",
+	SigErrInvalidRequest:       "the request is malformed",
+	SigErrInvalidKey:           "the signing key is invalid or not accepted here",
+	SigErrUnknownKey:           "the signer publishes no key with this kid",
+	SigErrIssuerMissing:        "the signer's metadata has no issuer",
+	SigErrIssuerMismatch:       "the signer's metadata names a different issuer",
+	SigErrInvalidJWT:           "the token is malformed or does not verify",
+	SigErrExpiredJWT:           "the token has expired",
+	SigErrRevokedJWT:           "the token has been revoked",
+	SigErrClockSkew:            "the signature or token is dated ahead of the server's clock",
 }

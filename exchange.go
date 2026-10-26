@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -86,7 +87,7 @@ func (c *PSClient) RequestAuthToken(ctx context.Context, treq AuthTokenRequest) 
 		return nil, tokenEndpointError("auth token endpoint", final.StatusCode, readErrorBody(final))
 	}
 	var tr AuthTokenResponse
-	if err := json.NewDecoder(final.Body).Decode(&tr); err != nil {
+	if err := json.NewDecoder(io.LimitReader(final.Body, maxDocumentBytes)).Decode(&tr); err != nil {
 		return nil, err
 	}
 	if tr.AuthToken == "" {

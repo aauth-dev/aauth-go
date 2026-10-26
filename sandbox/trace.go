@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync"
@@ -83,6 +84,10 @@ func (t *Trace) record(role string, next http.Handler) http.Handler {
 		if r.Body != nil {
 			b, err := io.ReadAll(r.Body)
 			if err != nil {
+				if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+					writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+					return
+				}
 				http.Error(w, "reading request body", http.StatusBadRequest)
 				return
 			}

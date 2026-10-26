@@ -24,6 +24,7 @@ type documents struct {
 	key      crypto.Signer
 	jwk      aauth.JWK
 	verify   aauth.TokenVerifyOptions
+	ps       string // the person server whose person tokens it accepts
 }
 
 func newDocumentsResource(t *testing.T, w *world, audience string) *documents {
@@ -36,7 +37,7 @@ func newDocumentsResource(t *testing.T, w *world, audience string) *documents {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &documents{audience: audience, key: key, jwk: jwk, verify: w.verify}
+	d := &documents{audience: audience, key: key, jwk: jwk, verify: w.verify, ps: w.psURL}
 	d.url = serve(t, d)
 	return d
 }
@@ -66,8 +67,9 @@ func (d *documents) authorizationEndpoint() http.Handler {
 	// then asks Decide. The resource token it returns names the server
 	// that decides: the agent's PS, or this resource's access server.
 	return &aauth.AuthorizationHandler{
-		Resource: d.url,
-		Verify:   d.verify, // the PS's keys, discovered from its metadata
+		Resource:    d.url,
+		Verify:      d.verify,                 // the PS's keys, discovered from its metadata
+		TrustIssuer: aauth.TrustIssuers(d.ps), // the person servers whose person tokens it accepts
 		Decide: func(_ context.Context, _ *http.Request, person *aauth.PersonClaims, ar aauth.AuthorizeRequest) (aauth.AuthorizeDecision, error) {
 			if ar.Scope != "documents:read" {
 				return aauth.AuthorizeDecision{}, &aauth.ProblemError{Status: http.StatusBadRequest, Code: aauth.ErrCodeInvalidScope}

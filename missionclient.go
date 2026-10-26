@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 )
@@ -57,7 +58,7 @@ func (c *PSClient) ProposeMission(ctx context.Context, p MissionProposal) (*Appr
 		return nil, endpointError("mission endpoint", res, readErrorBody(res))
 	}
 	var ma MissionApproval
-	if err := json.NewDecoder(res.Body).Decode(&ma); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxDocumentBytes)).Decode(&ma); err != nil {
 		return nil, fmt.Errorf("aauth: mission endpoint: %w", err)
 	}
 	m, blob, err := ma.Decode()
@@ -94,7 +95,7 @@ func (c *PSClient) UpdateMission(ctx context.Context, missionS256, description s
 	}
 	defer closeBody(res.Body)
 	var ur MissionUpdateResponse
-	if err := json.NewDecoder(res.Body).Decode(&ur); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxDocumentBytes)).Decode(&ur); err != nil {
 		return nil, fmt.Errorf("aauth: mission update: %w", err)
 	}
 	return &ur, nil

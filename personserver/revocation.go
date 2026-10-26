@@ -61,7 +61,7 @@ func (s *Server) serveRevocation(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := s.now()
 	caller, err := aauth.VerifyServerRequest(ctx, r, aauth.VerifyServerOptions{
-		Resolver:                    s.servers(),
+		Resolver:                    s.servers,
 		Signature:                   s.signatureOptions(now),
 		InsecureSkipIdentifierCheck: s.cfg.InsecureSkipIdentifierCheck,
 	})
@@ -92,6 +92,27 @@ func (s *Server) serveRevocation(w http.ResponseWriter, r *http.Request) {
 	if exp.After(now.Add(maxRevocationLifetime)) {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "exp is beyond the longest token lifetime this person server accepts")
 		return
+	}
+	// Bound what one issuer can store; entries leave as they expire.
+	s.maybePrune(ctx)
+	if ceiling := limit(s.cfg.MaxRevocationsPerIssuer, DefaultMaxRevocationsPerIssuer); ceiling >= 0 {
+		n, err := s.cfg.Store.CountRevocations(ctx, caller.ID)
+		if err == nil && n >= ceiling {
+			// Revoking a token already revoked is still answered.
+			var again bool
+			if again, err = s.cfg.Store.IsRevoked(ctx, caller.ID, req.JTI); err == nil && again {
+				n = 0
+			}
+		}
+		if err != nil {
+			s.serverError(w, r, "count revocations", err)
+			return
+		}
+		if n >= ceiling {
+			w.Header().Set(aauth.HeaderRetryAfter, "60")
+			aauth.WriteProblem(w, http.StatusTooManyRequests, aauth.ErrCodeRateLimited, "too many revocations recorded for this issuer")
+			return
+		}
 	}
 	if err := s.cfg.Store.Revoke(ctx, caller.ID, req.JTI, exp); err != nil {
 		s.serverError(w, r, "record revocation", err)
@@ -126,14 +147,6 @@ func (s *Server) serveRevocation(w http.ResponseWriter, r *http.Request) {
 	}
 	// A PS does not report downstream outcomes to its caller (§11.12.3).
 	w.WriteHeader(http.StatusOK)
-}
-
-// servers resolves server keys for requests signed under jwks_uri.
-func (s *Server) servers() aauth.KeyResolver {
-	if s.cfg.ServerResolver != nil {
-		return s.cfg.ServerResolver
-	}
-	return aauth.NewJWKSResolver(s.cfg.HTTPClient)
 }
 
 // cascade revokes a set of tokens the PS issued, once each, collecting

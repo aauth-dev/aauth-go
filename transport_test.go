@@ -530,3 +530,70 @@ func TestTransportSubAgentParentMediated(t *testing.T) {
 		t.Fatal("sub-agent obtained tokens directly")
 	}
 }
+
+// A resource requiring components beyond the base set answers
+// invalid_input with required_input; the transport covers them, resends
+// once, and covers them from the start on later requests.
+func TestTransportCoversRequiredInput(t *testing.T) {
+	agent := testAgent(t)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		hits.Add(1)
+		opts := VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}}
+		opts.Signature.RequiredComponents = []string{"x-tenant", "@query"}
+		claims, err := VerifyAndExtractAgent(req.Context(), req, opts)
+		if err != nil {
+			WriteSignatureFailure(rw, err)
+			return
+		}
+		b, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		writeBody(t, rw, "%s %s %s", claims.Subject, req.Header.Get("X-Tenant"), b)
+	}))
+	defer srv.Close()
+	hc := &http.Client{Transport: NewTransport(agent, nil)}
+	post := func(withTenant bool) (*http.Response, string) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/jobs?run=1", strings.NewReader(`{"job":1}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if withTenant {
+			req.Header.Set("X-Tenant", "t1")
+		}
+		res, err := hc.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer closeBody(res.Body)
+		b, err := io.ReadAll(res.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res, string(b)
+	}
+
+	res, body := post(true)
+	if res.StatusCode != http.StatusOK || body != agent.ID.String()+` t1 {"job":1}` {
+		t.Fatalf("status %d body %q", res.StatusCode, body)
+	}
+	if n := hits.Swap(0); n != 2 {
+		t.Fatalf("first request: %d attempts, want 2", n)
+	}
+	// Later requests cover the components from the start.
+	if res, body = post(true); res.StatusCode != http.StatusOK {
+		t.Fatalf("second request: status %d body %q", res.StatusCode, body)
+	}
+	if n := hits.Swap(0); n != 1 {
+		t.Fatalf("second request: %d attempts, want 1", n)
+	}
+	// A request that cannot cover them gets the resource's 401.
+	res, _ = post(false)
+	se, err := SignatureErrorFromResponse(res)
+	if res.StatusCode != http.StatusUnauthorized || err != nil || se == nil || se.Code != SigErrInvalidInput {
+		t.Fatalf("without the header: status %d, %+v, %v", res.StatusCode, se, err)
+	}
+}

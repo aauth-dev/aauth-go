@@ -67,9 +67,31 @@ type FederationResponse struct {
 }
 
 // ClaimsProvider supplies identity claims an access server requires about
-// the person (draft -11 §9.2). It is never asked for sub. Nil answers
-// with no claims; the AS ignores what it does not get.
-type ClaimsProvider func(ctx context.Context, person string, required []string) (map[string]any, error)
+// the person (draft -11 §9.2), deciding what to release to that recipient:
+// r names the access server asking, the resource, the scope, and the
+// mission, so a host can apply per-recipient release policy and answer
+// only part of what was asked. It is never asked for sub, and sub is
+// never sent. Nil answers with no claims; the AS ignores what it does not
+// get.
+type ClaimsProvider func(ctx context.Context, r *ClaimsRequest) (map[string]any, error)
+
+// ClaimsRequest is an access server's requirement=claims (draft -11 §9.2)
+// with what the PS knows of the request it is for.
+type ClaimsRequest struct {
+	// Person is the person the claims are about.
+	Person string
+	// Required are the claims the access server asked for, without sub.
+	Required []string
+	// AccessServer is the access server that will receive the claims.
+	AccessServer string
+	// Resource is the resource the token is for, Scope the scope the
+	// person consented to, and MissionS256 the mission, if any.
+	Resource    string
+	Scope       string
+	MissionS256 string
+	// Agent is the agent the token is for.
+	Agent AgentRef
+}
 
 // FederationState is an access server's pending request the PS is
 // following on the agent's behalf (draft -11 §9.1.2).
@@ -80,15 +102,20 @@ type FederationState struct {
 	Status       string            `json:"status,omitempty"`
 	Question     *Question         `json:"question,omitempty"`
 	RetryAfter   int               `json:"retry_after,omitempty"`
-	// GrantedScope is the scope the PS consented to; the AS's token may
-	// not be broader.
+	// PolledAt is when the PS last heard from the access server; it polls
+	// again only after RetryAfter seconds (at least one).
+	PolledAt time.Time `json:"polled_at,omitzero"`
+	// GrantedScope is the scope the person consented to: the Grant's
+	// Scope, or the resource token's scope when the Grant left it empty.
+	// The AS's token may not be broader, and while the PS follows the AS an
+	// updated_request may not ask for more (§7.5.2.2).
 	GrantedScope string `json:"granted_scope,omitempty"`
 }
 
 // applyRequirement passes the AS's requirement through to the agent's
 // pending request: its interaction URL and code, approval, or its
 // clarification question.
-func (f *FederationState) applyRequirement(p *Pending) {
+func (f *FederationState) applyRequirement(p *Pending, now time.Time) {
 	p.RetryAfter = max(f.RetryAfter, 1)
 	switch f.Requirement.Requirement {
 	case aauth.RequirementInteraction:
@@ -96,7 +123,7 @@ func (f *FederationState) applyRequirement(p *Pending) {
 	case aauth.RequirementClarification:
 		p.Requirement = aauth.RequirementApproval
 		if f.Question != nil && p.Question == nil {
-			p.Question, p.QuestionAt, p.QuestionFromAS = f.Question, time.Now(), true
+			p.Question, p.QuestionAt, p.QuestionFromAS = f.Question, now, true
 		}
 	default:
 		p.Requirement = aauth.RequirementApproval
@@ -107,6 +134,12 @@ func (f *FederationState) applyRequirement(p *Pending) {
 }
 
 func (s *Server) federates() bool { return s.cfg.Federator != nil }
+
+// due reports whether the access server's Retry-After has passed since
+// the PS last polled it.
+func (f *FederationState) due(now time.Time) bool {
+	return !now.Before(f.PolledAt.Add(time.Duration(max(f.RetryAfter, 1)) * time.Second))
+}
 
 // maxClaimsRounds bounds consecutive claims requirements answered in one
 // step.
@@ -128,20 +161,29 @@ func (s *Server) federate(ctx context.Context, j *authTokenJob, g Grant) (*Resul
 		AccessServer: j.as, ResourceToken: j.req.ResourceToken, AgentToken: j.agentToken,
 		PresentedToken: j.req.PresentedToken, SubagentToken: j.req.SubagentToken, UpstreamToken: j.req.UpstreamToken,
 	})
-	return s.federationOutcome(ctx, j, g, resp, err)
+	return s.federationOutcome(ctx, j, consentedScope(g, j.rc), resp, err)
+}
+
+// consentedScope is the scope a person consented to with g for the
+// resource token rc: g.Scope, or rc's scope when g leaves it empty.
+func consentedScope(g Grant, rc *aauth.ResourceClaims) string {
+	if g.Scope != "" {
+		return g.Scope
+	}
+	return rc.Scope
 }
 
 // federationOutcome acts on an AS response: deliver a granted token,
 // answer claims, keep following a pending request, or relay an error.
-func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, g Grant, resp *FederationResponse, err error) (*Result, *FederationState, error) {
+// consented is the scope the person consented to.
+func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, consented string, resp *FederationResponse, err error) (*Result, *FederationState, error) {
 	for range maxClaimsRounds {
 		if err != nil {
-			s.logger().WarnContext(ctx, "personserver: federation", "access_server", j.as, "error", err)
-			return asUnreachable(err), nil, nil
+			return s.asUnreachable(ctx, j.as, err), nil, nil
 		}
 		switch {
 		case resp.AuthToken != "":
-			return s.deliverFederated(ctx, j, g, resp)
+			return s.deliverFederated(ctx, j, consented, resp)
 		case resp.ErrorCode != "":
 			status := resp.ErrorStatus
 			if status < 400 {
@@ -149,10 +191,10 @@ func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, g Grant
 			}
 			return problemResult(status, resp.ErrorCode, resp.ErrorDetail), nil, nil
 		case resp.PendingURL == "":
-			return asUnreachable(errors.New("the access server answered neither a token, a pending URL, nor an error")), nil, nil
+			return s.asUnreachable(ctx, j.as, errors.New("the access server answered neither a token, a pending URL, nor an error")), nil, nil
 		case resp.Requirement.Requirement == aauth.RequirementClaims:
 			// The PS answers claims itself (§9.2), then looks again.
-			claims, cerr := s.claimsFor(ctx, j.person, resp.RequiredClaims)
+			claims, cerr := s.claimsFor(ctx, j, consented, resp.RequiredClaims)
 			if cerr != nil {
 				return nil, nil, cerr
 			}
@@ -163,14 +205,16 @@ func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, g Grant
 		}
 		return nil, &FederationState{
 			AccessServer: j.as, PendingURL: resp.PendingURL, Requirement: resp.Requirement,
-			Status: resp.Status, Question: resp.Question, RetryAfter: resp.RetryAfter, GrantedScope: g.Scope,
+			Status: resp.Status, Question: resp.Question, RetryAfter: resp.RetryAfter, GrantedScope: consented,
+			PolledAt: s.now(),
 		}, nil
 	}
-	return asUnreachable(errors.New("the access server kept requiring claims")), nil, nil
+	return s.asUnreachable(ctx, j.as, errors.New("the access server kept requiring claims")), nil, nil
 }
 
-// claimsFor asks the ClaimsProvider for the required claims, never sub.
-func (s *Server) claimsFor(ctx context.Context, person string, required []string) (map[string]any, error) {
+// claimsFor asks the ClaimsProvider for the claims the access server
+// requires for job j, never sub.
+func (s *Server) claimsFor(ctx context.Context, j *authTokenJob, consented string, required []string) (map[string]any, error) {
 	out := map[string]any{}
 	if s.cfg.ClaimsProvider == nil {
 		return out, nil
@@ -181,7 +225,10 @@ func (s *Server) claimsFor(ctx context.Context, person string, required []string
 			names = append(names, n)
 		}
 	}
-	claims, err := s.cfg.ClaimsProvider(ctx, person, names)
+	claims, err := s.cfg.ClaimsProvider(ctx, &ClaimsRequest{
+		Person: j.person, Required: names, AccessServer: j.as, Resource: j.rc.Issuer, Scope: consented,
+		MissionS256: j.rc.MissionS256, Agent: agentRef(j.agent),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("personserver: claims provider: %w", err)
 	}
@@ -195,15 +242,14 @@ func (s *Server) claimsFor(ctx context.Context, person string, required []string
 
 // deliverFederated verifies an auth token the access server issued before
 // returning it to the agent (draft -11 §9.1.3), and records it.
-func (s *Server) deliverFederated(ctx context.Context, j *authTokenJob, g Grant, resp *FederationResponse) (*Result, *FederationState, error) {
+func (s *Server) deliverFederated(ctx context.Context, j *authTokenJob, consented string, resp *FederationResponse) (*Result, *FederationState, error) {
 	now := s.now()
 	ac, err := aauth.VerifyAuthToken(ctx, resp.AuthToken, j.rc.Issuer, aauth.AuthTokenVerifyOptions{TokenVerifyOptions: s.tokenOptions(now)})
 	if err == nil {
-		err = s.checkDelivered(j, g, ac)
+		err = s.checkDelivered(j, consented, ac)
 	}
 	if err != nil {
-		s.logger().WarnContext(ctx, "personserver: federated auth token failed delivery checks", "access_server", j.as, "error", err)
-		return asUnreachable(err), nil, nil
+		return s.asUnreachable(ctx, j.as, fmt.Errorf("the federated auth token failed delivery checks: %w", err)), nil, nil
 	}
 	if err := s.recordAuthToken(ctx, j, ac); err != nil {
 		return s.failure(err)
@@ -215,8 +261,9 @@ func (s *Server) deliverFederated(ctx context.Context, j *authTokenJob, g Grant,
 }
 
 // checkDelivered applies the delivery checks of §9.1.3 steps 2–7 to a
-// verified auth token (step 1, its signature and aud, already passed).
-func (s *Server) checkDelivered(j *authTokenJob, g Grant, ac *aauth.AuthClaims) error {
+// verified auth token (step 1, its signature and aud, already passed). Its
+// scope must be within both the request's and the consented scope.
+func (s *Server) checkDelivered(j *authTokenJob, consented string, ac *aauth.AuthClaims) error {
 	switch {
 	case ac.Issuer != j.as:
 		return fmt.Errorf("iss %q is not the access server %q", ac.Issuer, j.as)
@@ -228,7 +275,7 @@ func (s *Server) checkDelivered(j *authTokenJob, g Grant, ac *aauth.AuthClaims) 
 		return errors.New("cnf.jwk is not the agent's key")
 	case ac.Subject != j.rc.Subject || ac.Subject != s.subjects.derive(j.person, j.rc.Issuer):
 		return errors.New("sub is not the person's directed identifier at the resource")
-	case !scopeWithin(ac.Scope, j.rc.Scope) || (g.Scope != "" && !scopeWithin(ac.Scope, g.Scope)):
+	case !scopeWithin(ac.Scope, j.rc.Scope) || !scopeWithin(ac.Scope, consented):
 		return fmt.Errorf("scope %q is broader than requested", ac.Scope)
 	case ac.ExpiresAt.After(presentedExp(j.presented)):
 		return errors.New("exp is later than the presented token's")
@@ -252,8 +299,7 @@ func (s *Server) pollFederation(ctx context.Context, p *Pending) *Pending {
 			res = r
 		}
 	} else {
-		g := Grant{Scope: fed.GrantedScope}
-		if res, next, err = s.federationOutcome(ctx, j, g, resp, perr); err != nil {
+		if res, next, err = s.federationOutcome(ctx, j, fed.GrantedScope, resp, perr); err != nil {
 			res = errorResult(err)
 		}
 	}
@@ -266,7 +312,7 @@ func (s *Server) pollFederation(ctx context.Context, p *Pending) *Pending {
 			return nil
 		}
 		p.Federation = next
-		next.applyRequirement(p)
+		next.applyRequirement(p, s.now())
 		return nil
 	})
 	if err != nil {
@@ -304,14 +350,23 @@ func (s *Server) forwardClarification(ctx context.Context, p *Pending, post *aau
 		return nil
 	}
 	if err := s.cfg.Federator.Answer(ctx, p.Federation.PendingURL, post); err != nil {
-		return &aauth.TokenError{Code: aauth.TokenErrASUnreachable, Err: err}
+		s.logger().WarnContext(ctx, "personserver: federation answer", "access_server", p.Federation.AccessServer, "error", err)
+		return &aauth.TokenError{Code: aauth.TokenErrASUnreachable, Err: errASUnreachable}
 	}
 	return nil
 }
 
-// asUnreachable is the as_unreachable response (§9.1.3, §11.9.3).
-func asUnreachable(err error) *Result {
-	return errorResult(&aauth.TokenError{Code: aauth.TokenErrASUnreachable, Err: err})
+// errASUnreachable is the detail the agent sees for as_unreachable; the
+// cause, which can carry the access server's response or internal
+// addresses, is logged instead.
+var errASUnreachable = errors.New("the access server could not be reached or gave an unusable response")
+
+// asUnreachable logs why the PS could not use the access server's answer
+// and returns the as_unreachable response (§9.1.3, §11.9.3) with a generic
+// detail.
+func (s *Server) asUnreachable(ctx context.Context, as string, err error) *Result {
+	s.logger().WarnContext(ctx, "personserver: federation", "access_server", as, "error", err)
+	return errorResult(&aauth.TokenError{Code: aauth.TokenErrASUnreachable, Err: errASUnreachable})
 }
 
 // presentedExp is a verified presented token's exp.

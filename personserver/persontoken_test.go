@@ -206,16 +206,35 @@ func TestPersonTokenDeferredInteraction(t *testing.T) {
 	c.OnRequirement = func(r aauth.Requirement) {
 		req = r
 		go func() {
-			p, err := w.ps.ConsumeCode(ctx, strings.ToLower(r.Code))
+			// Looking the code up (a link preview, the page's first
+			// render) shows the request without consuming the code.
+			for range 2 {
+				p, err := w.ps.LookupCode(ctx, strings.ToLower(r.Code), "browser")
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if p.State != StateInteracting || p.Kind != KindPersonToken || p.CodeConsumed {
+					t.Errorf("looked up %+v", p)
+				}
+			}
+			p, err := w.ps.ConsumeCode(ctx, r.Code, "browser", "bob")
 			if err != nil {
 				t.Error(err)
 				return
 			}
-			if p.State != StateInteracting || p.Kind != KindPersonToken {
+			if !p.CodeConsumed || p.CodeConsumedBy != "bob" {
 				t.Errorf("consumed %+v", p)
 			}
-			if _, err := w.ps.ConsumeCode(ctx, r.Code); !errors.Is(err, ErrInvalidCode) {
+			if _, err := w.ps.ConsumeCode(ctx, r.Code, "browser", "bob"); !errors.Is(err, ErrInvalidCode) {
 				t.Errorf("second use: %v", err)
+			}
+			if _, err := w.ps.LookupCode(ctx, r.Code, "browser"); !errors.Is(err, ErrInvalidCode) {
+				t.Errorf("lookup after use: %v", err)
+			}
+			// The person who consumed the code is the one who may approve.
+			if err := w.ps.Approve(ctx, p.ID, Grant{Person: "mallory"}); !errors.Is(err, ErrWrongPerson) {
+				t.Errorf("approval for another person: %v", err)
 			}
 			if err := w.ps.Approve(ctx, p.ID, Grant{Person: "bob"}); err != nil {
 				t.Error(err)
@@ -237,11 +256,14 @@ func TestPersonTokenDeferredInteraction(t *testing.T) {
 	if _, err := aauth.VerifyPersonToken(ctx, pr.PersonToken, w.resURL, w.psOpts()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.ps.ConsumeCode(ctx, "not-a-code"); !errors.Is(err, ErrInvalidCode) {
+	if _, err := w.ps.LookupCode(ctx, "not-a-code", "browser"); !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("garbage code: %v", err)
 	}
-	if _, err := w.ps.ConsumeCode(ctx, "ABCD-EFGH"); !errors.Is(err, ErrInvalidCode) {
+	if _, err := w.ps.ConsumeCode(ctx, "ABCD-EFGH", "browser", "bob"); !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("unknown code: %v", err)
+	}
+	if _, err := w.ps.LookupCode(ctx, "ABCD-EFGH", ""); !errors.Is(err, ErrClientRequired) {
+		t.Fatalf("no client key: %v", err)
 	}
 }
 

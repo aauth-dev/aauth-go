@@ -114,6 +114,7 @@ func newWorld(t *testing.T, hook func(*Config)) *world {
 			}
 			return w.clock
 		},
+		AllowCallChaining:           true,
 		InsecureSkipIdentifierCheck: true,
 	}
 	if hook != nil {

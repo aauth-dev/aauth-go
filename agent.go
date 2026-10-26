@@ -19,8 +19,10 @@ type Agent struct {
 	// ID is the agent identifier (the token's sub), stable across rotations.
 	ID AgentIdentifier
 	// Issuer is the agent provider URL. For a self-hosted agent this is a
-	// domain the operator controls, publishing /.well-known/aauth-agent.json.
-	// Empty for purely local deployments verified via SelfSignedResolver.
+	// domain the operator controls, publishing /.well-known/aauth-agent.json;
+	// its host must be ID.Domain (a loopback host may issue any domain, for
+	// local development). Empty for purely local deployments verified via
+	// SelfSignedResolver.
 	Issuer string
 	// PS is the agent's Person Server URL (optional ps claim).
 	PS string
@@ -58,6 +60,13 @@ func NewAgent(id AgentIdentifier, opts ...AgentOption) (*Agent, error) {
 	}
 	if _, err := AlgForPublicKey(a.Key.Public()); err != nil {
 		return nil, err
+	}
+	if a.tokenSource == nil {
+		// Verifiers refuse a self-issued token whose sub is not in the
+		// issuer's domain.
+		if err := checkAgentDomain(a.ID, a.Issuer, false); err != nil {
+			return nil, fmt.Errorf("aauth: agent %s cannot be issued by %s: %w", a.ID, a.Issuer, err)
+		}
 	}
 	return a, nil
 }

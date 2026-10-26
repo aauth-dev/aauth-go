@@ -6,4 +6,4 @@ What each release lets you build. For the full list of changes, see the
 
 | Date | Announcement |
 |---|---|
-| 2026-10-20 | [aauth-go v0.3.0: agents with their own identity, a person to ask, and a way to pay](v0.3.0.md) |
+| 2026-10-26 | [aauth-go v0.3.0: agents with their own identity, a person to ask, and a way to pay](v0.3.0.md) |

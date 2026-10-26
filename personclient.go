@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -121,7 +122,7 @@ func (c *PSClient) RequestPersonToken(ctx context.Context, req PersonTokenReques
 		return nil, tokenEndpointError("person token endpoint", res.StatusCode, readErrorBody(res))
 	}
 	var pr PersonTokenResponse
-	if err := json.NewDecoder(res.Body).Decode(&pr); err != nil {
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxDocumentBytes)).Decode(&pr); err != nil {
 		return nil, fmt.Errorf("aauth: person token endpoint: %w", err)
 	}
 	if pr.PersonToken == "" {

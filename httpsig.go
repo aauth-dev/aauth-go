@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -32,6 +34,9 @@ import (
 // When the request carries an opaque access token (`Authorization: AAuth …`,
 // §6.3), the authorization header is additionally covered — binding the
 // token to the signature so it can't be replayed as a bearer credential.
+// [SignRequest] also covers @query when the URL has a query, so the query
+// cannot be changed in transit; verifiers do not require it unless asked
+// to (RequestVerifyOptions.RequiredComponents).
 func coveredComponents(hasBody, hasContentType, hasAAuthAccess bool) []string {
 	base := []string{"@method", "@authority", "@path", "signature-key"}
 	if hasAAuthAccess {
@@ -203,7 +208,9 @@ func ParseSignatureKey(req *http.Request) (string, error) {
 
 // SignRequest signs req per the AAuth profile: sets Content-Digest when a
 // body is present, then Signature-Input and Signature under the default
-// label, with created set to the current time. The Signature-Key header
+// label, with created set to the current time. It covers the AAuth
+// components (see the profile above), plus @query when the URL has a
+// query. The Signature-Key header
 // MUST already be attached (it is a covered component). key may be any
 // supported crypto.Signer (see [GenerateKey]); the algorithm is determined
 // by the key and never sent on the wire (draft -11 §11.3.3.2).
@@ -212,6 +219,14 @@ func ParseSignatureKey(req *http.Request) (string, error) {
 // keyid parameter, since Signature-Key identifies the key. A non-empty value
 // is emitted as given (it MUST then identify the same key).
 func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
+	return SignRequestCovering(req, key, keyid, nil)
+}
+
+// SignRequestCovering is [SignRequest], covering the extra components as
+// well: for example a resource's additional_signature_components, or the
+// required_input of an invalid_input Signature-Error (draft -11 §11.3.3.1).
+// A component already covered is not repeated.
+func SignRequestCovering(req *http.Request, key crypto.Signer, keyid string, extra []string) error {
 	if req.Header.Get(HeaderSignatureKey) == "" {
 		return ErrMissingSigKey
 	}
@@ -239,8 +254,12 @@ func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
 	if keyid != "" {
 		cfg = cfg.SetKeyID(keyid)
 	}
-	fields := httpsign.Headers(coveredComponents(hasBody, req.Header.Get("Content-Type") != "", hasAAuthAuthorization(req))...)
-	signer, err := newHTTPSigner(key, cfg, fields)
+	components := coveredComponents(hasBody, req.Header.Get("Content-Type") != "", hasAAuthAuthorization(req))
+	if req.URL != nil && req.URL.RawQuery != "" {
+		components = append(components, "@query")
+	}
+	components = dedupe(append(components, extra...))
+	signer, err := newHTTPSigner(key, cfg, httpsign.Headers(components...))
 	if err != nil {
 		return err
 	}
@@ -316,6 +335,37 @@ type RequestVerifyOptions struct {
 	RequireBodyCoverage bool
 	// Now returns the verifier's current time; nil means time.Now.
 	Now func() time.Time
+	// Authority is the verifier's own host, with a port only when it is not
+	// the scheme's default, as the signer covers it in @authority. When set,
+	// a signature whose @authority names another host is refused
+	// ([ErrWrongAuthority]), so a request signed for one server cannot be
+	// replayed to another. Servers set it from their identifier with
+	// [AuthorityOf].
+	Authority string
+	// MaxBodySize bounds how much of a request body verification reads to
+	// check its Content-Digest. A larger body is refused with
+	// [ErrBodyTooLarge] before it is read in full. Zero means
+	// DefaultMaxVerifyBodyBytes; a negative value means no limit.
+	MaxBodySize int64
+}
+
+// DefaultMaxVerifyBodyBytes is the default [RequestVerifyOptions.MaxBodySize]
+// (4 MiB, the most [SignRequest] buffers for a body of unknown length).
+const DefaultMaxVerifyBodyBytes = MaxSignedStreamBytes
+
+// ErrBodyTooLarge means a signed request body exceeds
+// [RequestVerifyOptions.MaxBodySize]. It is classified as the
+// Signature-Error invalid_request.
+var ErrBodyTooLarge = errors.New("aauth: request body too large to verify")
+
+func (o RequestVerifyOptions) maxBodySize() int64 {
+	switch {
+	case o.MaxBodySize > 0:
+		return o.MaxBodySize
+	case o.MaxBodySize < 0:
+		return 0 // httpsign: no limit
+	}
+	return DefaultMaxVerifyBodyBytes
 }
 
 func (o RequestVerifyOptions) now() time.Time {
@@ -334,7 +384,8 @@ func (o RequestVerifyOptions) window() time.Duration {
 
 // signatureInput is the parsed Signature-Input member for one label.
 type signatureInput struct {
-	components []string
+	components []string // covered component names, with or without parameters
+	plain      []string // covered components that carry no parameters
 	created    *int64
 	expires    *int64
 }
@@ -365,6 +416,18 @@ func parseSignatureInput(req *http.Request, label string) (signatureInput, error
 			return si, fmt.Errorf("%w: covered component is not a string", ErrSignatureInvalid)
 		}
 		si.components = append(si.components, name)
+		if it.Params == nil || len(it.Params.Names()) == 0 {
+			si.plain = append(si.plain, name)
+			continue
+		}
+		// AAuth never covers trailers (tr) or the request of a response
+		// (req). Either would make verification read the whole body
+		// before checking the signature, so they are refused here.
+		for _, p := range []string{"tr", "req"} {
+			if _, has := it.Params.Get(p); has {
+				return si, fmt.Errorf("%w: covered component %q has the %s parameter", ErrSignatureInvalid, name, p)
+			}
+		}
 	}
 	if il.Params != nil {
 		for _, p := range []struct {
@@ -399,13 +462,17 @@ func VerifyRequest(req *http.Request, pub crypto.PublicKey) error {
 //     ([ErrSignatureInvalid]).
 //  2. The covered components must include the base set, authorization
 //     when an AAuth credential is sent, and any the options require
-//     ([*MissingComponentsError], matching [ErrSignatureInput]).
+//     ([*MissingComponentsError], matching [ErrSignatureInput]). Only a
+//     component without parameters counts: "signature-key";key="other"
+//     does not cover signature-key. A component with the tr or req
+//     parameter is refused ([ErrSignatureInvalid]).
 //  3. created must be present and within the validity window: older is
 //     [ErrSignatureInvalid], further ahead than the window is
 //     [ErrClockSkew]. An expires in the past is [ErrSignatureInvalid].
 //  4. The signature must verify under pub, whose type fixes the algorithm
 //     (no alg parameter is consulted), and a Content-Digest must match the
-//     body ([ErrSignatureInvalid]).
+//     body ([ErrSignatureInvalid]). A body larger than opts.MaxBodySize is
+//     [ErrBodyTooLarge].
 func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts RequestVerifyOptions) error {
 	for _, h := range []string{HeaderSignature, HeaderSignatureInput, HeaderSignatureKey} {
 		if req.Header.Get(h) == "" {
@@ -417,12 +484,16 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 		return err
 	}
 
+	if opts.Authority != "" && !strings.EqualFold(normalizeAuthority(req.Host), normalizeAuthority(opts.Authority)) {
+		return fmt.Errorf("%w: @authority %q is not %q", ErrWrongAuthority, req.Host, opts.Authority)
+	}
+
 	required := coveredComponents(false, false, hasAAuthAuthorization(req))
 	required = append(required, opts.RequiredComponents...)
 	if opts.RequireBodyCoverage && requestHasBody(req) {
 		required = append(required, "content-digest", "content-type")
 	}
-	if missing := missingComponents(si.components, required); len(missing) > 0 {
+	if missing := missingComponents(si.plain, required); len(missing) > 0 {
 		return &MissingComponentsError{Required: dedupe(required), Missing: missing}
 	}
 
@@ -442,7 +513,11 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 
 	// The window and expires checks above use the verifier's (injectable)
 	// clock, so httpsign's own wall-clock checks are disabled.
-	cfg := httpsign.NewVerifyConfig().SetVerifyCreated(false).SetRejectExpired(false)
+	limit := opts.maxBodySize()
+	if limit > 0 && req.ContentLength > limit {
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrBodyTooLarge, req.ContentLength, limit)
+	}
+	cfg := httpsign.NewVerifyConfig().SetVerifyCreated(false).SetRejectExpired(false).SetMaxBodySize(limit)
 	v, err := newHTTPVerifier(pub, cfg, httpsign.Headers(coveredComponents(false, false, hasAAuthAuthorization(req))...))
 	if err != nil {
 		return err
@@ -451,11 +526,72 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 		return fmt.Errorf("%w: %w: %w", ErrSignatureInvalid, errSignatureMismatch, err)
 	}
 	if cds := req.Header.Values("Content-Digest"); len(cds) > 0 && req.Body != nil {
-		if err := httpsign.ValidateContentDigestHeader(cds, &req.Body, []string{ContentDigestAlg}); err != nil {
+		if err := bufferVerifiedBody(req, limit); err != nil {
+			return err
+		}
+		if err := httpsign.ValidateContentDigestHeader(cds, &req.Body, []string{ContentDigestAlg}, httpsign.NewDigestOptions().SetMaxBodySize(limit)); err != nil {
 			return fmt.Errorf("%w: content-digest: %w", ErrSignatureInvalid, err)
 		}
 	}
 	return nil
+}
+
+// bufferVerifiedBody reads req's body into memory, up to limit bytes (zero
+// means no limit), so its digest can be checked; a longer body is
+// [ErrBodyTooLarge]. The body is replaced with the bytes read.
+func bufferVerifiedBody(req *http.Request, limit int64) error {
+	r := io.Reader(req.Body)
+	if limit > 0 {
+		r = io.LimitReader(req.Body, limit+1)
+	}
+	b, err := io.ReadAll(r)
+	cerr := req.Body.Close()
+	if err != nil {
+		return fmt.Errorf("aauth: read request body: %w", err)
+	}
+	if limit > 0 && int64(len(b)) > limit {
+		return fmt.Errorf("%w: more than %d bytes", ErrBodyTooLarge, limit)
+	}
+	if cerr != nil {
+		return fmt.Errorf("aauth: close request body: %w", cerr)
+	}
+	req.Body = io.NopCloser(bytes.NewReader(b))
+	return nil
+}
+
+// ErrWrongAuthority reports a signature whose @authority is not the
+// verifier's own host (RFC 9421 §2.2.3). It matches [ErrSignatureInvalid].
+var ErrWrongAuthority = fmt.Errorf("%w: wrong @authority", ErrSignatureInvalid)
+
+// AuthorityOf returns the @authority a request to a server with the given
+// identifier carries: its host, with the port only when it is not the
+// scheme's default.
+func AuthorityOf(identifier string) (string, error) {
+	u, err := url.Parse(identifier)
+	if err != nil {
+		return "", fmt.Errorf("aauth: authority of %q: %w", identifier, err)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("aauth: authority of %q: no host", identifier)
+	}
+	return normalizeAuthority(u.Host), nil
+}
+
+// normalizeAuthority lowercases host and drops a default port (443 or 80),
+// which RFC 9421 §2.2.3 omits from @authority. Dropping either keeps the
+// comparison working behind a proxy that terminates TLS, where the request
+// the verifier sees is plain http.
+func normalizeAuthority(host string) string {
+	host = strings.ToLower(host)
+	if h, port, err := net.SplitHostPort(host); err == nil {
+		if port == "443" || port == "80" {
+			if strings.Contains(h, ":") {
+				return "[" + h + "]"
+			}
+			return h
+		}
+	}
+	return host
 }
 
 // errSignatureMismatch marks a failure of the RFC 9421 cryptographic check.

@@ -35,6 +35,10 @@ var (
 	ErrResolved           = errors.New("accessserver: pending request already resolved")
 	ErrClarificationLimit = errors.New("accessserver: clarification round limit reached")
 	ErrInvalidCode        = errors.New("accessserver: invalid_code")
+	// ErrRequestChanged means the PS replaced the request with an
+	// updated_request after the approver was shown it: the revision given
+	// to Approve is not the request's Revision.
+	ErrRequestChanged = errors.New("accessserver: the request changed since it was shown")
 )
 
 // Pending is a deferred token request (draft -11 §9.1.2) that the PS
@@ -55,7 +59,10 @@ type Pending struct {
 	Code           string   `json:"code,omitempty"`
 	CodeCanonical  string   `json:"code_canonical,omitempty"`
 	CodeConsumed   bool     `json:"code_consumed,omitempty"`
-	RetryAfter     int      `json:"retry_after,omitempty"`
+	// CodeConsumedBy is the person who consumed the code at their decision
+	// ([Server.ConsumeCode]).
+	CodeConsumedBy string `json:"code_consumed_by,omitempty"`
+	RetryAfter     int    `json:"retry_after,omitempty"`
 	// Claims are the identity claims the PS supplied (§9.2).
 	Claims map[string]any `json:"claims,omitempty"`
 	// Question awaits the PS's answer; Transcript holds earlier rounds.
@@ -66,14 +73,26 @@ type Pending struct {
 
 	ResourceTokenIssuer string `json:"resource_token_iss"`
 	ResourceTokenJTI    string `json:"resource_token_jti"`
+	// Revision counts the updated_requests that replaced the request
+	// (§7.5.2.2), which also replace Scope and the resource token above;
+	// zero is the original. Approve names the revision the approver saw.
+	Revision int `json:"revision,omitempty"`
+	// Deciding is set while the Authorizer re-evaluates an answer or
+	// Approve issues the token, so concurrent answers and approvals do not
+	// issue twice.
+	Deciding bool `json:"deciding,omitempty"`
 	// Request is the original request body, verified again as of
 	// ReceivedAt when the request completes.
 	Request    json.RawMessage `json:"request"`
 	ReceivedAt time.Time       `json:"received_at"`
 	CreatedAt  time.Time       `json:"created_at"`
 	ExpiresAt  time.Time       `json:"expires_at"`
-	Result     *Result         `json:"result,omitempty"`
-	Version    int64           `json:"version"`
+	// Result is the terminal response, once resolved. Delivered is set
+	// when the pending URL has returned it to the PS; its body is then
+	// discarded, and the pending URL answers 410 Gone (§11.8.3).
+	Result    *Result `json:"result,omitempty"`
+	Delivered bool    `json:"delivered,omitempty"`
+	Version   int64   `json:"version"`
 }
 
 // Open reports whether the request awaits resolution.
@@ -94,14 +113,20 @@ func (s *Server) newPending(ctx context.Context, p *Pending, d Decision) error {
 	}
 	now := s.now()
 	p.ID, p.State, p.CreatedAt, p.ExpiresAt = base64.RawURLEncoding.EncodeToString(b), StatePending, now, now.Add(s.pendingTTL())
-	if err := s.applyDecision(p, d); err != nil {
-		return err
+	for attempt := 0; ; attempt++ {
+		if err := s.applyDecision(p, d); err != nil {
+			return err
+		}
+		err := s.cfg.Store.CreatePending(ctx, p)
+		if errors.Is(err, ErrCodeInUse) && attempt < 4 {
+			continue // another request holds the code: draw a new one
+		}
+		if err != nil {
+			return fmt.Errorf("accessserver: create pending: %w", err)
+		}
+		s.changed(ctx, p)
+		return nil
 	}
-	if err := s.cfg.Store.CreatePending(ctx, p); err != nil {
-		return fmt.Errorf("accessserver: create pending: %w", err)
-	}
-	s.changed(ctx, p)
-	return nil
 }
 
 // applyDecision sets the 202's requirement from a Deferred decision.
@@ -162,6 +187,16 @@ func (s *Server) changed(ctx context.Context, p *Pending) {
 
 // mutate applies fn to pending id with optimistic retries.
 func (s *Server) mutate(ctx context.Context, id string, fn func(p *Pending) error) (*Pending, error) {
+	return s.mutateNotify(ctx, id, fn, true)
+}
+
+// mutateQuietly is mutate without Config.Notify, for bookkeeping an
+// approval UI has no use for (claims, delivery).
+func (s *Server) mutateQuietly(ctx context.Context, id string, fn func(p *Pending) error) (*Pending, error) {
+	return s.mutateNotify(ctx, id, fn, false)
+}
+
+func (s *Server) mutateNotify(ctx context.Context, id string, fn func(p *Pending) error, notify bool) (*Pending, error) {
 	for range 8 {
 		p, err := s.cfg.Store.Pending(ctx, id)
 		if err != nil {
@@ -177,7 +212,11 @@ func (s *Server) mutate(ctx context.Context, id string, fn func(p *Pending) erro
 		if err != nil {
 			return nil, err
 		}
-		s.changed(ctx, p)
+		if notify {
+			s.changed(ctx, p)
+		} else {
+			s.waiters.notify(p.ID)
+		}
 		return p, nil
 	}
 	return nil, ErrConflict
@@ -228,7 +267,49 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, p *Pending, pol
 	if wait := preferWait(r, s.cfg.MaxWait); wait > 0 && p.Open() && !actionable {
 		p = s.waitFor(ctx, p, wait)
 	}
+	if p.Result != nil {
+		res, err := s.deliver(ctx, p.ID)
+		switch {
+		case errors.Is(err, errDelivered):
+			writeGone(w)
+		case err != nil:
+			s.logger().ErrorContext(ctx, "accessserver: deliver pending result", "error", err)
+			aauth.WriteProblem(w, http.StatusInternalServerError, aauth.ErrCodeServerError, "")
+		default:
+			res.write(w)
+		}
+		return
+	}
 	s.writePending(w, p)
+}
+
+// errDelivered means a pending request's terminal response has already
+// been returned.
+var errDelivered = errors.New("accessserver: the result was already delivered")
+
+// deliver takes pending id's terminal response for the PS, once: it marks
+// the request delivered and discards the stored body, so a later request
+// to the pending URL answers 410 Gone (§11.8.3).
+func (s *Server) deliver(ctx context.Context, id string) (*Result, error) {
+	var out Result
+	_, err := s.mutateQuietly(ctx, id, func(p *Pending) error {
+		if p.Delivered || p.Result == nil {
+			return errDelivered
+		}
+		out = *p.Result
+		p.Delivered = true
+		p.Result = &Result{Status: out.Status, ContentType: out.ContentType}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// writeGone answers a pending URL whose terminal response was delivered.
+func writeGone(w http.ResponseWriter) {
+	aauth.WriteProblem(w, http.StatusGone, aauth.ErrCodeInvalidRequest, "the request's result was already delivered")
 }
 
 func (s *Server) writePending(w http.ResponseWriter, p *Pending) {
@@ -342,6 +423,10 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 		aauth.WriteProblem(w, http.StatusInternalServerError, aauth.ErrCodeServerError, "")
 		return
 	}
+	if p.Delivered {
+		writeGone(w)
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		if ok, wait := s.allow(ctx, "poll:"+p.ID); !ok {
@@ -359,10 +444,16 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 			writeAnswerError(w, err)
 			return
 		}
+		if !p.Open() {
+			// The answer resolved the request: the PS polls for the
+			// result, which is returned once.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		s.writePending(w, p)
 	case http.MethodDelete:
 		if _, err := s.mutate(ctx, p.ID, func(p *Pending) error {
-			if !p.Open() {
+			if !p.Open() || p.Deciding {
 				return ErrResolved
 			}
 			p.State, p.Question = StateCancelled, nil
@@ -419,9 +510,12 @@ func (s *Server) answer(ctx context.Context, p *Pending, body []byte, at time.Ti
 			return p, answerError{err}
 		}
 		ex := Exchange{Time: s.now(), Question: questionText(p)}
-		var newBody []byte
+		var (
+			newBody []byte
+			rc      *aauth.ResourceClaims
+		)
 		if post.Action == aauth.ActionUpdatedRequest {
-			if newBody, err = s.updatedRequest(ctx, p, post, at); err != nil {
+			if newBody, rc, err = s.updatedRequest(ctx, p, post, at); err != nil {
 				return p, err
 			}
 			ex.Updated = true
@@ -431,7 +525,11 @@ func (s *Server) answer(ctx context.Context, p *Pending, body []byte, at time.Ti
 		return s.reevaluate(ctx, p.ID, func(p *Pending) {
 			p.Transcript, p.Question = append(p.Transcript, ex), nil
 			if newBody != nil {
+				// What is shown, revoked by, and approved follows the
+				// replacement.
 				p.Request, p.ReceivedAt = newBody, at
+				p.Scope, p.ResourceTokenIssuer, p.ResourceTokenJTI = rc.Scope, rc.Issuer, rc.ID
+				p.Revision++
 			}
 		}, newBody, at)
 	}
@@ -447,42 +545,53 @@ func questionText(p *Pending) string {
 
 // updatedRequest verifies an updated_request (§7.5.2.2): the new pair
 // verifies, and the new resource token keeps iss, ps, sub, agent_jkt,
-// mission_s256, and tenant. It returns the replacement request body.
-func (s *Server) updatedRequest(ctx context.Context, p *Pending, post *aauth.ClarificationPost, at time.Time) ([]byte, error) {
+// mission_s256, and tenant. It returns the replacement request body and
+// its verified resource token.
+func (s *Server) updatedRequest(ctx context.Context, p *Pending, post *aauth.ClarificationPost, at time.Time) ([]byte, *aauth.ResourceClaims, error) {
 	var req TokenRequest
 	if err := json.Unmarshal(p.Request, &req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var orig aauth.ResourceClaims
 	if _, _, err := jwt.NewParser().ParseUnverified(req.ResourceToken, &orig); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.ResourceToken, req.PresentedToken = post.ResourceToken, post.PresentedToken
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	j, err := s.prepare(ctx, p.PS, body, at)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rc := j.rc
 	if rc.Issuer != orig.Issuer || rc.PS != orig.PS || rc.Subject != orig.Subject || rc.AgentJKT != orig.AgentJKT ||
 		rc.MissionS256 != orig.MissionS256 || rc.Tenant != orig.Tenant {
-		return nil, &aauth.TokenError{Code: aauth.TokenErrInvalidResourceToken,
+		return nil, nil, &aauth.TokenError{Code: aauth.TokenErrInvalidResourceToken,
 			Err: errors.New("the updated resource token must keep iss, ps, sub, agent_jkt, mission_s256, and tenant")}
 	}
-	return body, nil
+	return body, rc, nil
 }
 
+// errDeciding refuses an answer while another is being evaluated or the
+// request is being approved.
+var errDeciding = answerError{errors.New("the request is being decided; poll for the outcome")}
+
 // reevaluate applies update to pending id, then asks the Authorizer again
-// with the claims and transcript so far, and stores the outcome.
+// with the claims and transcript so far, and stores the outcome. The
+// request is claimed (Pending.Deciding) meanwhile, so concurrent answers
+// are refused rather than authorized and issued twice.
 func (s *Server) reevaluate(ctx context.Context, id string, update func(*Pending), newBody []byte, at time.Time) (*Pending, error) {
-	p, err := s.mutate(ctx, id, func(p *Pending) error {
-		if !p.Open() {
+	p, err := s.mutateQuietly(ctx, id, func(p *Pending) error {
+		switch {
+		case !p.Open():
 			return ErrResolved
+		case p.Deciding:
+			return errDeciding
 		}
 		update(p)
+		p.Deciding = true
 		return nil
 	})
 	if err != nil {
@@ -498,21 +607,44 @@ func (s *Server) reevaluate(ctx context.Context, id string, update func(*Pending
 	}
 	d, err := s.cfg.Authorizer.Authorize(ctx, j.authorization(p.Claims, p.Transcript))
 	if err != nil {
-		return p, err
+		return p, errors.Join(err, s.release(ctx, id))
 	}
 	if d.Outcome != Deferred {
 		res, err := s.conclude(ctx, j, d)
 		if err != nil {
-			return p, err
+			return p, errors.Join(err, s.release(ctx, id))
 		}
 		return s.resolve(ctx, id, res)
 	}
-	return s.mutate(ctx, id, func(p *Pending) error {
+	for attempt := 0; ; attempt++ {
+		np, err := s.mutate(ctx, id, func(p *Pending) error {
+			if !p.Open() {
+				return ErrResolved
+			}
+			p.Deciding = false
+			return s.applyDecision(p, d)
+		})
+		if errors.Is(err, ErrCodeInUse) && attempt < 4 {
+			continue // another request holds the code: draw a new one
+		}
+		return np, err
+	}
+}
+
+// release gives up a claim on pending id (Pending.Deciding) after a
+// decision that failed without an outcome.
+func (s *Server) release(ctx context.Context, id string) error {
+	_, err := s.mutateQuietly(ctx, id, func(p *Pending) error {
 		if !p.Open() {
 			return ErrResolved
 		}
-		return s.applyDecision(p, d)
+		p.Deciding = false
+		return nil
 	})
+	if errors.Is(err, ErrResolved) {
+		return nil
+	}
+	return err
 }
 
 // PendingRequest returns pending request id, for an approval UI.
@@ -527,7 +659,13 @@ func (s *Server) PendingRequest(ctx context.Context, id string) (*Pending, error
 // Approve resolves pending id by issuing the auth token with scope (empty:
 // the requested scope), after verifying the request again as of its
 // receipt; a token that expired meanwhile resolves it with expired.
-func (s *Server) Approve(ctx context.Context, id, scope string) error {
+//
+// revision is the Revision of the request the approver was shown: if the
+// PS has since replaced the request with an updated_request, Approve fails
+// with ErrRequestChanged and issues nothing. The request is claimed
+// (Pending.Deciding) first, so a concurrent Approve, Deny, or answer finds
+// it taken (ErrResolved) and the token is issued once.
+func (s *Server) Approve(ctx context.Context, id string, revision int, scope string) error {
 	p, err := s.PendingRequest(ctx, id)
 	if err != nil {
 		return err
@@ -535,27 +673,49 @@ func (s *Server) Approve(ctx context.Context, id, scope string) error {
 	if !p.Open() {
 		return ErrResolved
 	}
+	p, err = s.mutateQuietly(ctx, id, func(p *Pending) error {
+		switch {
+		case !p.Open() || p.Deciding:
+			return ErrResolved
+		case p.Revision != revision:
+			return ErrRequestChanged
+		}
+		// An approval through another channel completes the interaction,
+		// which consumes its code.
+		p.Deciding, p.CodeConsumed = true, p.CodeConsumed || p.CodeCanonical != ""
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 	j, err := s.prepare(ctx, p.PS, p.Request, p.ReceivedAt)
 	var res *Result
 	if err != nil {
 		res = errorResult(err)
 	} else if res, err = s.conclude(ctx, j, Allow(scope)); err != nil {
-		return err
+		return errors.Join(err, s.release(ctx, id))
 	}
 	_, err = s.resolve(ctx, id, res)
 	return err
 }
 
-// Deny resolves pending id with denied (403).
+// Deny resolves pending id with denied (403). It does not overtake an
+// approval or re-evaluation in progress (ErrResolved).
 func (s *Server) Deny(ctx context.Context, id, reason string) error {
-	_, err := s.resolve(ctx, id, problemResult(http.StatusForbidden, aauth.PollErrDenied, reason))
+	_, err := s.mutate(ctx, id, func(p *Pending) error {
+		if !p.Open() || p.Deciding {
+			return ErrResolved
+		}
+		p.State, p.Result, p.Question = StateDone, problemResult(http.StatusForbidden, aauth.PollErrDenied, reason), nil
+		return nil
+	})
 	return err
 }
 
 // Ask puts a clarification question to the PS (§7.5.1).
 func (s *Server) Ask(ctx context.Context, id string, q Question) error {
 	_, err := s.mutate(ctx, id, func(p *Pending) error {
-		if !p.Open() {
+		if !p.Open() || p.Deciding {
 			return ErrResolved
 		}
 		return s.applyDecision(p, Decision{Outcome: Deferred, Requirement: aauth.RequirementClarification, Question: &q})
@@ -563,11 +723,21 @@ func (s *Server) Ask(ctx context.Context, id string, q Question) error {
 	return err
 }
 
-// ConsumeCode is called by the AS's interaction page when the person
-// arrives with ?code= (§11.6.3.1): it consumes the single-use code and
-// marks the request interacting. The page MUST authenticate the person
-// before approving.
-func (s *Server) ConsumeCode(ctx context.Context, code string) (*Pending, error) {
+// ErrClientRequired means LookupCode or ConsumeCode was called without a
+// client key, which the per-client rate limit needs.
+var ErrClientRequired = errors.New("accessserver: interaction code attempts need a client key")
+
+// codeAttempt rate-limits an interaction code attempt by client and finds
+// the open request the code names, brought up to date: an unknown,
+// malformed, or consumed code is ErrInvalidCode, and an expired request
+// ErrResolved.
+func (s *Server) codeAttempt(ctx context.Context, code, client string) (*Pending, error) {
+	if client == "" {
+		return nil, ErrClientRequired
+	}
+	if ok, wait := s.allow(ctx, "code:"+client); !ok {
+		return nil, &RateLimitError{RetryAfter: wait}
+	}
 	canon, err := interactioncode.Canonicalize(code)
 	if err != nil {
 		return nil, ErrInvalidCode
@@ -579,14 +749,66 @@ func (s *Server) ConsumeCode(ctx context.Context, code string) (*Pending, error)
 	if err != nil {
 		return nil, err
 	}
+	if p = s.step(ctx, p); !p.Open() {
+		return nil, ErrResolved
+	}
+	if p.CodeConsumed || p.CodeCanonical != canon {
+		return nil, ErrInvalidCode
+	}
+	return p, nil
+}
+
+// LookupCode is called by the AS's interaction page when a browser
+// arrives with ?code= (§11.6.3.1): it finds the request for the page to
+// show and marks it interacting, without consuming the code — a link
+// preview fetching the page cannot burn it. client identifies who is
+// entering codes (the browser's session or address) and must not be
+// empty: with Config.Limiter set, attempts are limited per client (key
+// "code:<client>"), and a limited attempt is *RateLimitError. An unknown,
+// malformed, or consumed code is ErrInvalidCode; an expired request
+// ErrResolved.
+func (s *Server) LookupCode(ctx context.Context, code, client string) (*Pending, error) {
+	p, err := s.codeAttempt(ctx, code, client)
+	if err != nil || p.State != StatePending {
+		return p, err
+	}
+	return s.mutate(ctx, p.ID, func(p *Pending) error {
+		if !p.Open() {
+			return ErrResolved
+		}
+		p.State = StateInteracting
+		return nil
+	})
+}
+
+// ConsumeCode consumes the single-use code at the person's decision, after
+// the page has authenticated person, and records who did
+// (Pending.CodeConsumedBy); then the page calls Approve or Deny. Errors
+// and the client key are as for [Server.LookupCode].
+func (s *Server) ConsumeCode(ctx context.Context, code, client, person string) (*Pending, error) {
+	if person == "" {
+		return nil, errors.New("accessserver: ConsumeCode needs the authenticated person")
+	}
+	p, err := s.codeAttempt(ctx, code, client)
+	if err != nil {
+		return nil, err
+	}
 	return s.mutate(ctx, p.ID, func(p *Pending) error {
 		switch {
-		case !p.Open():
+		case !p.Open() || p.Deciding:
 			return ErrResolved
 		case p.CodeConsumed:
 			return ErrInvalidCode
 		}
-		p.CodeConsumed, p.State = true, StateInteracting
+		p.CodeConsumed, p.CodeConsumedBy, p.State = true, person, StateInteracting
 		return nil
 	})
+}
+
+// RateLimitError is a refusal by Config.Limiter, with how long to wait.
+type RateLimitError struct{ RetryAfter time.Duration }
+
+// Error implements error.
+func (e *RateLimitError) Error() string {
+	return "accessserver: rate limited; retry after " + e.RetryAfter.String()
 }

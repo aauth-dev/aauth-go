@@ -3,8 +3,10 @@ package personserver_test
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	aauth "github.com/aauth-dev/aauth-go"
@@ -71,8 +73,13 @@ func Example_collapsedDeployment() {
 		Store:          personserver.NewMemoryStore(), // implement personserver.Store over your database
 		InteractionURL: issuer + "/consent",
 		Decider: personserver.DeciderFunc(func(ctx context.Context, r *personserver.TokenRequest) (personserver.Decision, error) {
-			if r.Person == "" {
+			switch {
+			case r.Person == "":
 				return personserver.DeferInteraction(), nil // a new agent: the person signs in at /consent
+			case r.Chained && r.Mission == nil:
+				// Call chaining (Config.AllowCallChaining) acts for the
+				// person behind another agent's token: ask them.
+				return personserver.DeferApproval(), nil
 			}
 			return personserver.Allow(personserver.Grant{}), nil
 		}),
@@ -90,16 +97,36 @@ func Example_collapsedDeployment() {
 	ap.Register(mux)
 	ps.Register(mux)
 	as.Register(mux)
-	mux.HandleFunc("/consent", func(w http.ResponseWriter, r *http.Request) {
-		p, err := ps.ConsumeCode(r.Context(), r.URL.Query().Get("code"))
+	mux.HandleFunc("GET /consent", func(w http.ResponseWriter, r *http.Request) {
+		// Show the request; looking the code up does not consume it.
+		p, err := ps.LookupCode(r.Context(), r.URL.Query().Get("code"), r.RemoteAddr)
 		if err != nil {
 			http.Error(w, "unknown code", http.StatusBadRequest)
 			return
 		}
+		// Render the request and a form posting the code and p.Revision
+		// back (sanitize the agent-asserted hints, §13.3).
+		if _, err := fmt.Fprintf(w, "%s asks for %q at %s (revision %d)\n", p.Agent, p.Scope, p.Resource, p.Revision); err != nil {
+			log.Print(err)
+		}
+	})
+	mux.HandleFunc("POST /consent", func(w http.ResponseWriter, r *http.Request) {
 		// Authenticate the person with the application's own login, then
-		// approve; approval binds the agent to that person.
-		if err := ps.Approve(r.Context(), p.ID, personserver.Grant{Person: "alice"}); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		// consume the code as that person and approve the revision shown;
+		// approval binds the agent to that person.
+		person := "alice"
+		p, err := ps.ConsumeCode(r.Context(), r.FormValue("code"), r.RemoteAddr, person)
+		if err != nil {
+			http.Error(w, "unknown code", http.StatusBadRequest)
+			return
+		}
+		revision, err := strconv.Atoi(r.FormValue("revision"))
+		if err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		if err := ps.Approve(r.Context(), p.ID, personserver.Grant{Person: person, Revision: revision}); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
 		}
 	})
 

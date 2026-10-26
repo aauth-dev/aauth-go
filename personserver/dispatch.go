@@ -1,9 +1,11 @@
 package personserver
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	aauth "github.com/aauth-dev/aauth-go"
 )
@@ -41,11 +43,39 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request, c *caller, bod
 		s.missionLog(ctx, p.MissionS256, logKindFor(p.Kind), c.ref, map[string]any{"decision": "denied", "reason": d.Reason})
 		return
 	}
+	if err := s.checkPendingLimit(ctx, c.ref); err != nil {
+		var pe *aauth.ProblemError
+		if errors.As(err, &pe) {
+			writeError(w, err)
+		} else {
+			s.serverError(w, r, "count pending", err)
+		}
+		return
+	}
 	if err := s.newPending(ctx, p, c, body, d); err != nil {
 		s.serverError(w, r, "defer "+string(p.Kind), err)
 		return
 	}
 	s.respondStep(w, r, p, false)
+}
+
+// checkPendingLimit refuses a new pending request for an agent that has
+// Config.MaxPendingPerAgent open ones, with rate_limited.
+func (s *Server) checkPendingLimit(ctx context.Context, agent AgentRef) error {
+	s.maybePrune(ctx)
+	ceiling := limit(s.cfg.MaxPendingPerAgent, DefaultMaxPendingPerAgent)
+	if ceiling < 0 {
+		return nil
+	}
+	n, err := s.cfg.Store.CountOpenPending(ctx, agent)
+	if err != nil {
+		return storeErr("count pending", err)
+	}
+	if n >= ceiling {
+		return &aauth.ProblemError{Status: http.StatusTooManyRequests, Code: aauth.ErrCodeRateLimited,
+			Detail: "too many open pending requests", RetryAfter: 5 * time.Second}
+	}
+	return nil
 }
 
 // denialResult renders a Denied decision for a request of kind k.

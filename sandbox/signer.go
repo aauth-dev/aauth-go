@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	aauth "github.com/aauth-dev/aauth-go"
@@ -47,7 +48,7 @@ const (
 const DefaultSignerAddr = "127.0.0.1:8099"
 
 // maxForwardBody bounds a request body the helper forwards.
-const maxForwardBody = 4 << 20
+const maxForwardBody = maxRequestBody
 
 // Signer is the sandbox's test agent and its signing helper: HTTP clients
 // that cannot sign send requests through it, and it signs them as the
@@ -72,8 +73,21 @@ type Signer struct {
 
 	// AnyInterface lets ListenAndServe listen on a non-loopback address.
 	// Set it only inside a container whose port is published to the
-	// host's loopback address: the helper signs anything it is sent.
+	// host's loopback address: the helper signs what it is sent.
 	AnyInterface bool
+
+	// AnyTarget lets the helper sign and forward requests for any https
+	// host. By default it signs only for the sandbox's own role hosts,
+	// its upstreams and its remote role origins.
+	AnyTarget bool
+
+	// Hosts are extra Host header names the helper answers to, besides
+	// localhost and the loopback addresses (and the address it listens
+	// on). Requests naming any other host are refused, so a web page
+	// cannot reach the helper by pointing a DNS name at 127.0.0.1.
+	Hosts []string
+
+	listenHost atomic.Pointer[string] // set by ListenAndServe before serving
 }
 
 func (s *Sandbox) newSigner() (*Signer, error) {
@@ -86,8 +100,13 @@ func (s *Sandbox) newSigner() (*Signer, error) {
 		return nil, err
 	}
 	hc := s.Client("agent")
+	// The helper returns redirects to its client unchanged: following one
+	// would send the signed request, and its token, to wherever the
+	// redirect points, past the checks on the target.
+	forward := *hc
+	forward.CheckRedirect = noRedirect
 	return &Signer{
-		sb: s, client: hc, durable: durable, ephemeral: ephemeral,
+		sb: s, client: &forward, durable: durable, ephemeral: ephemeral,
 		ap: &agentprovider.Client{BaseURL: s.cfg.URL(RoleAP), Paths: agentprovider.Paths{Token: PathEnroll, Refresh: PathAgentToken}, HTTPClient: hc},
 	}, nil
 }
@@ -160,7 +179,29 @@ var hopHeaders = map[string]bool{
 //   - POST /sign returns the headers that sign a described request;
 //   - any request to /<https URL> is signed and forwarded to that URL,
 //     and the response is returned unchanged.
+//
+// It answers only requests whose Host is a loopback name (or one of
+// Hosts), and refuses requests a browser sends on behalf of a web page
+// (those with Origin, or Sec-Fetch-Site naming another site). OPTIONS is
+// answered without forwarding.
 func (sg *Signer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !sg.allowedHost(r.Host) {
+		writeJSON(w, http.StatusMisdirectedRequest, map[string]string{
+			"error": "the signing helper answers only at localhost or a loopback address, not " + r.Host,
+		})
+		return
+	}
+	if fromWebPage(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "the signing helper does not accept requests from web pages (Origin or Sec-Fetch-Site)",
+		})
+		return
+	}
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Allow", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	target := strings.TrimPrefix(r.RequestURI, "/")
 	switch {
 	case r.URL.Path == "/" && r.Method == http.MethodGet:
@@ -199,6 +240,10 @@ func (sg *Signer) forward(w http.ResponseWriter, r *http.Request, target string)
 	u, err := url.Parse(target)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "the target must be an https URL"})
+		return
+	}
+	if !sg.allowedTarget(u) {
+		sg.refuseTarget(w, u)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxForwardBody+1))
@@ -379,6 +424,84 @@ func addCapabilitiesMember(body []byte, caps []string) ([]byte, error) {
 	return out, nil
 }
 
+// allowedHost reports whether the helper answers a request whose Host
+// header is hostport: localhost, a loopback address, the address the
+// helper listens on, or one of Hosts.
+func (sg *Signer) allowedHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	if lh := sg.listenHost.Load(); lh != nil && host == *lh {
+		return true
+	}
+	for _, h := range sg.Hosts {
+		if strings.EqualFold(strings.TrimSuffix(h, "."), host) {
+			return true
+		}
+	}
+	return false
+}
+
+// fromWebPage reports whether a browser sent r on behalf of a web page:
+// browsers send Origin with cross-origin and state-changing requests, and
+// Sec-Fetch-Site on every request. Clients such as curl, Postman and
+// Newman send neither.
+func fromWebPage(r *http.Request) bool {
+	if _, ok := r.Header["Origin"]; ok {
+		return true
+	}
+	switch strings.ToLower(r.Header.Get("Sec-Fetch-Site")) {
+	case "cross-site", "same-site":
+		return true
+	}
+	return false
+}
+
+// allowedTarget reports whether the helper signs for u: one of the
+// sandbox's role origins (local or remote) or upstream hosts, unless
+// AnyTarget is set.
+func (sg *Signer) allowedTarget(u *url.URL) bool {
+	if sg.AnyTarget {
+		return true
+	}
+	want := originKey(u)
+	for _, role := range Roles {
+		if ru, err := url.Parse(sg.sb.cfg.URL(role)); err == nil && originKey(ru) == want {
+			return true
+		}
+	}
+	for _, h := range sg.sb.cfg.UpstreamHosts() {
+		if want == h+":443" {
+			return true
+		}
+	}
+	return false
+}
+
+func (sg *Signer) refuseTarget(w http.ResponseWriter, u *url.URL) {
+	writeJSON(w, http.StatusForbidden, map[string]string{
+		"error": "the signing helper signs only for the sandbox's own hosts, not " + u.Host + "; serve it with --signer-any-target to sign for any host",
+	})
+}
+
+// originKey is an https URL's host and port, lower case, with the
+// default port made explicit.
+func originKey(u *url.URL) string {
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	return net.JoinHostPort(strings.ToLower(u.Hostname()), port)
+}
+
 func (sg *Signer) isRole(host, role string) bool {
 	u, err := url.Parse(sg.sb.cfg.URL(role))
 	return err == nil && strings.EqualFold(u.Hostname(), host)
@@ -403,8 +526,12 @@ func (sg *Signer) serveSign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u, err := url.Parse(in.URL)
-	if err != nil || u.Scheme != "https" {
+	if err != nil || u.Scheme != "https" || u.Host == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "url must be an https URL"})
+		return
+	}
+	if !sg.allowedTarget(u) {
+		sg.refuseTarget(w, u)
 		return
 	}
 	h := http.Header{}
@@ -443,10 +570,15 @@ func (sg *Signer) ListenAndServe(ctx context.Context, addr string) error {
 	if err != nil {
 		return fmt.Errorf("sandbox: signer address: %w", err)
 	}
-	if ip := net.ParseIP(host); !sg.AnyInterface && host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+	if !sg.AnyInterface && !IsLoopback(addr) {
 		return fmt.Errorf("sandbox: the signing helper listens on loopback only, not %q", addr)
 	}
-	srv := &http.Server{Addr: addr, Handler: sg, ReadHeaderTimeout: 10 * time.Second}
+	if ip := net.ParseIP(host); host != "" && (ip == nil || !ip.IsUnspecified()) {
+		lh := strings.ToLower(strings.Trim(host, "[]"))
+		sg.listenHost.Store(&lh)
+	}
+	// No WriteTimeout: forwarded requests may wait (Prefer: wait).
+	srv := &http.Server{Addr: addr, Handler: sg, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout, IdleTimeout: idleTimeout}
 	go func() {
 		<-ctx.Done()
 		if err := srv.Close(); err != nil {

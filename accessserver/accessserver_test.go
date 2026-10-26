@@ -302,8 +302,8 @@ func TestFourPartyOverHTTPAndCollapsed(t *testing.T) {
 
 func TestClaimsAndClarification(t *testing.T) {
 	for _, local := range []bool{false, true} {
-		f := newFourParty(t, local, func(_ context.Context, person string, required []string) (map[string]any, error) {
-			return map[string]any{"email": person + "@example.com"}, nil
+		f := newFourParty(t, local, func(_ context.Context, r *personserver.ClaimsRequest) (map[string]any, error) {
+			return map[string]any{"email": r.Person + "@example.com"}, nil
 		}, nil)
 		var transcript []Exchange
 		f.setAuthz(func(r *AuthorizationRequest) Decision {
@@ -336,17 +336,21 @@ func TestInteractionApproveDeny(t *testing.T) {
 	ctx := context.Background()
 	f.setAuthz(func(*AuthorizationRequest) Decision { return DeferInteraction() })
 	f.setNotify(func(p *Pending) {
-		if p.Open() && !p.CodeConsumed {
+		if p.State == StatePending && !p.CodeConsumed {
 			go func() {
-				q, err := f.as.ConsumeCode(ctx, p.Code)
+				if l, err := f.as.LookupCode(ctx, p.Code, "browser"); err != nil || l.CodeConsumed || l.State != StateInteracting {
+					t.Errorf("lookup %+v %v", l, err)
+					return
+				}
+				q, err := f.as.ConsumeCode(ctx, p.Code, "browser", "alice")
 				if err != nil {
 					t.Error(err)
 					return
 				}
-				if _, err := f.as.ConsumeCode(ctx, p.Code); !errors.Is(err, ErrInvalidCode) {
+				if _, err := f.as.ConsumeCode(ctx, p.Code, "browser", "alice"); !errors.Is(err, ErrInvalidCode) {
 					t.Errorf("code reuse: %v", err)
 				}
-				if err := f.as.Approve(ctx, q.ID, "files:read"); err != nil {
+				if err := f.as.Approve(ctx, q.ID, q.Revision, "files:read"); err != nil {
 					t.Error(err)
 				}
 			}()
@@ -387,10 +391,13 @@ func TestInteractionApproveDeny(t *testing.T) {
 	if _, err = c.RequestAuthToken(ctx, aauth.AuthTokenRequest{ResourceToken: rt, PresentedToken: pt}); !errors.As(err, &te) || te.Code != aauth.PollErrDenied {
 		t.Fatalf("immediate denial: %v", err)
 	}
-	if _, err := f.as.ConsumeCode(ctx, "bad"); !errors.Is(err, ErrInvalidCode) {
+	if _, err := f.as.LookupCode(ctx, "bad", "browser"); !errors.Is(err, ErrInvalidCode) {
 		t.Fatal(err)
 	}
-	if _, err := f.as.ConsumeCode(ctx, "ABCD-EFGH"); !errors.Is(err, ErrInvalidCode) {
+	if _, err := f.as.ConsumeCode(ctx, "ABCD-EFGH", "browser", "alice"); !errors.Is(err, ErrInvalidCode) {
+		t.Fatal(err)
+	}
+	if _, err := f.as.LookupCode(ctx, "ABCD-EFGH", ""); !errors.Is(err, ErrClientRequired) {
 		t.Fatal(err)
 	}
 }
@@ -673,7 +680,7 @@ func TestPendingURL(t *testing.T) {
 		return DeferApproval()
 	})
 	res = f.asRequest(http.MethodPost, loc, `{"action":"updated_request","resource_token":"`+rt2+`","presented_token":"`+pt2+`"}`)
-	if res.StatusCode != http.StatusOK {
+	if res.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(res.Body)
 		t.Fatalf("updated request: %d %s", res.StatusCode, b)
 	}
@@ -681,7 +688,21 @@ func TestPendingURL(t *testing.T) {
 	if p, err := f.as.PendingRequest(ctx, id); err != nil || p.Open() {
 		t.Fatalf("%+v %v", p, err)
 	}
-	if err := f.as.Approve(ctx, id, ""); !errors.Is(err, ErrResolved) {
+	// The result is returned once, then the pending URL is gone.
+	res = f.asRequest(http.MethodGet, loc, "")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("result: %d", res.StatusCode)
+	}
+	_ = res.Body.Close()
+	res = f.asRequest(http.MethodGet, loc, "")
+	if res.StatusCode != http.StatusGone {
+		t.Fatalf("result again: %d", res.StatusCode)
+	}
+	_ = res.Body.Close()
+	if p, err := f.as.PendingRequest(ctx, id); err != nil || !p.Delivered || len(p.Result.Body) != 0 {
+		t.Fatalf("after delivery %+v %v", p, err)
+	}
+	if err := f.as.Approve(ctx, id, 1, ""); !errors.Is(err, ErrResolved) {
 		t.Fatal(err)
 	}
 	// Cancel, and expiry.

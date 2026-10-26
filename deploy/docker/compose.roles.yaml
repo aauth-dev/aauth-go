@@ -32,7 +32,7 @@ services:
 
   ap:
     <<: *sandbox
-    command: ["serve", "--state", "/state", "--roles", "ap", "--no-signer"]
+    command: ["serve", "--state", "/state", "--roles", "ap", "--no-signer", "--listen", "0.0.0.0:443", "--listen-any-interface"]
     networks: {aauth: {aliases: [ap.aauth.test]}}
     healthcheck: &health
       test: ["CMD", "aauth-sandbox", "health", "--state", "/state", "--roles", "ap"]
@@ -42,7 +42,7 @@ services:
 
   ps:
     <<: *sandbox
-    command: ["serve", "--state", "/state", "--roles", "ps", "--no-signer"]
+    command: ["serve", "--state", "/state", "--roles", "ps", "--no-signer", "--listen", "0.0.0.0:443", "--listen-any-interface"]
     networks: {aauth: {aliases: [ps.aauth.test]}}
     healthcheck:
       <<: *health
@@ -50,7 +50,7 @@ services:
 
   as:
     <<: *sandbox
-    command: ["serve", "--state", "/state", "--roles", "as", "--no-signer"]
+    command: ["serve", "--state", "/state", "--roles", "as", "--no-signer", "--listen", "0.0.0.0:443", "--listen-any-interface"]
     networks: {aauth: {aliases: [as.aauth.test]}}
     healthcheck:
       <<: *health
@@ -58,7 +58,7 @@ services:
 
   resource:
     <<: *sandbox
-    command: ["serve", "--state", "/state", "--roles", "resource", "--no-signer"]
+    command: ["serve", "--state", "/state", "--roles", "resource", "--no-signer", "--listen", "0.0.0.0:443", "--listen-any-interface"]
     networks: {aauth: {aliases: [resource.aauth.test]}}
     healthcheck:
       <<: *health
@@ -66,7 +66,7 @@ services:
 
   docs:
     <<: *sandbox
-    command: ["serve", "--state", "/state", "--roles", "docs", "--no-signer"]
+    command: ["serve", "--state", "/state", "--roles", "docs", "--no-signer", "--listen", "0.0.0.0:443", "--listen-any-interface"]
     networks: {aauth: {aliases: [docs.aauth.test]}}
     healthcheck:
       <<: *health

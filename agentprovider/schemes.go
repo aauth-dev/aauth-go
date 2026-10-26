@@ -244,7 +244,11 @@ func sfString(s string) string {
 // ReplayCache remembers naming-JWT identifiers until they expire, so a
 // captured refresh request cannot be replayed (bootstrap §8.1).
 type ReplayCache interface {
-	// Remember records key until exp and reports whether it was new.
+	// Remember records key until exp and reports whether it was new. The
+	// provider's keys are "<durable key's thumbprint URI>|<jti>"; an
+	// implementation should bound the entries one durable key holds, and
+	// refuse beyond it with ErrReplayGroupFull, so one enrolled key
+	// cannot fill the cache.
 	Remember(ctx context.Context, key string, exp time.Time) (bool, error)
 }
 
@@ -256,21 +260,46 @@ const DefaultMaxNamingJWTLifetime = 10 * time.Minute
 // MaxEntries is zero.
 const DefaultReplayCacheEntries = 100_000
 
+// DefaultReplayEntriesPerGroup is how many unexpired entries one durable
+// key may hold in a [MemoryReplayCache] whose MaxEntriesPerGroup is zero:
+// that many refreshes per naming-JWT lifetime.
+const DefaultReplayEntriesPerGroup = 64
+
 // ErrReplayCacheFull means a [ReplayCache] cannot admit another entry. The
 // provider fails closed: it refuses the request rather than forget an
 // identifier a captured request could replay.
 var ErrReplayCacheFull = errors.New("agentprovider: replay cache is full")
 
+// ErrReplayGroupFull means one durable key holds as many unexpired
+// entries as a [ReplayCache] admits for it; the provider answers 429
+// rate_limited.
+var ErrReplayGroupFull = errors.New("agentprovider: too many recent refreshes for this key")
+
 // MemoryReplayCache is an in-process [ReplayCache]. It holds at most
-// MaxEntries unexpired identifiers; beyond that Remember fails with
-// [ErrReplayCacheFull].
+// MaxEntries unexpired identifiers, and at most MaxEntriesPerGroup for one
+// group (the part of the key before the first '|': the durable key);
+// beyond them Remember fails with [ErrReplayCacheFull] or
+// [ErrReplayGroupFull].
 type MemoryReplayCache struct {
 	// MaxEntries bounds the cache; zero means [DefaultReplayCacheEntries].
 	MaxEntries int
+	// MaxEntriesPerGroup bounds one group; zero means
+	// [DefaultReplayEntriesPerGroup].
+	MaxEntriesPerGroup int
 
 	mu        sync.Mutex
 	seen      map[string]time.Time
+	groups    map[string]int
 	nextPrune time.Time
+}
+
+// replayGroup is key's group: the part before the first '|', or "" for
+// none.
+func replayGroup(key string) string {
+	if g, _, ok := strings.Cut(key, "|"); ok {
+		return g
+	}
+	return ""
 }
 
 // replayPruneInterval is the longest the cache goes between scans for
@@ -290,27 +319,51 @@ func (c *MemoryReplayCache) Remember(_ context.Context, key string, exp time.Tim
 	if c.seen == nil {
 		c.seen = map[string]time.Time{}
 	}
+	if c.groups == nil {
+		c.groups = map[string]int{}
+	}
 	now := time.Now()
 	limit := c.MaxEntries
 	if limit <= 0 {
 		limit = DefaultReplayCacheEntries
 	}
+	perGroup := c.MaxEntriesPerGroup
+	if perGroup <= 0 {
+		perGroup = DefaultReplayEntriesPerGroup
+	}
 	if e, ok := c.seen[key]; ok && now.Before(e) {
 		return false, nil
 	}
-	if len(c.seen) >= limit || !now.Before(c.nextPrune) {
+	group := replayGroup(key)
+	if len(c.seen) >= limit || c.groups[group] >= perGroup || !now.Before(c.nextPrune) {
 		for k, e := range c.seen {
 			if !now.Before(e) {
-				delete(c.seen, k)
+				c.forget(k)
 			}
 		}
 		c.nextPrune = now.Add(replayPruneInterval)
-		if len(c.seen) >= limit {
+		switch {
+		case len(c.seen) >= limit:
 			return false, ErrReplayCacheFull
+		case group != "" && c.groups[group] >= perGroup:
+			return false, ErrReplayGroupFull
 		}
+	}
+	if _, ok := c.seen[key]; !ok && group != "" {
+		c.groups[group]++
 	}
 	c.seen[key] = exp
 	return true, nil
+}
+
+// forget removes key; c.mu is held.
+func (c *MemoryReplayCache) forget(key string) {
+	delete(c.seen, key)
+	if g := replayGroup(key); g != "" {
+		if c.groups[g]--; c.groups[g] <= 0 {
+			delete(c.groups, g)
+		}
+	}
 }
 
 var errReplay = errors.New("agentprovider: naming JWT replayed")

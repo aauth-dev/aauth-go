@@ -100,11 +100,18 @@ var DefaultJWKSCache = &JWKSCache{}
 //
 //   - responses are cached, honoring Cache-Control max-age / no-cache /
 //     no-store and Expires, else for TTL;
-//   - an unknown kid refreshes the set, but no issuer is fetched more than
-//     once per MinRefresh;
+//   - an unknown kid refreshes the set, but no (issuer, document) is
+//     fetched more than once per MinRefresh. Only the four AAuth metadata
+//     document names are accepted as dwk (see [ValidateDWK]), so an issuer
+//     is fetched at most four times per MinRefresh;
 //   - on a failed fetch the cached set keeps serving, and retries back off
 //     exponentially;
-//   - a set older than MaxAge is discarded regardless of cache headers.
+//   - a set older than MaxAge is discarded regardless of cache headers;
+//   - when full, the least recently used idle entry is evicted. Entries
+//     that have never fetched a key set are limited to a quarter of
+//     MaxEntries (at least 16), and a new issuer evicts one of those first,
+//     so a flood of requests naming unknown issuers cannot push out
+//     issuers whose keys are in use.
 //
 // The zero value is ready to use. A JWKSCache is safe for concurrent use.
 type JWKSCache struct {
@@ -118,18 +125,22 @@ type JWKSCache struct {
 	// (default DefaultJWKSTTL).
 	TTL time.Duration
 	// MaxEntries bounds the number of cached issuers (default
-	// DefaultJWKSMaxEntries); the least recently fetched entry is evicted.
+	// DefaultJWKSMaxEntries); the least recently used idle entry is
+	// evicted.
 	MaxEntries int
 	// Now returns the current time; nil means time.Now.
 	Now func() time.Time
 
 	mu      sync.Mutex
 	entries map[string]*jwksEntry
+	uses    uint64 // use counter, for least-recently-used eviction
 }
 
 type jwksEntry struct {
 	mu          entryLock
-	users       int // callers holding or awaiting the entry; guarded by JWKSCache.mu
+	users       int    // callers holding or awaiting the entry; guarded by JWKSCache.mu
+	lastUse     uint64 // JWKSCache.uses at the last use; guarded by JWKSCache.mu
+	proven      bool   // a key set is cached (have, as of the last use); guarded by JWKSCache.mu
 	set         JWKS
 	have        bool
 	fetched     time.Time // last successful fetch
@@ -180,46 +191,77 @@ func orDefault[T int | time.Duration](v, d T) T {
 	return d
 }
 
-// entry returns the cache entry for (iss, dwk), creating it and evicting
-// the least recently attempted idle entry when the cache is full. The caller
-// must [JWKSCache.release] the entry. When it is full and every entry is in
-// use, nothing can be evicted and the new issuer is
-// refused with [ErrJWKSCacheFull], so the bound holds against requests that
-// name many slow issuers.
+// entry returns the cache entry for (iss, dwk), creating it when absent.
+// The caller must [JWKSCache.release] the entry.
+//
+// A new entry has no key set yet. When the cache already holds its limit of
+// such entries, or MaxEntries in all, an idle entry is evicted: one without
+// a key set first, else the least recently used. An entry in use is never
+// evicted; when nothing can be, the new issuer is refused with
+// [ErrJWKSCacheFull], so the bound holds against requests that name many
+// slow issuers.
 func (c *JWKSCache) entry(iss, dwk string) (*jwksEntry, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
 		c.entries = map[string]*jwksEntry{}
 	}
+	c.uses++
 	key := iss + "\x00" + dwk
 	if e, ok := c.entries[key]; ok {
 		e.users++
+		e.lastUse = c.uses
 		return e, nil
 	}
-	if len(c.entries) >= orDefault(c.MaxEntries, DefaultJWKSMaxEntries) {
-		var oldestKey string
-		var oldest time.Time
-		for k, e := range c.entries {
-			// An entry that has been handed to a caller (fetching, or
-			// waiting to) is in use; evicting it would detach that caller
-			// from the cache and let the bound be exceeded.
-			if e.users > 0 {
-				continue
-			}
-			// Idle, so no one holds its lock and lastAttempt is stable.
-			if oldestKey == "" || e.lastAttempt.Before(oldest) {
-				oldestKey, oldest = k, e.lastAttempt
-			}
+	maxEntries := orDefault(c.MaxEntries, DefaultJWKSMaxEntries)
+	unproven := 0
+	for _, e := range c.entries {
+		if !e.proven {
+			unproven++
 		}
-		if oldestKey == "" {
+	}
+	switch {
+	case unproven >= maxUnproven(maxEntries):
+		if !c.evictLocked(false) {
 			return nil, ErrJWKSCacheFull
 		}
-		delete(c.entries, oldestKey)
+	case len(c.entries) >= maxEntries:
+		if !c.evictLocked(false) && !c.evictLocked(true) {
+			return nil, ErrJWKSCacheFull
+		}
 	}
-	e := &jwksEntry{mu: newEntryLock(), users: 1}
+	e := &jwksEntry{mu: newEntryLock(), users: 1, lastUse: c.uses}
 	c.entries[key] = e
 	return e, nil
+}
+
+// maxUnproven is how many entries without a key set the cache holds: a
+// quarter of maxEntries, at least 16 (but no more than maxEntries).
+func maxUnproven(maxEntries int) int {
+	return max(maxEntries/4, min(maxEntries, 16))
+}
+
+// evictLocked removes the least recently used idle entry whose proven
+// flag equals proven, reporting whether there was one. c.mu must be held.
+func (c *JWKSCache) evictLocked(proven bool) bool {
+	var victim string
+	var oldest uint64
+	for k, e := range c.entries {
+		// An entry that has been handed to a caller (fetching, or waiting
+		// to) is in use; evicting it would detach that caller from the
+		// cache and let the bound be exceeded.
+		if e.users > 0 || e.proven != proven {
+			continue
+		}
+		if victim == "" || e.lastUse < oldest {
+			victim, oldest = k, e.lastUse
+		}
+	}
+	if victim == "" {
+		return false
+	}
+	delete(c.entries, victim)
+	return true
 }
 
 // release returns an entry obtained from entry; it may then be evicted.
@@ -262,6 +304,10 @@ func (c *JWKSCache) key(ctx context.Context, hc *http.Client, iss, dwk, kid stri
 	if iss == "" || dwk == "" {
 		return JWK{}, fmt.Errorf("%w: iss/dwk required for JWKS discovery", ErrMissingClaim)
 	}
+	// Refuse an unknown dwk before it can create a cache entry or a fetch.
+	if err := ValidateDWK(dwk); err != nil {
+		return JWK{}, err
+	}
 	e, err := c.entry(iss, dwk)
 	if err != nil {
 		return JWK{}, err
@@ -271,6 +317,13 @@ func (c *JWKSCache) key(ctx context.Context, hc *http.Client, iss, dwk, kid stri
 		return JWK{}, err
 	}
 	defer e.mu.unlock()
+	// Publish whether the entry holds a key set, for eviction; this runs
+	// before the unlock above.
+	defer func() {
+		c.mu.Lock()
+		e.proven = e.have
+		c.mu.Unlock()
+	}()
 
 	now := c.now()
 	if e.have && now.Sub(e.fetched) >= orDefault(c.MaxAge, DefaultJWKSMaxAge) {

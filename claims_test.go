@@ -2,10 +2,13 @@ package aauth
 
 import (
 	"context"
+	"crypto"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,13 +128,75 @@ func TestCommonClaimRules(t *testing.T) {
 	}
 }
 
-func TestVerifyAuthTokenSelfSignedCnf(t *testing.T) {
+// cnfResolver records the cnf.jwk it is passed and returns that key.
+type cnfResolver struct{ got *JWK }
+
+func (r *cnfResolver) ResolveKey(_ context.Context, _, _, _ string, cnf *JWK) (crypto.PublicKey, error) {
+	r.got = cnf
+	return cnf.PublicKey()
+}
+
+func TestVerifyAuthTokenResolverGetsCnf(t *testing.T) {
 	// The resolver receives the token's cnf.jwk (it was once passed nil).
 	a := testAgent(t)
 	now := time.Now()
 	tok := mintTestAuth(t, a, a, "https://ps.example", "https://resource.example", now, nil)
-	if _, err := VerifyAuthToken(context.Background(), tok, "https://resource.example", AuthTokenVerifyOptions{TokenVerifyOptions: TokenVerifyOptions{Resolver: SelfSignedResolver{}}}); err != nil {
-		t.Fatalf("self-signed auth token: %v", err)
+	r := &cnfResolver{}
+	if _, err := VerifyAuthToken(context.Background(), tok, "https://resource.example", AuthTokenVerifyOptions{TokenVerifyOptions: TokenVerifyOptions{Resolver: r}}); err != nil {
+		t.Fatal(err)
+	}
+	if r.got == nil || r.got.Thumbprint() != a.Thumbprint() {
+		t.Fatalf("resolver got cnf %v", r.got)
+	}
+}
+
+// A self-signed key verifies top-level agent tokens only: with it as the
+// resolver, anyone could sign a person, auth or resource token naming a
+// trusted issuer.
+func TestSelfSignedResolverOnlyAgentTokens(t *testing.T) {
+	ctx := context.Background()
+	a := testAgent(t)
+	now := time.Now()
+	ss := TokenVerifyOptions{Resolver: SelfSignedResolver{}}
+	auth := mintTestAuth(t, a, a, "https://ps.example", "https://resource.example", now, nil)
+	if _, err := VerifyAuthToken(ctx, auth, "https://resource.example", AuthTokenVerifyOptions{TokenVerifyOptions: ss}); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("auth token: err = %v", err)
+	}
+	jwk := a.JWK()
+	person, err := MintPersonToken(PersonClaims{DWK: WellKnownPerson, Cnf: Cnf{JWK: &jwk}, RegisteredClaims: jwt.RegisteredClaims{
+		Issuer: "https://ps.example", Subject: "p", Audience: jwt.ClaimStrings{"https://resource.example"}, ID: "j",
+		IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute)),
+	}}, a.Key, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyPersonToken(ctx, person, "https://resource.example", ss); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("person token: err = %v", err)
+	}
+	// A dwk naming a server is refused by the resolver itself, so a
+	// resolver that wraps it is covered too.
+	if _, err := (SelfSignedResolver{}).ResolveKey(ctx, "https://ps.example", WellKnownPerson, "", &jwk); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("ResolveKey with dwk %s: err = %v", WellKnownPerson, err)
+	}
+	// A sub-agent token is signed by the parent's provider key.
+	sub, err := a.NewSubAgent("worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subTok, err := sub.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyAgentToken(ctx, subTok, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}}); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("sub-agent token: err = %v", err)
+	}
+	// A top-level agent token still verifies.
+	tok, err := a.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyAgentToken(ctx, tok, VerifyAgentTokenOptions{Resolver: SelfSignedResolver{}}); err != nil {
+		t.Errorf("agent token: %v", err)
 	}
 }
 
@@ -258,6 +323,37 @@ func TestWriteTokenError(t *testing.T) {
 		// A client reads the same code back.
 		if te := tokenErrorFrom(rec.Body.Bytes()); te == nil || te.Code != c.code {
 			t.Errorf("%v: client decode %v", c.err, te)
+		}
+	}
+}
+
+// Internal causes stay on the server: server_error and as_unreachable carry
+// no detail, while a classified token failure explains itself.
+func TestWriteTokenErrorDetail(t *testing.T) {
+	secret := "dial tcp 10.0.0.7:5432: connection refused"
+	for _, c := range []struct {
+		err        error
+		wantDetail bool
+	}{
+		{errors.New(secret), false},
+		{&TokenError{Code: TokenErrServerError, Err: errors.New(secret)}, false},
+		{&TokenError{Code: TokenErrASUnreachable, Err: errors.New(secret)}, false},
+		{NewTokenParamError(ParamPresentedToken, errors.New(secret)), false},
+		{NewTokenParamError(ParamPresentedToken, fmt.Errorf("%w: %s", ErrInvalidToken, "aud mismatch")), true},
+	} {
+		rec := httptest.NewRecorder()
+		WriteTokenError(rec, c.err)
+		var body struct {
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(body.Detail, secret) {
+			t.Errorf("%v: detail leaks the internal cause: %q", c.err, body.Detail)
+		}
+		if c.wantDetail != (body.Detail != "") {
+			t.Errorf("%v: detail %q", c.err, body.Detail)
 		}
 	}
 }

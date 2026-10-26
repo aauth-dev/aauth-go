@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -330,5 +331,19 @@ func TestTokenEndpointsMissionTerminated(t *testing.T) {
 	}
 	if errors.As(err, &te) {
 		t.Errorf("auth token endpoint: mission status error reported as token error %q", te.Code)
+	}
+}
+
+// A PS response larger than the response cap is refused rather than
+// buffered whole.
+func TestRequestPersonTokenResponseCap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		writeBody(t, w, `{"person_token":"%s"}`, strings.Repeat("A", maxDocumentBytes+1))
+	}))
+	t.Cleanup(srv.Close)
+	c := NewPSClient(srv.URL, testAgent(t))
+	if _, err := c.RequestPersonToken(context.Background(), PersonTokenRequest{Resource: testResource}); err == nil {
+		t.Fatal("oversized response accepted")
 	}
 }

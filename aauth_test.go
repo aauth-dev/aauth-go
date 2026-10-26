@@ -8,10 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func setBody(req *http.Request, body string) {
@@ -24,6 +27,18 @@ func testAgent(t *testing.T, opts ...AgentOption) *Agent {
 	id, err := ParseAgentIdentifier("aauth:claude-code@devbox.local")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// An agent's identifier is in its provider's domain.
+	var probe Agent
+	for _, o := range opts {
+		o(&probe)
+	}
+	if probe.Issuer != "" {
+		u, err := url.Parse(probe.Issuer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id.Domain = strings.ToLower(u.Hostname())
 	}
 	a, err := NewAgent(id, opts...)
 	if err != nil {
@@ -113,7 +128,7 @@ func TestSubAgentToken(t *testing.T) {
 	switch {
 	case !claims.IsSubAgent() || claims.ParentAgent != a.ID.String():
 		t.Fatalf("parent_agent = %q, want %q", claims.ParentAgent, a.ID)
-	case claims.Subject != "aauth:claude-code+worker-7@devbox.local":
+	case claims.Subject != "aauth:claude-code+worker-7@devbox.example":
 		t.Fatalf("sub = %q", claims.Subject)
 	case claims.Issuer != a.Issuer || claims.PS != testPS:
 		t.Fatalf("iss %q ps %q, want the parent's", claims.Issuer, claims.PS)
@@ -344,5 +359,81 @@ func writeBody(t testing.TB, w io.Writer, format string, args ...any) {
 	t.Helper()
 	if _, err := fmt.Fprintf(w, format, args...); err != nil {
 		t.Error(err)
+	}
+}
+
+// An agent provider names only its own agents: sub's domain is the host of
+// iss.
+func TestAgentTokenSubInIssuerDomain(t *testing.T) {
+	ctx := context.Background()
+	a := testAgent(t)
+	jwk := a.JWK()
+	mint := func(iss, sub string) string {
+		t.Helper()
+		now := time.Now()
+		tok, err := MintAgentToken(AgentClaims{DWK: WellKnownAgent, Cnf: Cnf{JWK: &jwk}, RegisteredClaims: jwt.RegisteredClaims{
+			Issuer: iss, Subject: sub, ID: "j", IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+		}}, a.Key, jwk.Kid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+	for _, c := range []struct {
+		name, iss, sub string
+		strict, ok     bool
+	}{
+		{"own domain", "https://evil.example", "aauth:admin@evil.example", true, true},
+		{"another provider's agent", "https://evil.example", "aauth:admin@trusted.example", false, false},
+		{"another provider's agent, strict", "https://evil.example", "aauth:admin@trusted.example", true, false},
+		{"subdomain", "https://evil.example", "aauth:admin@a.evil.example", false, false},
+		{"port ignored", "https://agent.example:8443", "aauth:a@agent.example", false, true},
+		{"loopback dev provider", "http://127.0.0.1:8080", "aauth:a@agent.example", false, true},
+		{"localhost dev provider", "http://localhost:8080", "aauth:a@agent.example", false, true},
+		{"loopback, strict", "http://127.0.0.1:8080", "aauth:a@agent.example", true, false},
+		{"no iss", "", "aauth:a@agent.example", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			resolver := StaticResolver{c.iss: a.JWKS()}
+			_, err := VerifyAgentToken(ctx, mint(c.iss, c.sub), VerifyAgentTokenOptions{Resolver: resolver, RequireProviderClaims: c.strict})
+			if c.ok && err != nil {
+				t.Fatal(err)
+			}
+			if !c.ok && !errors.Is(err, ErrInvalidToken) {
+				t.Fatalf("err = %v, want ErrInvalidToken", err)
+			}
+		})
+	}
+	// A self-hosted agent cannot be configured to issue another domain's
+	// identifier.
+	id, err := ParseAgentIdentifier("aauth:admin@trusted.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAgent(id, WithIssuer("https://evil.example")); err == nil {
+		t.Error("NewAgent accepted an identifier outside its issuer's domain")
+	}
+}
+
+// An agent token may live at most 24 hours unless the verifier raises the
+// ceiling.
+func TestAgentTokenLifetime(t *testing.T) {
+	a := testAgent(t, WithIssuer("https://agent.example"))
+	jwk := a.JWK()
+	now := time.Now()
+	tok, err := MintAgentToken(AgentClaims{DWK: WellKnownAgent, Cnf: Cnf{JWK: &jwk}, RegisteredClaims: jwt.RegisteredClaims{
+		Issuer: a.Issuer, Subject: a.ID.String(), ID: "j",
+		IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(10 * 365 * 24 * time.Hour)),
+	}}, a.Key, jwk.Kid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := VerifyAgentTokenOptions{Resolver: StaticResolver{a.Issuer: a.JWKS()}}
+	if _, err := VerifyAgentToken(context.Background(), tok, opts); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("10-year agent token: err = %v", err)
+	}
+	opts.MaxLifetime = 20 * 365 * 24 * time.Hour
+	if _, err := VerifyAgentToken(context.Background(), tok, opts); err != nil {
+		t.Fatalf("raised ceiling: %v", err)
 	}
 }

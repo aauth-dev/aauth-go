@@ -6,6 +6,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -74,7 +78,8 @@ func MintAgentToken(claims AgentClaims, key crypto.Signer, kid string) (string, 
 //   - StaticResolver: pre-configured issuer keys (air-gapped / pinned).
 //   - SelfSignedResolver: verify against the token's own cnf.jwk — the
 //     self-hosted/local shape where possession of the cnf key IS the
-//     identity and the verifier applies its own policy per agent.
+//     identity and the verifier applies its own policy per agent. It
+//     verifies top-level agent tokens only.
 //
 // ResolveKey returns the issuer's public key as a crypto.PublicKey
 // (ed25519.PublicKey or P-256 *ecdsa.PublicKey); keys decoded from a JWK
@@ -134,16 +139,44 @@ func classifyJWTError(err error) error {
 // signature (proof of possession is then established by the HTTP message
 // signature, which must use the same key). Suitable for local/self-hosted
 // agents where the verifier's policy layer decides what the identity may do.
-// It does not verify sub-agent tokens, which the parent's provider key signs
+//
+// It verifies top-level agent tokens only. Every claim of such a token,
+// including iss and sub, is asserted by the key holder itself, so key
+// policy on the key's thumbprint, not on sub. Person, auth and resource
+// tokens are refused, since the key that signs them must be the issuing
+// server's; so are sub-agent tokens, which the parent's provider key signs
 // over the sub-agent's own cnf key (§10.2.1): resolve the provider's key.
 type SelfSignedResolver struct{}
 
-// ResolveKey implements KeyResolver, returning the key from cnf.jwk.
-func (SelfSignedResolver) ResolveKey(_ context.Context, _, _, _ string, cnf *JWK) (crypto.PublicKey, error) {
+// ResolveKey implements KeyResolver, returning the key from cnf.jwk. It
+// refuses a dwk naming a server other than an agent provider.
+func (SelfSignedResolver) ResolveKey(_ context.Context, _, dwk, _ string, cnf *JWK) (crypto.PublicKey, error) {
+	if dwk != "" && dwk != WellKnownAgent {
+		return nil, fmt.Errorf("%w: a self-signed key verifies agent tokens only, not dwk %q", ErrInvalidToken, dwk)
+	}
 	if cnf == nil {
 		return nil, fmt.Errorf("%w: cnf.jwk", ErrMissingClaim)
 	}
 	return cnf.PublicKey()
+}
+
+// selfSigned marks the resolver for [jwtCheck], which refuses it for any
+// token but a top-level agent token.
+func (SelfSignedResolver) selfSigned() {}
+
+// checkSelfSigned refuses self-signed resolution of a token that a server's
+// key must sign: anything but a top-level agent token.
+func checkSelfSigned(resolver KeyResolver, typ string, claims aauthClaims) error {
+	if _, ok := resolver.(interface{ selfSigned() }); !ok {
+		return nil
+	}
+	if typ != TypAgent {
+		return fmt.Errorf("%w: a self-signed key cannot verify a %s", ErrInvalidToken, typ)
+	}
+	if ac, ok := claims.(*AgentClaims); ok && ac.IsSubAgent() {
+		return fmt.Errorf("%w: a self-signed key cannot verify a sub-agent token; resolve its provider's key", ErrInvalidToken)
+	}
+	return nil
 }
 
 // StaticResolver resolves issuers from a fixed map of iss → JWKS.
@@ -179,13 +212,21 @@ type VerifyAgentTokenOptions struct {
 	// Signature tunes HTTP message-signature verification in
 	// VerifyAndExtractAgent (validity window, required components, clock).
 	Signature RequestVerifyOptions
+	// MaxLifetime bounds the token's lifetime (exp − iat); zero means
+	// [MaxAgentTokenLifetime], the most a provider SHOULD issue (§5.3.1).
+	MaxLifetime time.Duration
 }
 
 // VerifyAgentToken verifies an aa-agent+jwt per draft -11 §5.3.3 and the
 // common JWT rules (§11.5.2) and returns its claims: typ, alg, signature,
 // iat REQUIRED (refused as [ErrClockSkew] when further ahead of the
-// verifier's clock than opts.Signature's window), and exp in the future
-// with no skew tolerance ([ErrExpired]). With RequireProviderClaims it also
+// verifier's clock than opts.Signature's window), a lifetime of at most
+// opts.MaxLifetime (24 hours by default), and exp in the future
+// with no skew tolerance ([ErrExpired]). sub must be an agent of iss: the
+// identifier's domain is the host of iss (§5.2), so a provider cannot name
+// another provider's agents; outside RequireProviderClaims an iss on a
+// loopback host may name any domain, for local development. Key agents by (iss, sub). With
+// RequireProviderClaims it also
 // requires dwk aauth-agent.json, jti, and iss and ps to be server
 // identifiers. The caller still MUST verify the HTTP message signature
 // against claims.Cnf.JWK — see [VerifyAndExtractAgent].
@@ -193,7 +234,10 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 	if opts.Resolver == nil {
 		return nil, errors.New("aauth: VerifyAgentTokenOptions.Resolver is required")
 	}
-	check := jwtCheck{typ: TypAgent, resolver: opts.Resolver, clock: opts.Signature}
+	check := jwtCheck{typ: TypAgent, maxLifetime: opts.MaxLifetime, resolver: opts.Resolver, clock: opts.Signature}
+	if check.maxLifetime <= 0 {
+		check.maxLifetime = MaxAgentTokenLifetime
+	}
 	if opts.RequireProviderClaims {
 		check.dwks = []string{WellKnownAgent}
 		check.issuer = func(iss string) error {
@@ -220,8 +264,12 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 	if claims.Subject == "" {
 		return nil, fmt.Errorf("%w: sub", ErrMissingClaim)
 	}
-	if _, err := ParseAgentIdentifier(claims.Subject); err != nil {
+	id, err := ParseAgentIdentifier(claims.Subject)
+	if err != nil {
 		return nil, fmt.Errorf("%w: sub: %w", ErrInvalidToken, err)
+	}
+	if err := checkAgentDomain(id, claims.Issuer, opts.RequireProviderClaims); err != nil {
+		return nil, err
 	}
 	if claims.ParentAgent != "" {
 		if _, err := ParseAgentIdentifier(claims.ParentAgent); err != nil {
@@ -242,6 +290,41 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 		return nil, err
 	}
 	return claims, nil
+}
+
+// checkAgentDomain requires the agent identifier's domain to be the host
+// of iss, the agent provider that issued it (draft -11 §5.1, §5.2): a
+// provider names only its own agents. The port of iss, if any, is ignored,
+// since an identifier's domain carries none. A token with no iss names no
+// provider, so its sub is only as good as the key that signed it.
+//
+// Unless strict, an iss on a loopback host (localhost, 127.0.0.0/8, ::1)
+// may name agents of any domain, so local development and tests can run
+// an agent provider on a loopback port while issuing its real domain's
+// identifiers. Strict verification requires an https server identifier,
+// which is never a loopback address with a port.
+func checkAgentDomain(id AgentIdentifier, iss string, strict bool) error {
+	if iss == "" {
+		return nil
+	}
+	u, err := url.Parse(iss)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("%w: iss %q is not a URL with a host", ErrInvalidToken, iss)
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, id.Domain) || (!strict && isLoopbackHost(host)) {
+		return nil
+	}
+	return fmt.Errorf("%w: sub %q is not an agent of iss %q (domain %q)", ErrInvalidToken, id, iss, host)
+}
+
+// isLoopbackHost reports whether host is localhost or a loopback address.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // VerifySubagentToken verifies a subagent_token request parameter (draft

@@ -203,15 +203,16 @@ func IssueResourceToken(p ResourceTokenParams, presented PresentedToken, key cry
 
 // verifyResourceJWT verifies the resource token itself (draft -11 §11.5.2
 // with typ aa-resource+jwt and dwk aauth-resource.json) and requires its
-// draft -11 claims.
-func verifyResourceJWT(ctx context.Context, token string, opts TokenVerifyOptions) (*ResourceClaims, error) {
+// draft -11 claims. maxLifetime, when not zero, bounds exp − iat.
+func verifyResourceJWT(ctx context.Context, token string, opts TokenVerifyOptions, maxLifetime time.Duration) (*ResourceClaims, error) {
 	claims := &ResourceClaims{}
 	check := jwtCheck{
-		typ:      TypResource,
-		dwks:     []string{WellKnownResource},
-		issuer:   func(iss string) error { return opts.checkServerIdentifier("iss", iss) },
-		resolver: opts.Resolver,
-		clock:    opts.Signature,
+		typ:         TypResource,
+		dwks:        []string{WellKnownResource},
+		maxLifetime: maxLifetime,
+		issuer:      func(iss string) error { return opts.checkServerIdentifier("iss", iss) },
+		resolver:    opts.Resolver,
+		clock:       opts.Signature,
 	}
 	if err := check.verify(ctx, token, claims); err != nil {
 		return nil, err
@@ -253,6 +254,10 @@ type ResourceTokenVerifyOptions struct {
 	// PresentedResolver, when set, locates the presented token's issuer
 	// key instead of Resolver.
 	PresentedResolver KeyResolver
+	// MaxLifetime bounds the resource token's lifetime (exp − iat); zero
+	// means [MaxResourceTokenLifetime], the most a resource SHOULD issue
+	// (§6.7.1).
+	MaxLifetime time.Duration
 	// CheckMission, when set and the resource token carries mission_s256,
 	// verifies that the mission is active and before its expires_at
 	// (step 4; a PS MUST). Its error is returned unchanged.
@@ -263,7 +268,8 @@ type ResourceTokenVerifyOptions struct {
 // PS or AS token endpoint — per draft -11 §6.7.2, and returns its claims
 // and the verified presented token:
 //
-//  1. the resource token per §11.5.2, with aud equal to opts.Audience;
+//  1. the resource token per §11.5.2, with aud equal to opts.Audience and
+//     a lifetime of at most opts.MaxLifetime (five minutes by default);
 //  2. agent_jkt equal to opts.AgentJKT;
 //  3. the presented token by its typ — a person token per §7.1.4 or an auth
 //     token per §9.4.3 (without the resource's record check) — with aud
@@ -288,7 +294,11 @@ func VerifyResourceToken(ctx context.Context, token string, opts ResourceTokenVe
 	invalid := func(format string, a ...any) error {
 		return NewTokenParamError(ParamResourceToken, fmt.Errorf("%w: "+format, append([]any{ErrInvalidToken}, a...)...))
 	}
-	rc, err := verifyResourceJWT(ctx, token, opts.TokenVerifyOptions)
+	maxLifetime := opts.MaxLifetime
+	if maxLifetime <= 0 {
+		maxLifetime = MaxResourceTokenLifetime
+	}
+	rc, err := verifyResourceJWT(ctx, token, opts.TokenVerifyOptions, maxLifetime)
 	if err != nil {
 		return nil, nil, NewTokenParamError(ParamResourceToken, err)
 	}
@@ -402,7 +412,7 @@ func VerifyResourceChallenge(ctx context.Context, token string, opts ResourceCha
 	if err != nil {
 		return nil, err
 	}
-	rc, err := verifyResourceJWT(ctx, token, opts.TokenVerifyOptions)
+	rc, err := verifyResourceJWT(ctx, token, opts.TokenVerifyOptions, 0)
 	if err != nil {
 		return nil, err
 	}

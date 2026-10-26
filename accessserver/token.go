@@ -116,6 +116,16 @@ func (s *Server) handle(ctx context.Context, ps string, body []byte, at time.Tim
 		res, err := s.conclude(ctx, j, d)
 		return res, nil, err
 	}
+	s.maybePrune(ctx)
+	if ceiling := limit(s.cfg.MaxPendingPerPS, DefaultMaxPendingPerPS); ceiling >= 0 {
+		n, err := s.cfg.Store.CountOpenPending(ctx, ps)
+		if err != nil {
+			return nil, nil, fmt.Errorf("accessserver: count pending: %w", err)
+		}
+		if n >= ceiling {
+			return problemResult(http.StatusTooManyRequests, aauth.ErrCodeRateLimited, "too many open pending requests"), nil, nil
+		}
+	}
 	p := &Pending{
 		PS: ps, Agent: j.agent.Subject, Resource: j.rc.Issuer, Scope: j.rc.Scope,
 		ResourceTokenIssuer: j.rc.Issuer, ResourceTokenJTI: j.rc.ID, Request: body, ReceivedAt: at,

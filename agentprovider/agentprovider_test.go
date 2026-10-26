@@ -93,7 +93,7 @@ func newAP(t *testing.T, att AttestationVerifier) *testAP {
 	var mu sync.Mutex
 	ap, err := New(Config{
 		HTTPClient: http.DefaultClient,
-		Issuer:     srv.URL, Domain: "ap.example", Key: key, Registrar: ta.reg, Attestation: att,
+		Issuer:     srv.URL, Key: key, Registrar: ta.reg, Attestation: att,
 		Metadata: aauth.AgentProviderMetadata{ServerMetadata: aauth.ServerMetadata{Name: "Test AP"}},
 		OnIssue: func(_ context.Context, it IssuedToken) {
 			mu.Lock()
@@ -147,7 +147,7 @@ func TestMetadataAndIssue(t *testing.T) {
 	c := ta.verify(t, tr.AgentToken)
 	jwk, _ := aauth.NewJWK(key.Public())
 	if c.Cnf.JWK.Thumbprint() != jwk.Thumbprint() || c.Issuer != ta.url || c.PS != "https://ps.example" ||
-		!strings.HasSuffix(c.Subject, "@ap.example") || tr.ExpiresIn > 1800 || len(ta.issued) != 1 {
+		!strings.HasSuffix(c.Subject, "@127.0.0.1") || tr.ExpiresIn > 1800 || len(ta.issued) != 1 {
 		t.Fatalf("claims %+v (%d s)", c, tr.ExpiresIn)
 	}
 	// The token works as an agent's token source.
@@ -330,7 +330,7 @@ func TestIssueAgentTokenDirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ExpiresAt.Sub(c.IssuedAt.Time) != aauth.MaxAgentTokenLifetime || ta.verify(t, tok).Subject != "aauth:session-42@ap.example" {
+	if c.ExpiresAt.Sub(c.IssuedAt.Time) != aauth.MaxAgentTokenLifetime || ta.verify(t, tok).Subject != "aauth:session-42@127.0.0.1" {
 		t.Fatalf("claims %+v", c)
 	}
 	for name, p := range map[string]AgentTokenParams{
@@ -386,9 +386,10 @@ func TestRevokeAgentTokenAtPS(t *testing.T) {
 func TestNewValidates(t *testing.T) {
 	key, _ := aauth.GenerateKey(aauth.AlgEd25519)
 	for name, c := range map[string]Config{
-		"issuer": {Key: key},
-		"key":    {Issuer: "https://ap.example"},
-		"domain": {Issuer: "https://ap.example", Key: key, Domain: "Bad Domain"},
+		"issuer":       {Key: key},
+		"key":          {Issuer: "https://ap.example"},
+		"domain":       {Issuer: "https://ap.example", Key: key, Domain: "Bad Domain"},
+		"other domain": {Issuer: "https://ap.example", Key: key, Domain: "agents.example"},
 	} {
 		if _, err := New(c); err == nil {
 			t.Errorf("%s accepted", name)
@@ -570,7 +571,7 @@ func TestClientEnroll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(agent.ID.String(), "@ap.example") || agent.Issuer != ta.url || agent.PS != "https://ps.example" {
+	if !strings.HasSuffix(agent.ID.String(), "@127.0.0.1") || agent.Issuer != ta.url || agent.PS != "https://ps.example" {
 		t.Fatalf("agent %s, issuer %q, PS %q", agent.ID, agent.Issuer, agent.PS)
 	}
 	// The first token is the enrollment's; no second issuance yet.

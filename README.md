@@ -254,8 +254,11 @@ ps, err := personserver.New(personserver.Config{
 	Store:          personserver.NewMemoryStore(),
 	InteractionURL: issuer + "/consent",
 	Decider: personserver.DeciderFunc(func(ctx context.Context, r *personserver.TokenRequest) (personserver.Decision, error) {
-		if r.Person == "" {
+		switch {
+		case r.Person == "":
 			return personserver.DeferInteraction(), nil // a new agent: the person signs in at /consent
+		case r.Chained && r.Mission == nil:
+			return personserver.DeferApproval(), nil // call chaining: ask the person
 		}
 		return personserver.Allow(personserver.Grant{}), nil
 	}),
@@ -270,9 +273,12 @@ ps.Register(mux)
 as.Register(mux)
 ```
 
-The consent page passes the `?code=` it receives to `ps.ConsumeCode`,
-authenticates the person, and calls `ps.Approve` with a `Grant` naming the
-person, which binds the agent. `ap.IssueAgentToken` issues tokens for agent
+The consent page passes the `?code=` it receives to `ps.LookupCode` to show
+the request, which does not consume the code. At the decision it
+authenticates the person, consumes the code as that person with
+`ps.ConsumeCode`, and calls `ps.Approve` with a `Grant` naming the person,
+which binds the agent, and the `Revision` of the request it showed.
+`ap.IssueAgentToken` issues tokens for agent
 keys the application has authorized. The PS routes live under `/ps/` by
 default, so agents find them with `PSClient.Discover`. The full,
 compile-checked version is
@@ -421,7 +427,7 @@ aauth-sandbox serve
 curl http://127.0.0.1:8099/https://resource.aauth.test/api/documents
 ```
 
-It also runs in Docker (`deploy/docker`), one container for every role or one per role, and fronts a resource of your own at `https://<name>.aauth.test` with `--upstream`. See the [sandbox guide](docs/guides/sandbox.md).
+It listens on loopback only. It also runs in Docker (`deploy/docker`), one container for every role or one per role, and fronts a resource of your own at `https://<name>.aauth.test` with `--upstream`. See the [sandbox guide](docs/guides/sandbox.md).
 
 ## Examples
 

@@ -197,6 +197,7 @@ func verifyAuthJWT(ctx context.Context, token, aud string, opts TokenVerifyOptio
 		dwks:        []string{WellKnownAccess, WellKnownPerson},
 		maxLifetime: MaxAuthTokenLifetime,
 		issuer:      func(iss string) error { return opts.checkServerIdentifier("iss", iss) },
+		trust:       opts.trust,
 		resolver:    opts.Resolver,
 		clock:       opts.Signature,
 	}
@@ -246,6 +247,13 @@ type AuthTokenVerifyOptions struct {
 // (iss, sub) record check. A person token is rejected (wrong typ, §13.11).
 // Binding cnf.jwk to the HTTP signature is completed by
 // [VerifyAndExtractAuth].
+//
+// It accepts an auth token from any issuer the resolver has keys for, with
+// either dwk. The caller decides who may issue: in four-party only the
+// resource's access server (dwk aauth-access.json), in three-party only a
+// person server it trusts (dwk aauth-person.json, which makes ps equal
+// iss). Otherwise a person server trusted for person tokens can grant
+// itself any scope. [ResourceGuard] applies this rule.
 func VerifyAuthToken(ctx context.Context, token, resourceURL string, opts AuthTokenVerifyOptions) (*AuthClaims, error) {
 	claims, err := verifyAuthJWT(ctx, token, resourceURL, opts.TokenVerifyOptions)
 	if err != nil {

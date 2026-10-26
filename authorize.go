@@ -208,7 +208,8 @@ type PendingInteraction struct {
 // AuthorizationHandler serves a resource's authorization endpoint (draft
 // -11 §6.6). It accepts POST with a JSON body, verifies the person token
 // and the request signature (§7.1.4, with the body covered by a digest),
-// and asks Decide. Requests without a person token are answered with
+// and asks Decide. Person tokens are accepted only from issuers
+// TrustIssuer accepts. Requests without a person token are answered with
 // requirement=person-token (§6.4); failed verification with 401 and
 // Signature-Error (§6.6.3).
 //
@@ -222,6 +223,12 @@ type AuthorizationHandler struct {
 	Resource string
 	// Verify configures person token verification.
 	Verify TokenVerifyOptions
+	// TrustIssuer decides whether the endpoint accepts person tokens from
+	// the person server iss, before its keys are resolved; a valid
+	// signature proves only that iss signed the token. A refused issuer is
+	// answered 403. Required: without it every request is answered 500.
+	// See [TrustIssuers].
+	TrustIssuer func(ctx context.Context, iss string) error
 	// Decide decides on a verified request.
 	Decide func(ctx context.Context, r *http.Request, person *PersonClaims, req AuthorizeRequest) (AuthorizeDecision, error)
 }
@@ -246,9 +253,18 @@ func (h *AuthorizationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		ChallengePersonToken(w)
 		return
 	}
+	if h.TrustIssuer == nil {
+		WriteProblem(w, http.StatusInternalServerError, ErrCodeServerError, "AuthorizationHandler.TrustIssuer is not set")
+		return
+	}
 	opts := h.Verify
 	opts.Signature.RequireBodyCoverage = true
+	opts.trust = func(ctx context.Context, iss, _ string) error { return h.TrustIssuer(ctx, iss) }
 	person, err := VerifyAndExtractPerson(r.Context(), r, h.Resource, opts)
+	if errors.Is(err, ErrUntrustedIssuer) {
+		WriteProblem(w, http.StatusForbidden, ErrCodeInvalidRequest, err.Error())
+		return
+	}
 	if err != nil {
 		WriteSignatureFailure(w, err)
 		return

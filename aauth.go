@@ -39,7 +39,9 @@
 // autonomous coding agents on developer machines are. Verification trust is
 // pluggable via [KeyResolver]: [JWKSResolver] for public discovery,
 // [StaticResolver] for pinned keys (offline / air-gapped), and
-// [SelfSignedResolver] for local agents.
+// [SelfSignedResolver] for local agents' tokens (agent tokens only; the
+// keys of person, access and resource servers must come from one of the
+// others).
 //
 // # Server roles
 //

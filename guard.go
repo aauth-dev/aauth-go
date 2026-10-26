@@ -66,8 +66,10 @@ type Caller struct {
 	// TokenType is the type of the token the request presented: TypAgent,
 	// TypPerson or TypAuth.
 	TokenType string
-	// Agent is the agent identifier, known only from an agent token.
-	Agent string
+	// Agent is the agent identifier, known only from an agent token, and
+	// AgentIssuer is that token's iss, its agent provider. The identifier's
+	// domain is the provider's host, but key records by the pair.
+	Agent, AgentIssuer string
 	// AgentJKT is the JWK thumbprint of the key that signed the request,
 	// known for every token type.
 	AgentJKT string
@@ -77,11 +79,19 @@ type Caller struct {
 	Issuer, Subject string
 	// PS is the person's person server, for a person or an auth token.
 	PS string
-	// Scope is the scope an auth token grants.
-	Scope string
+	// Scope is the scope an auth token grants, and Account the account at
+	// this resource it grants it for (§11.11), if the token names one: a
+	// handler enforces per-account access against it.
+	Scope, Account string
+	// Tenant is the person's organization from a person or an auth token,
+	// if any; (Issuer, Tenant) names it.
+	Tenant string
 	// MissionS256 is the mission a person or an auth token was issued
 	// under (§8), if any.
 	MissionS256 string
+	// JTI is the presented token's jti. Its issuer is AgentIssuer for an
+	// agent token and Issuer otherwise; revocation is keyed by the pair.
+	JTI string
 }
 
 // HasScope reports whether the caller's auth token grants every value in
@@ -118,19 +128,34 @@ type ResourceGuardConfig struct {
 	KeyID string
 	// Audience is the server that redeems the resource's tokens: its
 	// access server in four-party. Empty is three-party: the agent's PS.
+	// It also decides who may issue the auth tokens the guard accepts: in
+	// four-party only Audience (iss Audience, dwk aauth-access.json), in
+	// three-party only a person server TrustIssuer accepts (dwk
+	// aauth-person.json, so ps is iss).
 	Audience string
 	// Verify resolves the keys of person servers and access servers, and
-	// of agent providers unless AgentResolver is set.
+	// of agent providers unless AgentResolver is set. Its Signature
+	// options apply to every request, whichever token it presents;
+	// Signature.Authority defaults to the host of Resource, so a request
+	// signed for another server is refused. Agent tokens are verified with
+	// RequireProviderClaims unless InsecureSkipIdentifierCheck is set.
 	Verify TokenVerifyOptions
 	// AgentResolver, when set, resolves agent token issuers' keys instead
 	// of Verify.Resolver.
 	AgentResolver KeyResolver
-	// TrustIssuer decides whether this resource accepts person and auth
-	// tokens from iss: a person server, or the access server it chose. A
-	// valid signature proves only that iss signed the token. Required
-	// when any operation requires more than AccessAgent; see
-	// [TrustIssuers].
+	// TrustIssuer decides whether this resource accepts tokens from the
+	// person server iss: its person tokens, and in three-party its auth
+	// tokens. A valid signature proves only that iss signed the token. It
+	// runs before the issuer's keys are resolved, so an untrusted issuer
+	// causes no key discovery. Required when any operation requires more
+	// than AccessAgent; see [TrustIssuers].
 	TrustIssuer func(ctx context.Context, iss string) error
+	// IsRevoked, when set, is asked about every token after it and the
+	// request signature verify: iss and jti name the token (§11.12).
+	// Return nil for a token in force, an error wrapping [ErrRevoked] for
+	// a revoked one (answered 401 revoked_jwt), or any other error when
+	// revocation state is unavailable (answered 500).
+	IsRevoked func(ctx context.Context, iss, jti string) error
 	// Metadata is published by [ResourceGuard.WellKnown]; its issuer and
 	// jwks_uri are filled in.
 	Metadata ResourceMetadata
@@ -180,6 +205,13 @@ type ResourceGuard struct {
 func NewResourceGuard(cfg ResourceGuardConfig) (*ResourceGuard, error) {
 	if cfg.Resource == "" {
 		return nil, errors.New("aauth: ResourceGuardConfig.Resource is required")
+	}
+	if cfg.Verify.Signature.Authority == "" {
+		authority, err := AuthorityOf(cfg.Resource)
+		if err != nil {
+			return nil, fmt.Errorf("aauth: ResourceGuardConfig.Resource: %w", err)
+		}
+		cfg.Verify.Signature.Authority = authority
 	}
 	if cfg.JWKSPath == "" {
 		cfg.JWKSPath = "/jwks.json"
@@ -259,23 +291,34 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 	ctx := r.Context()
 	switch typ {
 	case TypAgent:
-		agent, err := VerifyAndExtractAgent(ctx, r, VerifyAgentTokenOptions{Resolver: g.agentResolver()})
+		agent, err := VerifyAndExtractAgent(ctx, r, VerifyAgentTokenOptions{
+			Resolver:              g.agentResolver(),
+			RequireProviderClaims: !g.cfg.Verify.InsecureSkipIdentifierCheck,
+			Signature:             g.cfg.Verify.Signature,
+		})
 		if err != nil {
 			WriteSignatureFailure(w, err)
+			return nil, false
+		}
+		if !g.inForce(w, r, agent.Issuer, agent.ID) {
 			return nil, false
 		}
 		if access.Level > AccessAgent {
 			ChallengePersonToken(w)
 			return nil, false
 		}
-		return &Caller{TokenType: typ, Agent: agent.Subject, AgentJKT: agent.Cnf.JWK.Thumbprint()}, true
+		return &Caller{
+			TokenType: typ, Agent: agent.Subject, AgentIssuer: agent.Issuer, AgentJKT: agent.Cnf.JWK.Thumbprint(), JTI: agent.ID,
+		}, true
 	case TypPerson:
-		person, err := VerifyAndExtractPerson(ctx, r, g.cfg.Resource, g.cfg.Verify)
+		opts := g.cfg.Verify
+		opts.trust = g.trustPerson
+		person, err := VerifyAndExtractPerson(ctx, r, g.cfg.Resource, opts)
 		if err != nil {
-			WriteSignatureFailure(w, err)
+			g.writeFailure(w, err)
 			return nil, false
 		}
-		if !g.trusted(w, r, person.Issuer) {
+		if !g.inForce(w, r, person.Issuer, person.ID) {
 			return nil, false
 		}
 		if access.Level == AccessAuth {
@@ -285,19 +328,23 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 		return &Caller{
 			TokenType: typ, AgentJKT: person.Cnf.JWK.Thumbprint(),
 			Issuer: person.Issuer, Subject: person.Subject, PS: person.Issuer, MissionS256: person.MissionS256,
+			Tenant: person.Tenant, JTI: person.ID,
 		}, true
 	case TypAuth:
-		auth, err := VerifyAndExtractAuth(ctx, r, g.cfg.Resource, AuthTokenVerifyOptions{TokenVerifyOptions: g.cfg.Verify})
+		opts := g.cfg.Verify
+		opts.trust = g.trustAuth
+		auth, err := VerifyAndExtractAuth(ctx, r, g.cfg.Resource, AuthTokenVerifyOptions{TokenVerifyOptions: opts})
 		if err != nil {
-			WriteSignatureFailure(w, err)
+			g.writeFailure(w, err)
 			return nil, false
 		}
-		if !g.trusted(w, r, auth.Issuer) {
+		if !g.inForce(w, r, auth.Issuer, auth.ID) {
 			return nil, false
 		}
 		c := &Caller{
 			TokenType: typ, AgentJKT: auth.Cnf.JWK.Thumbprint(),
 			Issuer: auth.Issuer, Subject: auth.Subject, PS: auth.PS, Scope: auth.Scope, MissionS256: auth.MissionS256,
+			Account: auth.Account, Tenant: auth.Tenant, JTI: auth.ID,
 		}
 		if access.Level == AccessAuth && !c.HasScope(access.Scope) {
 			g.challengeAuth(w, auth, unionScope(auth.Scope, access.Scope))
@@ -309,18 +356,59 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 	return nil, false
 }
 
-// trusted applies TrustIssuer, answering 403 for an issuer the resource
-// does not accept.
-func (g *ResourceGuard) trusted(w http.ResponseWriter, r *http.Request, iss string) bool {
+// trustPerson applies TrustIssuer to a person token's issuer, before its
+// key is resolved.
+func (g *ResourceGuard) trustPerson(ctx context.Context, iss, _ string) error {
 	if g.cfg.TrustIssuer == nil {
-		WriteProblem(w, http.StatusForbidden, ErrCodeInvalidRequest, "this resource accepts no person or auth tokens")
-		return false
+		return fmt.Errorf("%w: this resource accepts no person or auth tokens", ErrUntrustedIssuer)
 	}
-	if err := g.cfg.TrustIssuer(r.Context(), iss); err != nil {
+	return g.cfg.TrustIssuer(ctx, iss)
+}
+
+// trustAuth decides who may issue an auth token, before its key is
+// resolved (draft -11 §9.4, §13): in four-party only the resource's
+// access server, in three-party only a trusted person server. Without
+// this, a person server trusted for person tokens could mint auth tokens
+// for any scope and bypass the access server.
+func (g *ResourceGuard) trustAuth(ctx context.Context, iss, dwk string) error {
+	if g.cfg.Audience != "" {
+		if iss != g.cfg.Audience || dwk != WellKnownAccess {
+			return fmt.Errorf("%w: this resource accepts auth tokens only from its access server %s", ErrUntrustedIssuer, g.cfg.Audience)
+		}
+		return nil
+	}
+	if dwk != WellKnownPerson {
+		return fmt.Errorf("%w: this resource accepts auth tokens only from a person server (dwk %s)", ErrUntrustedIssuer, WellKnownPerson)
+	}
+	return g.trustPerson(ctx, iss, dwk)
+}
+
+// inForce applies IsRevoked, answering a revoked token with 401
+// revoked_jwt and an unavailable answer with 500.
+func (g *ResourceGuard) inForce(w http.ResponseWriter, r *http.Request, iss, jti string) bool {
+	if g.cfg.IsRevoked == nil {
+		return true
+	}
+	err := g.cfg.IsRevoked(r.Context(), iss, jti)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, ErrRevoked):
+		WriteSignatureFailure(w, err)
+	default:
+		WriteProblem(w, http.StatusInternalServerError, ErrCodeServerError, "")
+	}
+	return false
+}
+
+// writeFailure answers a failed verification: 403 for an issuer the
+// resource does not accept, else 401 with Signature-Error.
+func (g *ResourceGuard) writeFailure(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrUntrustedIssuer) {
 		WriteProblem(w, http.StatusForbidden, ErrCodeInvalidRequest, err.Error())
-		return false
+		return
 	}
-	return true
+	WriteSignatureFailure(w, err)
 }
 
 // challengeAuth answers requirement=auth-token with a resource token for

@@ -19,6 +19,9 @@ type authorizeWorld struct {
 	// refuse, when set, may answer an authorization request before the
 	// handler does, returning true when it did.
 	refuse func(rw http.ResponseWriter) bool
+	// trusted lists the PSes the endpoint accepts (default: the world's).
+	trusted []string
+	ah      *AuthorizationHandler
 }
 
 func newAuthorizeWorld(t *testing.T) *authorizeWorld {
@@ -56,6 +59,14 @@ func newAuthorizeWorld(t *testing.T) *authorizeWorld {
 	w.resourceURL = url
 	ah.Resource = url
 	ah.Verify.Resolver = StaticResolver{w.psURL: w.psAgent.JWKS()}
+	ah.TrustIssuer = func(ctx context.Context, iss string) error {
+		trusted := w.trusted
+		if trusted == nil {
+			trusted = []string{w.psURL}
+		}
+		return TrustIssuers(trusted...)(ctx, iss)
+	}
+	w.ah = ah
 	return w
 }
 
@@ -312,5 +323,34 @@ func TestAuthorizeDoesNotRetryOtherRefusals(t *testing.T) {
 	}
 	if p := w2.personRequests.Load(); p != 2 {
 		t.Fatalf("person token requests %d, want 2", p)
+	}
+}
+
+// The endpoint accepts person tokens only from issuers TrustIssuer
+// accepts, and refuses to run without it.
+func TestAuthorizationHandlerTrustIssuer(t *testing.T) {
+	w := newAuthorizeWorld(t)
+	w.decide = func(context.Context, *http.Request, *PersonClaims, AuthorizeRequest) (AuthorizeDecision, error) {
+		t.Error("Decide called for an untrusted issuer")
+		return AuthorizeDecision{}, nil
+	}
+	w.trusted = []string{"https://other-ps.example"}
+	_, err := w.transport().Authorize(context.Background(), w.resourceURL, AuthorizeRequest{Scope: "files:read"})
+	var pe *ProblemError
+	if !errors.As(err, &pe) || pe.Status != http.StatusForbidden {
+		t.Fatalf("untrusted PS: err = %v", err)
+	}
+
+	person, err := w.transport().personToken(context.Background(), w.resourceURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.ah.TrustIssuer = nil
+	req := httptest.NewRequest(http.MethodPost, w.resourceURL+"/authorize", strings.NewReader(`{"scope":"files:read"}`))
+	AttachSignatureKey(req, person)
+	rec := httptest.NewRecorder()
+	w.ah.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("no TrustIssuer: %d", rec.Code)
 	}
 }

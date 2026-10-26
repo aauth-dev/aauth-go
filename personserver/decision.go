@@ -65,6 +65,11 @@ type Grant struct {
 	Mission *MissionGrant
 	// Answer is the person's answer to an interaction question.
 	Answer string
+	// Revision is the Pending.Revision of the request the person was
+	// shown ([Server.Approve] only): an approval of a request the agent
+	// has since replaced fails with ErrRequestChanged. Zero is the
+	// original request.
+	Revision int
 }
 
 // MissionGrant shapes the mission blob the PS approves (draft -11 §8.2).
@@ -146,7 +151,10 @@ type TokenRequest struct {
 	// Mission is the mission the request is made under, if any.
 	Mission *MissionRecord
 	// Chained reports a call chaining request (an upstream_token was
-	// verified, §10.1.1); Upstream is that token.
+	// verified, §10.1.1; only with Config.AllowCallChaining); Upstream is
+	// that token. Person is then the person behind the upstream token, not
+	// one the requesting agent is bound to: decide it on its own terms
+	// rather than as an ordinary request for a known person.
 	Chained  bool
 	Upstream aauth.PresentedToken
 	// Capabilities are the agent's capabilities for this request, from the

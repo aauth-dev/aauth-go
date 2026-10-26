@@ -33,6 +33,8 @@ aauth-sandbox serve
 
 Server identifiers are `https` origins without a port (draft-11 §11.1), so the sandbox listens on port 443. macOS lets ordinary users bind it; on Linux, grant `CAP_NET_BIND_SERVICE` or run it in a container.
 
+The roles listen on `127.0.0.1:443` and the signing helper on `127.0.0.1:8099`, on loopback only. Anyone who can reach the roles can read the trace, which holds every token, and get consent approved automatically; anyone who can reach the helper can sign requests as the test agent. `serve` refuses a non-loopback `--listen` or `--signer` address unless you also pass `--listen-any-interface` or `--signer-any-interface`. Use those flags only inside a container whose ports are published on the host's loopback address.
+
 Point the names at your machine, once:
 
 ```bash
@@ -61,17 +63,25 @@ docker compose -f deploy/docker/compose.roles.yaml up -d --build --wait
 deploy/docker/smoke.sh http://127.0.0.1:8099
 ```
 
-- **Ports.** `SIGNER_PORT` and `SANDBOX_HTTPS_PORT` change the host ports, for example `SIGNER_PORT=8199 docker compose -f deploy/docker/compose.yaml up -d`. Both are published on `127.0.0.1` only: the helper signs anything it is sent.
+- **Ports.** `SIGNER_PORT` and `SANDBOX_HTTPS_PORT` change the host ports, for example `SIGNER_PORT=8199 docker compose -f deploy/docker/compose.yaml up -d`. Both are published on `127.0.0.1` only.
 - **State.** The CA and keys live in a Compose volume, so they survive restarts. `docker compose … down -v` removes them. With one container per role, an `init` service creates the CA and every key before the roles start, so they never race to create them.
 - **CA certificate.** `docker compose -f deploy/docker/compose.yaml exec sandbox aauth-sandbox ca export --state /state > aauth-sandbox-ca.pem`.
 - **Health.** Each container's health check is `aauth-sandbox health`, which asks the roles it serves (and, with `--signer`, the helper) to answer. The image has no shell or curl.
 - **Image.** `deploy/docker/Dockerfile` builds a static binary on a distroless, non-root image: `docker build -f deploy/docker/Dockerfile -t aauth-sandbox:dev .`
 
+To run the image without Compose, publish its ports on the host's loopback address:
+
+```bash
+docker run --rm -p 127.0.0.1:443:443 -p 127.0.0.1:8099:8099 aauth-sandbox:dev
+```
+
+Do not publish them as `-p 443:443 -p 8099:8099`. Docker then listens on every interface of the host, and anyone on your network can read the trace, get consent approved and sign requests through the helper. Inside the container the sandbox listens on every interface (`--listen-any-interface`, `--signer-any-interface`), so the host-side address is the only thing that keeps it local.
+
 The CLI options the Compose files use are available outside Docker too: `--roles ps` serves only the person server and reaches the other roles at their usual names; `--roles none` runs only the signing helper; `aauth-sandbox init` creates the CA and every key ahead of time.
 
 ## Trust the Certificate Authority
 
-On first run the sandbox creates a certificate authority in `~/.aauth-sandbox` and a certificate for the role names. Export it and trust it where you need it:
+On first run the sandbox creates a certificate authority in `~/.aauth-sandbox` and a certificate for the role names. Export it and trust it only in the tools that call the sandbox:
 
 ```bash
 aauth-sandbox ca export > aauth-sandbox-ca.pem
@@ -79,7 +89,14 @@ aauth-sandbox ca export > aauth-sandbox-ca.pem
 
 - **Postman:** Settings > Certificates > CA certificates, then select `aauth-sandbox-ca.pem`.
 - **curl:** `--cacert aauth-sandbox-ca.pem`.
-- **Browsers:** add it to the system trust store, or accept the warning for the consent pages.
+- **Go and other clients:** add it to the client's own root pool, as `sandbox.NewClient` does.
+- **Browsers:** accept the warning for the consent pages, or trust the CA in a separate browser profile used only for the sandbox.
+
+Avoid adding it to your system trust store. The CA's private key sits unencrypted in the state directory, and every program on the machine would trust what it signs.
+
+The CA is limited to the sandbox's names. Its name constraints let it issue certificates only for the sandbox domain (`aauth.test` and its subdomains), `localhost`, any host name you serve outside the domain, and the loopback addresses; clients refuse a certificate it signs for any other site. It is valid for a year.
+
+The sandbox replaces the CA, and logs that it did, when the CA has less than 30 days left, when it has no name constraints (a CA created by an earlier version), or when you serve a host name it does not cover, such as `--upstream api.example.dev=...`. Export it again and trust the new one wherever you trusted the old. Keep upstream names under the sandbox domain (`--upstream petstore=...` is `petstore.aauth.test`) to avoid a new CA.
 
 ## Sign Requests with the Helper
 
@@ -108,6 +125,13 @@ Without `X-Sandbox-Present` or `X-Sandbox-Token`, the helper signs as the reques
 The helper adds `Content-Digest` to bodies and signs `@method`, `@authority`, `@path`, `signature-key`, and `content-digest`, `content-type` and `authorization` when present. It declares the agent's capabilities as `AAuth-Capabilities` to the resources, and as a `capabilities` member in JSON bodies sent to the PS when the body has none. Responses come back unchanged.
 
 `POST /sign` with `{"method", "url", "headers": [[name, value]], "body", "present", "token"}` returns the headers to add, for clients that send requests themselves.
+
+The helper is for tools on your machine, not for web pages:
+
+- **Hosts it answers at.** It answers only when the request's `Host` is `localhost`, a loopback address or the address it listens on. That keeps a web page from reaching it through a DNS name pointed at `127.0.0.1`. Add another name with `--signer-host`, for example the service name another container uses to reach it.
+- **Browser requests.** It refuses requests that carry `Origin`, or `Sec-Fetch-Site` set to `cross-site` or `same-site`, which browsers add for requests made by web pages. curl, Postman and Newman send neither. It answers `OPTIONS` itself and does not forward it.
+- **Targets.** It signs and forwards only to the sandbox's role origins, including `--remote` ones, and its `--upstream` hosts. Pass `--signer-any-target` to `serve` to sign for any `https` host.
+- **Redirects.** It returns a redirect to you as it received it and never follows it, so a signed request goes only to the URL you named.
 
 ### A Full Flow with curl
 
@@ -153,7 +177,7 @@ aauth-sandbox trace          # print
 aauth-sandbox trace --clear  # clear
 ```
 
-The same list is at `GET https://<any role host>/sandbox/trace`; `DELETE` clears it.
+The same list is at `GET https://<any role host>/sandbox/trace`; `DELETE` clears it. The trace holds every token the roles exchanged, so it refuses requests from web pages (those carrying `Origin`, or `Sec-Fetch-Site` set to `cross-site` or `same-site`). Opening it directly in a browser works.
 
 ## Test Another Implementation
 
@@ -163,7 +187,7 @@ Replace a role with an external implementation with `--remote`:
 aauth-sandbox serve --remote ps=https://ps.example.com
 ```
 
-The sandbox stops serving that role and calls the external origin instead: agent tokens name it as the agent's PS, and resources name it as the audience of their resource tokens.
+The sandbox stops serving that role and calls the external origin instead: agent tokens name it as the agent's PS, and resources name it as the audience of their resource tokens. The signing helper signs for the external origin too.
 
 ## Front Your Own Server
 

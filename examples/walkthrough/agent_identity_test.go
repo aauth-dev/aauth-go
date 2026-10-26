@@ -2,6 +2,7 @@ package walkthrough_test
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 // agentAPI is a resource that decides on the agent's identity alone.
 type agentAPI struct {
 	resolver aauth.KeyResolver
+	domain   string // the agent provider's domain
 }
 
 func (a *agentAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +28,7 @@ func (a *agentAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Decide on the agent: here, any agent from one provider's domain.
-	if !strings.HasSuffix(agent.Subject, "@agent.example") {
+	if !strings.HasSuffix(agent.Subject, "@"+a.domain) {
 		aauth.WriteProblem(w, http.StatusForbidden, aauth.ErrCodeInvalidRequest, "unknown agent")
 		return
 	}
@@ -36,7 +38,11 @@ func (a *agentAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func TestAgentIdentity(t *testing.T) {
 	w := newWorld(t)
-	resURL := serve(t, &agentAPI{resolver: aauth.NewJWKSResolver(w.hc)})
+	ap, err := url.Parse(w.apURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resURL := serve(t, &agentAPI{resolver: aauth.NewJWKSResolver(w.hc), domain: ap.Hostname()})
 	agent := enrollAgent(t, w)
 	ctx, hc := w.ctx, w.hc
 
