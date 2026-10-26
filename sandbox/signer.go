@@ -86,8 +86,13 @@ func (s *Sandbox) newSigner() (*Signer, error) {
 		return nil, err
 	}
 	hc := s.Client("agent")
+	// The helper returns redirects to its client unchanged: following one
+	// would send the signed request, and its token, to wherever the
+	// redirect points, past the checks on the target.
+	forward := *hc
+	forward.CheckRedirect = noRedirect
 	return &Signer{
-		sb: s, client: hc, durable: durable, ephemeral: ephemeral,
+		sb: s, client: &forward, durable: durable, ephemeral: ephemeral,
 		ap: &agentprovider.Client{BaseURL: s.cfg.URL(RoleAP), Paths: agentprovider.Paths{Token: PathEnroll, Refresh: PathAgentToken}, HTTPClient: hc},
 	}, nil
 }
