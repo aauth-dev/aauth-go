@@ -76,7 +76,7 @@ func TestLimiter(t *testing.T) {
 	// Revocations per issuer: rate_limited with Retry-After.
 	lim.block("revoke:")
 	ps := w.ps
-	ps.cfg.ServerResolver = aauth.StaticResolver{agentIssuer: w.agent.JWKS()}
+	ps.servers = aauth.StaticResolver{agentIssuer: w.agent.JWKS()}
 	rc := aauth.RevocationClient{HTTPClient: http.DefaultClient, Signer: aauth.ServerSigner{Issuer: agentIssuer, DWK: aauth.WellKnownAgent, Kid: w.agent.JWK().Kid, Key: w.agent.Key}}
 	_, err := rc.Revoke(ctx, w.psURL+"/ps/revoke", aauth.RevocationRequest{JTI: "x", Exp: time.Now().Add(time.Hour).Unix()})
 	var pe *aauth.ProblemError

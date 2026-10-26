@@ -61,7 +61,7 @@ func (s *Server) serveRevocation(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	now := s.now()
 	caller, err := aauth.VerifyServerRequest(ctx, r, aauth.VerifyServerOptions{
-		Resolver:                    s.servers(),
+		Resolver:                    s.servers,
 		Signature:                   s.signatureOptions(now),
 		InsecureSkipIdentifierCheck: s.cfg.InsecureSkipIdentifierCheck,
 	})
@@ -126,14 +126,6 @@ func (s *Server) serveRevocation(w http.ResponseWriter, r *http.Request) {
 	}
 	// A PS does not report downstream outcomes to its caller (§11.12.3).
 	w.WriteHeader(http.StatusOK)
-}
-
-// servers resolves server keys for requests signed under jwks_uri.
-func (s *Server) servers() aauth.KeyResolver {
-	if s.cfg.ServerResolver != nil {
-		return s.cfg.ServerResolver
-	}
-	return aauth.NewJWKSResolver(s.cfg.HTTPClient)
 }
 
 // cascade revokes a set of tokens the PS issued, once each, collecting

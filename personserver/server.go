@@ -199,6 +199,7 @@ type Server struct {
 	jwks     aauth.JWKS
 	tokens   aauth.KeyResolver // resource tokens, AS tokens, and our own
 	agents   aauth.KeyResolver
+	servers  aauth.KeyResolver // servers signing under jwks_uri (revocations)
 	mux      *http.ServeMux
 	waiters  waiters
 	subjects subjectDeriver
@@ -250,6 +251,12 @@ func New(cfg Config) (*Server, error) {
 		external = aauth.NewJWKSResolver(hc)
 	}
 	s.tokens = selfResolver{issuer: cfg.Issuer, dwk: aauth.WellKnownPerson, keys: s.jwks, next: external}
+	// One resolver for the server's lifetime, so its cache and refetch
+	// floor apply across revocation requests.
+	s.servers = cfg.ServerResolver
+	if s.servers == nil {
+		s.servers = aauth.NewJWKSResolver(hc)
+	}
 	s.mux = http.NewServeMux()
 	s.Register(s.mux)
 	return s, nil
