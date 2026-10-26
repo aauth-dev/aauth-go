@@ -10,6 +10,8 @@
       
       
       
+        <link rel="canonical" href="https://aauth-dev.github.io/aauth-go/guides/sandbox/">
+      
       
         <link rel="prev" href="../testing/">
       
@@ -770,6 +772,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#use-it-from-other-containers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use It from Other Containers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#test-another-implementation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1369,6 +1382,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#use-it-from-other-containers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Use It from Other Containers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#test-another-implementation" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1644,15 +1668,45 @@
 <a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>aauth-sandbox<span class="w"> </span>trace<span class="w"> </span>--clear<span class="w">  </span><span class="c1"># clear</span>
 </code></pre></div>
 <p>The same list is at <code>GET https://&lt;any role host&gt;/sandbox/trace</code>; <code>DELETE</code> clears it. The trace holds every token the roles exchanged, so it refuses requests from web pages (those carrying <code>Origin</code>, or <code>Sec-Fetch-Site</code> set to <code>cross-site</code> or <code>same-site</code>). Opening it directly in a browser works.</p>
+<h2 id="use-it-from-other-containers">Use It from Other Containers<a class="headerlink" href="#use-it-from-other-containers" title="Permanent link">&para;</a></h2>
+<p>A client or resource in its own container reaches the sandbox over a Compose network. Three things make that work:</p>
+<ul>
+<li><strong>Names.</strong> Give the sandbox service the role names as network aliases, so a container resolves <code>ap.aauth.test</code>, <code>ps.aauth.test</code> and the rest, and any <code>--upstream</code> name, to it.</li>
+<li><strong>The CA.</strong> Mount the sandbox's state volume read-only (<code>state:/state:ro</code>) and point the client at <code>/state/ca.pem</code>. The Petstore example below passes it as <code>--ca-file</code>.</li>
+<li><strong>The helper.</strong> A tool that calls the signing helper by service name, such as Newman, needs <code>--signer-host &lt;service&gt;</code>, because the helper answers only loopback names otherwise.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="nt">services</span><span class="p">:</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="w">  </span><span class="nt">sandbox</span><span class="p">:</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">aauth-sandbox:dev</span>
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;serve&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;--state&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;/state&quot;</span><span class="p p-Indicator">,</span>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">              </span><span class="s">&quot;--signer&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;0.0.0.0:8099&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;--signer-any-interface&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;--signer-host&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;sandbox&quot;</span><span class="p p-Indicator">,</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="w">              </span><span class="s">&quot;--upstream&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;petstore=http://petstore:8080&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">state:/state</span>
+<a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">    </span><span class="nt">networks</span><span class="p">:</span>
+<a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">      </span><span class="nt">default</span><span class="p">:</span>
+<a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">        </span><span class="nt">aliases</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">ap.aauth.test</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">ps.aauth.test</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">as.aauth.test</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">resource.aauth.test</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">docs.aauth.test</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">petstore.aauth.test</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">  </span><span class="nt">petstore</span><span class="p">:</span>
+<a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">petstore-server:dev</span>
+<a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">    </span><span class="nt">command</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;--listen&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;:8080&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;--auth&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;aauth&quot;</span><span class="p p-Indicator">,</span>
+<a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">              </span><span class="s">&quot;--url&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;https://petstore.aauth.test&quot;</span><span class="p p-Indicator">,</span>
+<a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">              </span><span class="s">&quot;--trust&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;https://ps.aauth.test&quot;</span><span class="p p-Indicator">,</span>
+<a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a><span class="w">              </span><span class="s">&quot;--ca-file&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;/state/ca.pem&quot;</span><span class="p p-Indicator">]</span>
+<a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a><span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
+<a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">state:/state:ro</span>
+<a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="nt">volumes</span><span class="p">:</span>
+<a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a><span class="w">  </span><span class="nt">state</span><span class="p">:</span>
+</code></pre></div>
+<p>The image's default command already listens on every interface, so a command of your own needs only the options you add. Do not drop <code>--listen-any-interface</code> if you replace the whole command: without it the roles listen on loopback and other containers get "connection refused".</p>
 <h2 id="test-another-implementation">Test Another Implementation<a class="headerlink" href="#test-another-implementation" title="Permanent link">&para;</a></h2>
 <p>Replace a role with an external implementation with <code>--remote</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>aauth-sandbox<span class="w"> </span>serve<span class="w"> </span>--remote<span class="w"> </span><span class="nv">ps</span><span class="o">=</span>https://ps.example.com
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>aauth-sandbox<span class="w"> </span>serve<span class="w"> </span>--remote<span class="w"> </span><span class="nv">ps</span><span class="o">=</span>https://ps.example.com
 </code></pre></div>
 <p>The sandbox stops serving that role and calls the external origin instead: agent tokens name it as the agent's PS, and resources name it as the audience of their resource tokens. The signing helper signs for the external origin too.</p>
 <h2 id="front-your-own-server">Front Your Own Server<a class="headerlink" href="#front-your-own-server" title="Permanent link">&para;</a></h2>
 <p>Run a resource you are developing behind the sandbox with <code>--upstream</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>petstore-server<span class="w"> </span>--listen<span class="w"> </span><span class="m">127</span>.0.0.1:8080<span class="w"> </span><span class="p">&amp;</span>
-<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>aauth-sandbox<span class="w"> </span>serve<span class="w"> </span>--upstream<span class="w"> </span><span class="nv">petstore</span><span class="o">=</span>http://127.0.0.1:8080
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>petstore-server<span class="w"> </span>--listen<span class="w"> </span><span class="m">127</span>.0.0.1:8080<span class="w"> </span><span class="p">&amp;</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>aauth-sandbox<span class="w"> </span>serve<span class="w"> </span>--upstream<span class="w"> </span><span class="nv">petstore</span><span class="o">=</span>http://127.0.0.1:8080
 </code></pre></div>
 <p>The sandbox serves <code>https://petstore.aauth.test</code> with its CA and passes each
 request to the server with its <code>Host</code> header, so the server's identifier is
@@ -1664,16 +1718,16 @@ petstore=...</code> prints it). The server itself fetches the PS's keys from
 <p>An agent of your own enrolls at the sandbox's agent provider with
 <code>agentprovider.Client.Enroll</code>, then calls the server through
 <code>aauth.Transport</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nx">ap</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">agentprovider</span><span class="p">.</span><span class="nx">Client</span><span class="p">{</span><span class="nx">BaseURL</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://ap.aauth.test&quot;</span><span class="p">,</span>
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="w">    </span><span class="nx">Paths</span><span class="p">:</span><span class="w"> </span><span class="nx">agentprovider</span><span class="p">.</span><span class="nx">Paths</span><span class="p">{</span><span class="nx">Token</span><span class="p">:</span><span class="w"> </span><span class="nx">sandbox</span><span class="p">.</span><span class="nx">PathEnroll</span><span class="p">},</span><span class="w"> </span><span class="nx">HTTPClient</span><span class="p">:</span><span class="w"> </span><span class="nx">hc</span><span class="p">}</span>
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ap</span><span class="p">.</span><span class="nx">Enroll</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a><span class="p">}</span>
-<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a><span class="nx">ps</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">NewPSClient</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">PS</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
-<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a><span class="nx">ps</span><span class="p">.</span><span class="nx">HTTPClient</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">hc</span>
-<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a><span class="nx">client</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">http</span><span class="p">.</span><span class="nx">Client</span><span class="p">{</span><span class="nx">Transport</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">NewTransport</span><span class="p">(</span><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="nx">ps</span><span class="p">)}</span>
-<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">client</span><span class="p">.</span><span class="nx">Get</span><span class="p">(</span><span class="s">&quot;https://petstore.aauth.test/pets&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nx">ap</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">agentprovider</span><span class="p">.</span><span class="nx">Client</span><span class="p">{</span><span class="nx">BaseURL</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://ap.aauth.test&quot;</span><span class="p">,</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="w">    </span><span class="nx">Paths</span><span class="p">:</span><span class="w"> </span><span class="nx">agentprovider</span><span class="p">.</span><span class="nx">Paths</span><span class="p">{</span><span class="nx">Token</span><span class="p">:</span><span class="w"> </span><span class="nx">sandbox</span><span class="p">.</span><span class="nx">PathEnroll</span><span class="p">},</span><span class="w"> </span><span class="nx">HTTPClient</span><span class="p">:</span><span class="w"> </span><span class="nx">hc</span><span class="p">}</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ap</span><span class="p">.</span><span class="nx">Enroll</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="p">}</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="nx">ps</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">NewPSClient</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">PS</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="nx">ps</span><span class="p">.</span><span class="nx">HTTPClient</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">hc</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="nx">client</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">http</span><span class="p">.</span><span class="nx">Client</span><span class="p">{</span><span class="nx">Transport</span><span class="p">:</span><span class="w"> </span><span class="nx">aauth</span><span class="p">.</span><span class="nx">NewTransport</span><span class="p">(</span><span class="nx">agent</span><span class="p">,</span><span class="w"> </span><span class="nx">ps</span><span class="p">)}</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">client</span><span class="p">.</span><span class="nx">Get</span><span class="p">(</span><span class="s">&quot;https://petstore.aauth.test/pets&quot;</span><span class="p">)</span>
 </code></pre></div>
 <h2 id="state">State<a class="headerlink" href="#state" title="Permanent link">&para;</a></h2>
 <p><code>~/.aauth-sandbox</code> (or <code>--state</code>) holds the CA (<code>ca.pem</code>, <code>ca-key.pem</code>) and each role's key under <code>keys/</code>. Keys persist across restarts, so tokens and thumbprints stay stable. Delete the directory to start over.</p>
