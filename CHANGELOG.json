@@ -98,7 +98,7 @@
           "breaking": true
         },
         {
-          "description": "Sandbox: `--listen` defaults to `127.0.0.1:443`; the Dockerfile and Compose files pass `--listen-any-interface`",
+          "description": "Sandbox: `--listen` defaults to `127.0.0.1:443`; the Dockerfile and Compose files pass `--listen-any-interface`. `sandbox.LoadOrCreateCA` takes optional domains, and `sandbox.Signer` is no longer comparable",
           "breaking": true
         }
       ],

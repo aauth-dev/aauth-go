@@ -189,6 +189,10 @@ was delivered, and the stored result is discarded.
   names it answers to.
 - The CA is replaced on the first run, because the old one has no name
   constraints. Trust the new `ca.pem` again in each tool.
+- In the `sandbox` package, `LoadOrCreateCA(dir, domains...)` takes the
+  domains the CA may sign for (default `aauth.test`); existing calls
+  compile. `Signer` gained a slice field (`Hosts`), so it can no longer be
+  compared with `==`.
 
 ## Migrating from v0.1 to v0.2
 
