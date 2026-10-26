@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	aauth "github.com/aauth-dev/aauth-go"
@@ -111,6 +112,17 @@ type Config struct {
 	PendingTTL             time.Duration
 	MaxWait                time.Duration
 	MaxClarificationRounds int
+	// MaxPendingPerPS bounds one PS's open pending requests (default
+	// [DefaultMaxPendingPerPS]; negative: unbounded); a request that would
+	// open one more is answered 429 rate_limited. MaxRevocationsPerIssuer
+	// bounds the unexpired revocations one PS or resource can have
+	// recorded (default [DefaultMaxRevocationsPerIssuer]; negative:
+	// unbounded). PruneInterval is how often expired records are discarded
+	// through [Store.Prune] from the request path (default one minute;
+	// negative: never, for hosts that call [Server.Prune] themselves).
+	MaxPendingPerPS         int
+	MaxRevocationsPerIssuer int
+	PruneInterval           time.Duration
 	// Limiter, when set, limits polls per pending request ("poll:",
 	// answered slow_down) and revocations per issuer ("revoke:", answered
 	// rate_limited with Retry-After).
@@ -139,6 +151,7 @@ type Server struct {
 	servers aauth.KeyResolver
 	mux     *http.ServeMux
 	waiters waiters
+	pruned  atomic.Int64 // unix nanoseconds of the last automatic prune
 	// authority is the AS's own host, which every request signature it
 	// verifies must cover as @authority.
 	authority string
@@ -322,6 +335,54 @@ func (w *waiters) notify(id string) {
 		default:
 		}
 	}
+}
+
+// Defaults for the bounds on stored state.
+const (
+	DefaultMaxPendingPerPS         = 10_000
+	DefaultMaxRevocationsPerIssuer = 100_000
+	// ClockSkew is how long past their expiry records are kept.
+	ClockSkew = 5 * time.Minute
+)
+
+// Prune discards the expired records in the Store: those whose lifetime
+// ended more than ClockSkew ago ([Store.Prune]).
+func (s *Server) Prune(ctx context.Context) error {
+	if err := s.cfg.Store.Prune(ctx, s.now().Add(-ClockSkew)); err != nil {
+		return fmt.Errorf("accessserver: prune: %w", err)
+	}
+	return nil
+}
+
+// maybePrune prunes when Config.PruneInterval has passed since the last
+// automatic prune; one caller does it, and failures are logged.
+func (s *Server) maybePrune(ctx context.Context) {
+	every := s.cfg.PruneInterval
+	if every < 0 {
+		return
+	}
+	if every == 0 {
+		every = time.Minute
+	}
+	now := s.now().UnixNano()
+	last := s.pruned.Load()
+	if now-last < int64(every) || !s.pruned.CompareAndSwap(last, now) {
+		return
+	}
+	if err := s.Prune(ctx); err != nil {
+		s.logger().ErrorContext(ctx, "accessserver: prune", "error", err)
+	}
+}
+
+// limit returns n's bound: def for zero, unbounded (-1) for negative.
+func limit(n, def int) int {
+	switch {
+	case n == 0:
+		return def
+	case n < 0:
+		return -1
+	}
+	return n
 }
 
 func (s *Server) allow(ctx context.Context, key string) (bool, time.Duration) {

@@ -79,6 +79,28 @@ func (s *Server) serveRevocation(w http.ResponseWriter, r *http.Request) {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "exp is beyond the longest token lifetime this access server accepts")
 		return
 	}
+	// Bound what one issuer can store; entries leave as they expire.
+	s.maybePrune(ctx)
+	if ceiling := limit(s.cfg.MaxRevocationsPerIssuer, DefaultMaxRevocationsPerIssuer); ceiling >= 0 {
+		n, err := s.cfg.Store.CountRevocations(ctx, caller.ID)
+		if err == nil && n >= ceiling {
+			// Revoking a token already revoked is still answered.
+			var again bool
+			if again, err = s.cfg.Store.IsRevoked(ctx, caller.ID, req.JTI); err == nil && again {
+				n = 0
+			}
+		}
+		if err != nil {
+			s.logger().ErrorContext(ctx, "accessserver: count revocations", "error", err)
+			aauth.WriteProblem(w, http.StatusInternalServerError, aauth.ErrCodeServerError, "")
+			return
+		}
+		if n >= ceiling {
+			w.Header().Set(aauth.HeaderRetryAfter, "60")
+			aauth.WriteProblem(w, http.StatusTooManyRequests, aauth.ErrCodeRateLimited, "too many revocations recorded for this issuer")
+			return
+		}
+	}
 	if err := s.cfg.Store.Revoke(ctx, caller.ID, req.JTI, exp); err != nil {
 		s.logger().ErrorContext(ctx, "accessserver: record revocation", "error", err)
 		aauth.WriteProblem(w, http.StatusInternalServerError, aauth.ErrCodeServerError, "")

@@ -56,9 +56,11 @@ type Store interface {
 	// presented token (iss, jti).
 	AuthTokensIssuedAgainst(ctx context.Context, iss, jti string) ([]AuthTokenRecord, error)
 	// Revoke records the revocation of (iss, jti) until exp; IsRevoked
-	// reports it.
+	// reports it. CountRevocations returns how many revocations of tokens
+	// issued by iss are recorded (Config.MaxRevocationsPerIssuer).
 	Revoke(ctx context.Context, iss, jti string, exp time.Time) error
 	IsRevoked(ctx context.Context, iss, jti string) (bool, error)
+	CountRevocations(ctx context.Context, iss string) (int, error)
 
 	// CreatePending stores a new pending request (Version 1).
 	CreatePending(ctx context.Context, p *Pending) error
@@ -73,21 +75,45 @@ type Store interface {
 	// PendingForResourceToken returns the open pending requests started
 	// for the resource token (iss, jti).
 	PendingForResourceToken(ctx context.Context, iss, jti string) ([]*Pending, error)
+	// CountOpenPending returns how many open pending requests the PS ps
+	// has (Config.MaxPendingPerPS).
+	CountOpenPending(ctx context.Context, ps string) (int, error)
+
+	// Prune discards the records whose lifetime ended before cutoff:
+	// pending requests whose ExpiresAt, and revocations and auth token
+	// records whose exp, is before it. The server calls it with the
+	// current time less clock skew every Config.PruneInterval, and
+	// [Server.Prune] on demand.
+	Prune(ctx context.Context, cutoff time.Time) error
 }
 
 // MemoryStore is an in-memory [Store] for tests and examples; state is
-// lost on restart and not shared between instances.
+// lost on restart and not shared between instances. Expired records are
+// discarded when Prune is called.
 type MemoryStore struct {
-	mu      sync.Mutex
-	auths   []AuthTokenRecord
-	revoked map[[2]string]time.Time
-	pending map[string][]byte
-	codes   map[string]string
+	mu       sync.Mutex
+	auths    []AuthTokenRecord
+	revoked  map[[2]string]time.Time
+	revCount map[string]int
+	pending  map[string][]byte
+	meta     map[string]pendingMeta
+	codes    map[string]string
+}
+
+// pendingMeta indexes a stored pending request, so lookups do not decode
+// every record.
+type pendingMeta struct {
+	ps           string
+	open         bool
+	rtIss, rtJTI string
+	code         string
+	expires      time.Time
 }
 
 // NewMemoryStore returns an empty MemoryStore.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{revoked: map[[2]string]time.Time{}, pending: map[string][]byte{}, codes: map[string]string{}}
+	return &MemoryStore{revoked: map[[2]string]time.Time{}, revCount: map[string]int{}, pending: map[string][]byte{},
+		meta: map[string]pendingMeta{}, codes: map[string]string{}}
 }
 
 var _ Store = (*MemoryStore)(nil)
@@ -120,8 +146,23 @@ func (m *MemoryStore) AuthTokensIssuedAgainst(_ context.Context, iss, jti string
 func (m *MemoryStore) Revoke(_ context.Context, iss, jti string, exp time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.revoked[[2]string{iss, jti}] = exp
+	k := [2]string{iss, jti}
+	if prev, ok := m.revoked[k]; ok {
+		if exp.Before(prev) {
+			exp = prev // never shorten a revocation
+		}
+	} else {
+		m.revCount[iss]++
+	}
+	m.revoked[k] = exp
 	return nil
+}
+
+// CountRevocations implements Store.
+func (m *MemoryStore) CountRevocations(_ context.Context, iss string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.revCount[iss], nil
 }
 
 // IsRevoked implements Store.
@@ -180,22 +221,60 @@ func (m *MemoryStore) UpdatePending(_ context.Context, p *Pending) error {
 func (m *MemoryStore) PendingForResourceToken(_ context.Context, iss, jti string) ([]*Pending, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ids := make([]string, 0, len(m.pending))
-	for id := range m.pending {
-		ids = append(ids, id)
+	var ids []string
+	for id, mt := range m.meta {
+		if mt.open && mt.rtIss == iss && mt.rtJTI == jti {
+			ids = append(ids, id)
+		}
 	}
 	slices.Sort(ids)
-	var out []*Pending
+	out := make([]*Pending, 0, len(ids))
 	for _, id := range ids {
 		p, err := m.get(id)
 		if err != nil {
 			return nil, err
 		}
-		if p.Open() && p.ResourceTokenIssuer == iss && p.ResourceTokenJTI == jti {
-			out = append(out, p)
-		}
+		out = append(out, p)
 	}
 	return out, nil
+}
+
+// CountOpenPending implements Store.
+func (m *MemoryStore) CountOpenPending(_ context.Context, ps string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, mt := range m.meta {
+		if mt.open && mt.ps == ps {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// Prune implements Store.
+func (m *MemoryStore) Prune(_ context.Context, cutoff time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, mt := range m.meta {
+		if mt.expires.Before(cutoff) {
+			delete(m.pending, id)
+			delete(m.meta, id)
+			if mt.code != "" && m.codes[mt.code] == id {
+				delete(m.codes, mt.code)
+			}
+		}
+	}
+	for k, exp := range m.revoked {
+		if exp.Before(cutoff) {
+			delete(m.revoked, k)
+			if m.revCount[k[0]]--; m.revCount[k[0]] <= 0 {
+				delete(m.revCount, k[0])
+			}
+		}
+	}
+	m.auths = slices.DeleteFunc(m.auths, func(r AuthTokenRecord) bool { return r.Exp.Before(cutoff) })
+	return nil
 }
 
 func (m *MemoryStore) put(p *Pending) error {
@@ -204,6 +283,8 @@ func (m *MemoryStore) put(p *Pending) error {
 		return err
 	}
 	m.pending[p.ID] = b
+	m.meta[p.ID] = pendingMeta{ps: p.PS, open: p.Open(), rtIss: p.ResourceTokenIssuer, rtJTI: p.ResourceTokenJTI,
+		code: p.CodeCanonical, expires: p.ExpiresAt}
 	if p.CodeCanonical != "" {
 		m.codes[p.CodeCanonical] = p.ID
 	}
