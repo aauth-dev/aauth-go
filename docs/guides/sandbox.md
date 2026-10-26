@@ -192,6 +192,7 @@ services:
   sandbox:
     image: aauth-sandbox:dev
     command: ["serve", "--state", "/state",
+              "--listen", "0.0.0.0:443", "--listen-any-interface",
               "--signer", "0.0.0.0:8099", "--signer-any-interface", "--signer-host", "sandbox",
               "--upstream", "petstore=http://petstore:8080"]
     volumes:
@@ -211,7 +212,7 @@ volumes:
   state:
 ```
 
-The image's default command already listens on every interface, so a command of your own needs only the options you add. Do not drop `--listen-any-interface` if you replace the whole command: without it the roles listen on loopback and other containers get "connection refused".
+A `command:` replaces the image's whole default command, which is what makes the roles and the helper listen on every interface inside the container. Keep `--listen 0.0.0.0:443 --listen-any-interface` and the helper's `--signer-any-interface` in a command of your own. Without them the roles listen on loopback and other containers get "connection refused". The ports you publish on the host stay on `127.0.0.1`, which is what keeps the sandbox local.
 
 ## Test Another Implementation
 
