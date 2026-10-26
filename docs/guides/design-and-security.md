@@ -29,12 +29,29 @@
   deliver revocations to endpoints that metadata names. With no client
   configured, these requests use `aauth.DiscoveryClient`. It allows https
   only, including redirects, and connects only to public unicast addresses,
-  checked after name resolution. It follows at most five redirects, ignores
+  checked after name resolution. It follows at most five redirects, all to the same host, ignores
   proxy settings from the environment, and times out after 10 seconds
   (signature-key §7.3). A client you pass to `NewJWKSResolver`,
   `RevocationClient`, or a server's `Config.HTTPClient` replaces it and
   should apply the same egress admission. In local development, pass a
   client that can reach your local servers.
+- **Signatures are bound to the server that receives them.** Servers and
+  `ResourceGuard` refuse a request whose signed `@authority` is not their own
+  host, so a server an agent calls cannot replay the request elsewhere. Set
+  `RequestVerifyOptions.Authority` (with `AuthorityOf`) when you verify
+  requests yourself. Verification reads at most
+  `DefaultMaxVerifyBodyBytes` of a body unless `MaxBodySize` says otherwise.
+- **Agent identifiers belong to their provider.** An agent token's `sub`
+  must be in the domain of its `iss`, so one agent provider cannot name
+  another's agents. `SelfSignedResolver` verifies only top-level agent
+  tokens; never use it to verify person, auth or resource tokens.
+- **Four-party resources accept auth tokens only from their access server.**
+  When `ResourceGuardConfig.Audience` names the access server, an auth
+  token must be issued by it; `TrustIssuer` covers person tokens and
+  three-party auth tokens.
+- **Consent covers what the person saw.** Approvals carry the `Revision` of
+  the request shown, and an agent cannot widen the scope of a request the
+  person already approved while an access server is deciding.
 - **In-memory stores and the `ratelimit` token bucket are single-instance.**
   Their state lives in one process. Run several instances only with shared
   `Store` and `Limiter` implementations.
