@@ -7,14 +7,19 @@ challenge (`requirement=auth-token`), and an auth token is served:
 
 ```go
 const self = "https://files.example" // the resource's server identifier
-verify := aauth.TokenVerifyOptions{Resolver: aauth.NewJWKSResolver(nil)} // nil: aauth.DiscoveryClient
+verify := aauth.TokenVerifyOptions{
+	Resolver: aauth.NewJWKSResolver(nil), // nil: aauth.DiscoveryClient
+	// Refuse a request the agent signed for another server.
+	Signature: aauth.RequestVerifyOptions{Authority: "files.example"},
+}
 
 // A valid signature proves the issuer signed the claims, not that this
 // resource should trust that issuer or its subjects. Token issuers are URLs
-// the request chooses, so accept only the person and access servers you have
-// chosen to trust, and key your own records by (iss, sub): sub is unique only
-// within its issuer (§9.4.3.2).
-trusted := map[string]bool{"https://ps.example": true, "https://as.example": true}
+// the request chooses, so accept only the person servers you have chosen to
+// trust, and key your own records by (iss, sub): sub is unique only within
+// its issuer (§9.4.3.2). In three-party, auth tokens come from those person
+// servers (dwk aauth-person.json); with an access server, only from it.
+trusted := map[string]bool{"https://ps.example": true}
 checkSubject := func(ctx context.Context, iss, sub string) error {
 	if !trusted[iss] {
 		return fmt.Errorf("%w: %s is not an issuer this resource accepts", aauth.ErrInvalidToken, iss)
@@ -41,6 +46,10 @@ handler := func(w http.ResponseWriter, r *http.Request) {
 			aauth.WriteSignatureFailure(w, err)
 			return
 		}
+		if claims.DWK != aauth.WellKnownPerson { // from a PS, so ps is iss
+			aauth.WriteProblem(w, http.StatusForbidden, aauth.ErrCodeInvalidRequest, "auth tokens are accepted from person servers only")
+			return
+		}
 		// The identity is (iss, sub), never sub alone. The granted scope is
 		// the issuer's claim: apply your own policy to it before acting.
 		serve(w, claims.Issuer, claims.Subject, claims.Scope)
@@ -48,6 +57,10 @@ handler := func(w http.ResponseWriter, r *http.Request) {
 		person, err := aauth.VerifyAndExtractPerson(r.Context(), r, self, verify)
 		if err != nil {
 			aauth.WriteSignatureFailure(w, err)
+			return
+		}
+		if !trusted[person.Issuer] {
+			aauth.WriteProblem(w, http.StatusForbidden, aauth.ErrCodeInvalidRequest, "person server not accepted")
 			return
 		}
 		rt, err := aauth.IssueResourceToken(
@@ -64,8 +77,9 @@ handler := func(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-In four-party mode, also restrict which access server may grant which scopes
-(draft -11 §13.7). The resource also serves `/.well-known/aauth-resource.json`
+In four-party mode, accept auth tokens only from the resource's own access
+server (`iss` equal to it, `dwk` `aauth-access.json`), never from a person
+server, and restrict which scopes it may grant (draft -11 §13.7). The resource also serves `/.well-known/aauth-resource.json`
 (`aauth.ResourceMetadata`) and the JWKS holding `resourceKey`. A resource that
 needs only the agent's identity stops at `aauth.VerifyAndExtractAgent`. For
 four-party access, set `ResourceTokenParams.Audience` to the resource's
@@ -100,8 +114,17 @@ mux.Handle("/", guard.WellKnown()) // metadata and keys
 ```
 
 In a handler, `aauth.CallerFromContext` returns who called: the token type,
-the agent's key thumbprint (and identifier, from an agent token), the
-person's `(Issuer, Subject)`, and the granted scope.
+the agent's key thumbprint (and, from an agent token, its identifier and
+provider `(AgentIssuer, Agent)`), the person's `(Issuer, Subject)` and
+`Tenant`, the granted `Scope` and `Account`, and the token's `JTI`.
+
+The guard refuses a request signed for another host (`Verify.Signature.Authority`
+defaults to the host of `Resource`). `TrustIssuer` names the person servers
+whose person tokens it accepts, and runs before their keys are fetched. Auth
+tokens are accepted in three-party only from those person servers, and with
+`Audience` set (four-party) only from that access server. Set `IsRevoked` to
+refuse tokens their issuer revoked (§11.12): it is asked about every token by
+`(iss, jti)`.
 
 | The operation requires | and the request presents | The guard answers |
 |---|---|---|
@@ -135,6 +158,8 @@ if !aauth.CanRaise(r, aauth.RequirementInteraction) {
 
 Agents can ask for a scope before calling (§6.6). `aauth.AuthorizationHandler`
 verifies the person token and the signature and asks your `Decide` function.
+Its required `TrustIssuer` names the person servers whose person tokens it
+accepts.
 Its `AuthorizeDecision` holds one of: a `ResourceToken` for the agent to
 redeem at its person server; a granted `Scope`, with an optional
 `SessionToken`, when the resource authorizes the agent itself; or `Pending`,

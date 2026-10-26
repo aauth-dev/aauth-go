@@ -100,7 +100,8 @@ func ExampleNewAgent_es256() {
 // Example_resource is a resource using PS authorization (three-party): it
 // answers an agent token with requirement=person-token, a verified person
 // token with a resource token challenge (requirement=auth-token), and
-// serves a request presenting a verified auth token.
+// serves a request presenting a verified auth token. [aauth.ResourceGuard]
+// applies the same rules for you.
 func Example_resource() {
 	const self = "https://files.example" // the resource's server identifier
 	key, err := aauth.GenerateKey(aauth.AlgEd25519)
@@ -114,15 +115,21 @@ func Example_resource() {
 	// Person and auth token keys are discovered from each issuer's JWKS.
 	// Token issuers are URLs the request chooses, so a nil client uses
 	// aauth.DiscoveryClient, which reaches only public https destinations.
-	verify := aauth.TokenVerifyOptions{Resolver: aauth.NewJWKSResolver(nil)}
+	// Authority refuses a request the agent signed for another server.
+	verify := aauth.TokenVerifyOptions{
+		Resolver:  aauth.NewJWKSResolver(nil),
+		Signature: aauth.RequestVerifyOptions{Authority: "files.example"},
+	}
 
 	// A valid signature proves the issuer signed the claims, not that the
 	// subject may use this resource. The resource keeps its own record of
 	// the people it serves, keyed by (iss, sub): sub is unique only within
 	// its issuer, so records from different issuers never match
 	// (§9.4.3.2). This one enrolls people on first use, but only from the
-	// person and access servers it has chosen to trust.
-	trusted := map[string]bool{"https://ps.example": true, "https://as.example": true}
+	// person servers it has chosen to trust. In three-party they issue its
+	// auth tokens too; a resource with an access server accepts auth
+	// tokens from that server alone.
+	trusted := map[string]bool{"https://ps.example": true}
 	var mu sync.Mutex
 	people := map[[2]string]bool{}
 	checkSubject := func(_ context.Context, iss, sub string) error {
@@ -153,6 +160,12 @@ func Example_resource() {
 				aauth.WriteSignatureFailure(w, err)
 				return
 			}
+			// From a PS, so ps is iss; dwk aauth-access.json would let a
+			// PS speak for another PS.
+			if claims.DWK != aauth.WellKnownPerson {
+				aauth.WriteProblem(w, http.StatusForbidden, aauth.ErrCodeInvalidRequest, "auth tokens are accepted from person servers only")
+				return
+			}
 			if _, err := fmt.Fprintf(w, "hello %s (%s)", claims.Subject, claims.Scope); err != nil {
 				log.Printf("write response: %v", err)
 			}
@@ -160,6 +173,10 @@ func Example_resource() {
 			person, err := aauth.VerifyAndExtractPerson(r.Context(), r, self, verify)
 			if err != nil {
 				aauth.WriteSignatureFailure(w, err)
+				return
+			}
+			if !trusted[person.Issuer] {
+				aauth.WriteProblem(w, http.StatusForbidden, aauth.ErrCodeInvalidRequest, "person server not accepted")
 				return
 			}
 			// The resource token's aud defaults to the person's PS.
