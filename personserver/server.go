@@ -202,6 +202,9 @@ type Server struct {
 	mux      *http.ServeMux
 	waiters  waiters
 	subjects subjectDeriver
+	// authority is the PS's own host, which every request signature it
+	// verifies must cover as @authority.
+	authority string
 }
 
 // New validates cfg and returns a Server.
@@ -230,7 +233,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.KeyID != "" {
 		jwk.Kid = cfg.KeyID
 	}
-	s := &Server{cfg: cfg, paths: cfg.Paths.withDefaults(), kid: jwk.Kid}
+	authority, err := aauth.AuthorityOf(cfg.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("personserver: Config.Issuer: %w", err)
+	}
+	s := &Server{cfg: cfg, paths: cfg.Paths.withDefaults(), kid: jwk.Kid, authority: authority}
 	s.jwks = aauth.JWKS{Keys: append([]aauth.JWK{jwk}, cfg.PublishedKeys...)}
 	s.subjects = subjectDeriver{key: cfg.SubjectKey}
 	hc := cfg.HTTPClient
@@ -314,13 +321,16 @@ func (s *Server) logger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// signatureOptions are the HTTP signature checks for agent requests to PS
-// endpoints (§11.3.4): content-digest and content-type covered on bodies.
+// signatureOptions are the HTTP signature checks for requests to PS
+// endpoints (§11.3.4): content-digest and content-type covered on bodies,
+// and @authority naming this PS, so a request signed for another server
+// cannot be replayed here.
 func (s *Server) signatureOptions(at time.Time) aauth.RequestVerifyOptions {
 	return aauth.RequestVerifyOptions{
 		Window:              s.cfg.SignatureWindow,
 		RequireBodyCoverage: true,
 		Now:                 func() time.Time { return at },
+		Authority:           s.authority,
 	}
 }
 
