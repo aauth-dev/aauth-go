@@ -59,7 +59,10 @@ type Pending struct {
 	Code           string   `json:"code,omitempty"`
 	CodeCanonical  string   `json:"code_canonical,omitempty"`
 	CodeConsumed   bool     `json:"code_consumed,omitempty"`
-	RetryAfter     int      `json:"retry_after,omitempty"`
+	// CodeConsumedBy is the person who consumed the code at their decision
+	// ([Server.ConsumeCode]).
+	CodeConsumedBy string `json:"code_consumed_by,omitempty"`
+	RetryAfter     int    `json:"retry_after,omitempty"`
 	// Claims are the identity claims the PS supplied (§9.2).
 	Claims map[string]any `json:"claims,omitempty"`
 	// Question awaits the PS's answer; Transcript holds earlier rounds.
@@ -110,14 +113,20 @@ func (s *Server) newPending(ctx context.Context, p *Pending, d Decision) error {
 	}
 	now := s.now()
 	p.ID, p.State, p.CreatedAt, p.ExpiresAt = base64.RawURLEncoding.EncodeToString(b), StatePending, now, now.Add(s.pendingTTL())
-	if err := s.applyDecision(p, d); err != nil {
-		return err
+	for attempt := 0; ; attempt++ {
+		if err := s.applyDecision(p, d); err != nil {
+			return err
+		}
+		err := s.cfg.Store.CreatePending(ctx, p)
+		if errors.Is(err, ErrCodeInUse) && attempt < 4 {
+			continue // another request holds the code: draw a new one
+		}
+		if err != nil {
+			return fmt.Errorf("accessserver: create pending: %w", err)
+		}
+		s.changed(ctx, p)
+		return nil
 	}
-	if err := s.cfg.Store.CreatePending(ctx, p); err != nil {
-		return fmt.Errorf("accessserver: create pending: %w", err)
-	}
-	s.changed(ctx, p)
-	return nil
 }
 
 // applyDecision sets the 202's requirement from a Deferred decision.
@@ -607,13 +616,19 @@ func (s *Server) reevaluate(ctx context.Context, id string, update func(*Pending
 		}
 		return s.resolve(ctx, id, res)
 	}
-	return s.mutate(ctx, id, func(p *Pending) error {
-		if !p.Open() {
-			return ErrResolved
+	for attempt := 0; ; attempt++ {
+		np, err := s.mutate(ctx, id, func(p *Pending) error {
+			if !p.Open() {
+				return ErrResolved
+			}
+			p.Deciding = false
+			return s.applyDecision(p, d)
+		})
+		if errors.Is(err, ErrCodeInUse) && attempt < 4 {
+			continue // another request holds the code: draw a new one
 		}
-		p.Deciding = false
-		return s.applyDecision(p, d)
-	})
+		return np, err
+	}
 }
 
 // release gives up a claim on pending id (Pending.Deciding) after a
@@ -665,7 +680,9 @@ func (s *Server) Approve(ctx context.Context, id string, revision int, scope str
 		case p.Revision != revision:
 			return ErrRequestChanged
 		}
-		p.Deciding = true
+		// An approval through another channel completes the interaction,
+		// which consumes its code.
+		p.Deciding, p.CodeConsumed = true, p.CodeConsumed || p.CodeCanonical != ""
 		return nil
 	})
 	if err != nil {
@@ -706,11 +723,21 @@ func (s *Server) Ask(ctx context.Context, id string, q Question) error {
 	return err
 }
 
-// ConsumeCode is called by the AS's interaction page when the person
-// arrives with ?code= (§11.6.3.1): it consumes the single-use code and
-// marks the request interacting. The page MUST authenticate the person
-// before approving.
-func (s *Server) ConsumeCode(ctx context.Context, code string) (*Pending, error) {
+// ErrClientRequired means LookupCode or ConsumeCode was called without a
+// client key, which the per-client rate limit needs.
+var ErrClientRequired = errors.New("accessserver: interaction code attempts need a client key")
+
+// codeAttempt rate-limits an interaction code attempt by client and finds
+// the open request the code names, brought up to date: an unknown,
+// malformed, or consumed code is ErrInvalidCode, and an expired request
+// ErrResolved.
+func (s *Server) codeAttempt(ctx context.Context, code, client string) (*Pending, error) {
+	if client == "" {
+		return nil, ErrClientRequired
+	}
+	if ok, wait := s.allow(ctx, "code:"+client); !ok {
+		return nil, &RateLimitError{RetryAfter: wait}
+	}
 	canon, err := interactioncode.Canonicalize(code)
 	if err != nil {
 		return nil, ErrInvalidCode
@@ -722,14 +749,66 @@ func (s *Server) ConsumeCode(ctx context.Context, code string) (*Pending, error)
 	if err != nil {
 		return nil, err
 	}
+	if p = s.step(ctx, p); !p.Open() {
+		return nil, ErrResolved
+	}
+	if p.CodeConsumed || p.CodeCanonical != canon {
+		return nil, ErrInvalidCode
+	}
+	return p, nil
+}
+
+// LookupCode is called by the AS's interaction page when a browser
+// arrives with ?code= (§11.6.3.1): it finds the request for the page to
+// show and marks it interacting, without consuming the code — a link
+// preview fetching the page cannot burn it. client identifies who is
+// entering codes (the browser's session or address) and must not be
+// empty: with Config.Limiter set, attempts are limited per client (key
+// "code:<client>"), and a limited attempt is *RateLimitError. An unknown,
+// malformed, or consumed code is ErrInvalidCode; an expired request
+// ErrResolved.
+func (s *Server) LookupCode(ctx context.Context, code, client string) (*Pending, error) {
+	p, err := s.codeAttempt(ctx, code, client)
+	if err != nil || p.State != StatePending {
+		return p, err
+	}
+	return s.mutate(ctx, p.ID, func(p *Pending) error {
+		if !p.Open() {
+			return ErrResolved
+		}
+		p.State = StateInteracting
+		return nil
+	})
+}
+
+// ConsumeCode consumes the single-use code at the person's decision, after
+// the page has authenticated person, and records who did
+// (Pending.CodeConsumedBy); then the page calls Approve or Deny. Errors
+// and the client key are as for [Server.LookupCode].
+func (s *Server) ConsumeCode(ctx context.Context, code, client, person string) (*Pending, error) {
+	if person == "" {
+		return nil, errors.New("accessserver: ConsumeCode needs the authenticated person")
+	}
+	p, err := s.codeAttempt(ctx, code, client)
+	if err != nil {
+		return nil, err
+	}
 	return s.mutate(ctx, p.ID, func(p *Pending) error {
 		switch {
-		case !p.Open():
+		case !p.Open() || p.Deciding:
 			return ErrResolved
 		case p.CodeConsumed:
 			return ErrInvalidCode
 		}
-		p.CodeConsumed, p.State = true, StateInteracting
+		p.CodeConsumed, p.CodeConsumedBy, p.State = true, person, StateInteracting
 		return nil
 	})
+}
+
+// RateLimitError is a refusal by Config.Limiter, with how long to wait.
+type RateLimitError struct{ RetryAfter time.Duration }
+
+// Error implements error.
+func (e *RateLimitError) Error() string {
+	return "accessserver: rate limited; retry after " + e.RetryAfter.String()
 }

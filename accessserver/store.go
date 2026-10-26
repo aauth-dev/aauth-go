@@ -17,6 +17,9 @@ var (
 	ErrConflict = errors.New("accessserver: version conflict")
 	// ErrExists means a record with the key already exists.
 	ErrExists = errors.New("accessserver: already exists")
+	// ErrCodeInUse means another stored pending request has the same
+	// canonical interaction code; the server draws a new one.
+	ErrCodeInUse = errors.New("accessserver: interaction code in use")
 	// ErrRevoked means the token an auth token was issued against has
 	// been revoked, so the auth token was not recorded.
 	ErrRevoked = errors.New("accessserver: presented token revoked")
@@ -63,6 +66,9 @@ type Store interface {
 	CountRevocations(ctx context.Context, iss string) (int, error)
 
 	// CreatePending stores a new pending request (Version 1).
+	// CreatePending and UpdatePending MUST fail with ErrCodeInUse, storing
+	// nothing, when another stored request has the same non-empty
+	// CodeCanonical, so PendingByCode names one request.
 	CreatePending(ctx context.Context, p *Pending) error
 	// Pending returns pending request id, or ErrNotFound.
 	Pending(ctx context.Context, id string) (*Pending, error)
@@ -180,6 +186,9 @@ func (m *MemoryStore) CreatePending(_ context.Context, p *Pending) error {
 	if _, ok := m.pending[p.ID]; ok {
 		return ErrExists
 	}
+	if m.codeTaken(p) {
+		return ErrCodeInUse
+	}
 	p.Version = 1
 	return m.put(p)
 }
@@ -212,6 +221,9 @@ func (m *MemoryStore) UpdatePending(_ context.Context, p *Pending) error {
 	}
 	if cur.Version != p.Version {
 		return ErrConflict
+	}
+	if m.codeTaken(p) {
+		return ErrCodeInUse
 	}
 	p.Version++
 	return m.put(p)
@@ -277,10 +289,19 @@ func (m *MemoryStore) Prune(_ context.Context, cutoff time.Time) error {
 	return nil
 }
 
+// codeTaken reports whether another request holds p's code; m.mu is held.
+func (m *MemoryStore) codeTaken(p *Pending) bool {
+	id, ok := m.codes[p.CodeCanonical]
+	return ok && p.CodeCanonical != "" && id != p.ID
+}
+
 func (m *MemoryStore) put(p *Pending) error {
 	b, err := json.Marshal(p)
 	if err != nil {
 		return err
+	}
+	if prev := m.meta[p.ID].code; prev != "" && prev != p.CodeCanonical && m.codes[prev] == p.ID {
+		delete(m.codes, prev) // a re-evaluation drew a new code
 	}
 	m.pending[p.ID] = b
 	m.meta[p.ID] = pendingMeta{ps: p.PS, open: p.Open(), rtIss: p.ResourceTokenIssuer, rtJTI: p.ResourceTokenJTI,

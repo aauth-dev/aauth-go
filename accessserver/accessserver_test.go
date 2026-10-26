@@ -336,14 +336,18 @@ func TestInteractionApproveDeny(t *testing.T) {
 	ctx := context.Background()
 	f.setAuthz(func(*AuthorizationRequest) Decision { return DeferInteraction() })
 	f.setNotify(func(p *Pending) {
-		if p.Open() && !p.CodeConsumed {
+		if p.State == StatePending && !p.CodeConsumed {
 			go func() {
-				q, err := f.as.ConsumeCode(ctx, p.Code)
+				if l, err := f.as.LookupCode(ctx, p.Code, "browser"); err != nil || l.CodeConsumed || l.State != StateInteracting {
+					t.Errorf("lookup %+v %v", l, err)
+					return
+				}
+				q, err := f.as.ConsumeCode(ctx, p.Code, "browser", "alice")
 				if err != nil {
 					t.Error(err)
 					return
 				}
-				if _, err := f.as.ConsumeCode(ctx, p.Code); !errors.Is(err, ErrInvalidCode) {
+				if _, err := f.as.ConsumeCode(ctx, p.Code, "browser", "alice"); !errors.Is(err, ErrInvalidCode) {
 					t.Errorf("code reuse: %v", err)
 				}
 				if err := f.as.Approve(ctx, q.ID, q.Revision, "files:read"); err != nil {
@@ -387,10 +391,13 @@ func TestInteractionApproveDeny(t *testing.T) {
 	if _, err = c.RequestAuthToken(ctx, aauth.AuthTokenRequest{ResourceToken: rt, PresentedToken: pt}); !errors.As(err, &te) || te.Code != aauth.PollErrDenied {
 		t.Fatalf("immediate denial: %v", err)
 	}
-	if _, err := f.as.ConsumeCode(ctx, "bad"); !errors.Is(err, ErrInvalidCode) {
+	if _, err := f.as.LookupCode(ctx, "bad", "browser"); !errors.Is(err, ErrInvalidCode) {
 		t.Fatal(err)
 	}
-	if _, err := f.as.ConsumeCode(ctx, "ABCD-EFGH"); !errors.Is(err, ErrInvalidCode) {
+	if _, err := f.as.ConsumeCode(ctx, "ABCD-EFGH", "browser", "alice"); !errors.Is(err, ErrInvalidCode) {
+		t.Fatal(err)
+	}
+	if _, err := f.as.LookupCode(ctx, "ABCD-EFGH", ""); !errors.Is(err, ErrClientRequired) {
 		t.Fatal(err)
 	}
 }

@@ -79,7 +79,9 @@ type Config struct {
 	// (claims, interaction; §9.3.1).
 	TrustPS func(ctx context.Context, ps string) bool
 	// InteractionURL is the AS's user-facing interaction page, for
-	// requirement=interaction decisions; it calls [Server.ConsumeCode].
+	// requirement=interaction decisions; it shows the request
+	// ([Server.LookupCode]) and consumes the code at the person's decision
+	// ([Server.ConsumeCode]).
 	InteractionURL string
 	// Paths overrides endpoint paths.
 	Paths Paths
@@ -123,9 +125,10 @@ type Config struct {
 	MaxPendingPerPS         int
 	MaxRevocationsPerIssuer int
 	PruneInterval           time.Duration
-	// Limiter, when set, limits polls per pending request ("poll:",
-	// answered slow_down) and revocations per issuer ("revoke:", answered
-	// rate_limited with Retry-After).
+	// Limiter, when set, limits interaction code attempts per client
+	// ("code:", see [Server.LookupCode]), polls per pending request
+	// ("poll:", answered slow_down), and revocations per issuer ("revoke:",
+	// answered rate_limited with Retry-After).
 	Limiter aauth.Limiter
 	// Notify is called after a pending request is created or changes.
 	Notify func(ctx context.Context, p *Pending)
