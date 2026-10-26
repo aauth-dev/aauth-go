@@ -58,6 +58,23 @@ func requireMembers(doc string, pairs ...string) error {
 // REQUIRES (draft -11 §11.2).
 var ErrMetadataIncomplete = errors.New("aauth: metadata document incomplete")
 
+// ErrUnknownDWK means a dwk (a Signature-Key parameter or a token claim)
+// is not one of the AAuth metadata document names. Discovery refuses it
+// before any fetch, so a dwk cannot point at another path on the origin
+// (for example "../users/mallory/keys.json"). It matches [ErrInvalidKey].
+var ErrUnknownDWK = fmt.Errorf("%w: unknown well-known document", ErrInvalidKey)
+
+// ValidateDWK reports whether dwk is one of the AAuth metadata document
+// names: [WellKnownAgent], [WellKnownPerson], [WellKnownResource], or
+// [WellKnownAccess]. Any other value is [ErrUnknownDWK].
+func ValidateDWK(dwk string) error {
+	switch dwk {
+	case WellKnownAgent, WellKnownPerson, WellKnownResource, WellKnownAccess:
+		return nil
+	}
+	return fmt.Errorf("%w: %q", ErrUnknownDWK, dwk)
+}
+
 // AgentProviderMetadata is /.well-known/aauth-agent.json (draft -11
 // §11.2.1) — published by an agent provider, or by a self-hosted agent
 // acting as its own provider, so verifiers can discover the token-signing
@@ -220,7 +237,13 @@ func (m ResourceMetadata) EffectiveAccessMode() string {
 // §3.6): the issuer member MUST be present ([ErrIssuerMissing]) and MUST
 // equal base by byte equality ([ErrIssuerMismatch]). This prevents a
 // document hosted at one domain from claiming the issuer of another.
+//
+// doc must be an AAuth metadata document name (see [ValidateDWK]); any
+// other value is refused before the fetch.
 func FetchMetadata(ctx context.Context, hc *http.Client, base, doc string, dst any) error {
+	if err := ValidateDWK(doc); err != nil {
+		return err
+	}
 	hc = discoveryClient(hc)
 	u := strings.TrimSuffix(base, "/") + "/.well-known/" + doc
 	body, _, err := fetchJSON(ctx, hc, u)

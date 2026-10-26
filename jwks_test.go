@@ -266,6 +266,34 @@ func TestJWKSRefreshOnSignatureFailure(t *testing.T) {
 	}
 }
 
+// Discovery refuses a dwk that is not an AAuth metadata document name,
+// before fetching and before creating a cache entry.
+func TestDiscoveryRejectsUnknownDWK(t *testing.T) {
+	a := testAgent(t)
+	s := newJWKSServer(t, a.JWK())
+	ctx := context.Background()
+	var md AgentProviderMetadata
+	if err := FetchMetadata(ctx, nil, s.srv.URL, "../jwks.json", &md); !errors.Is(err, ErrUnknownDWK) {
+		t.Fatalf("FetchMetadata: err = %v, want ErrUnknownDWK", err)
+	}
+	cache := &JWKSCache{}
+	r := JWKSResolver{Cache: cache}
+	if _, err := r.ResolveKey(ctx, s.srv.URL, "../users/mallory/meta.json", a.JWK().Kid, nil); !errors.Is(err, ErrUnknownDWK) {
+		t.Fatalf("ResolveKey: err = %v, want ErrUnknownDWK", err)
+	}
+	if n := len(cache.entries); n != 0 {
+		t.Fatalf("cache entries = %d, want 0", n)
+	}
+	if n := s.jwksFetches.Load(); n != 0 {
+		t.Fatalf("jwks fetches = %d, want 0", n)
+	}
+	for _, dwk := range []string{WellKnownAgent, WellKnownPerson, WellKnownResource, WellKnownAccess} {
+		if err := ValidateDWK(dwk); err != nil {
+			t.Errorf("ValidateDWK(%q) = %v", dwk, err)
+		}
+	}
+}
+
 func TestJWKSCacheBounded(t *testing.T) {
 	a := testAgent(t)
 	cache := &JWKSCache{MaxEntries: 2}

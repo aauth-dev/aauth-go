@@ -45,6 +45,9 @@ func (s ServerSigner) SignRequest(req *http.Request) error {
 	if s.Issuer == "" || s.DWK == "" || s.Kid == "" {
 		return fmt.Errorf("aauth: ServerSigner requires Issuer, DWK, and Kid")
 	}
+	if err := ValidateDWK(s.DWK); err != nil {
+		return err
+	}
 	AttachSignatureKeyJWKSURI(req, s.Issuer, s.DWK, s.Kid)
 	return SignRequest(req, s.Key, "")
 }
@@ -90,7 +93,9 @@ type VerifyServerOptions struct {
 // VerifyServerRequest authenticates a request signed under the jwks_uri
 // scheme (draft -11 §11.3.2; signature-key §3.6): it parses the
 // Signature-Key member for the default label, requires the jwks_uri scheme
-// with id, dwk, and kid, discovers the key, and verifies the HTTP message
+// with id, dwk, and kid, checks that dwk is an AAuth metadata document
+// name ([ValidateDWK]) and applies DWKs and TrustSigner, then discovers
+// the key and verifies the HTTP message
 // signature. Errors classify with [SignatureErrorFor]; a jwt (agent) or
 // other scheme is unsupported_scheme with Accept-Signature-Scheme: jwks_uri.
 func VerifyServerRequest(ctx context.Context, req *http.Request, opts VerifyServerOptions) (*ServerCaller, error) {
@@ -112,6 +117,12 @@ func VerifyServerRequest(ctx context.Context, req *http.Request, opts VerifyServ
 		if err := ValidateServerIdentifier(caller.ID); err != nil {
 			return nil, fmt.Errorf("%w: id: %w", ErrBadSigKey, err)
 		}
+	}
+	// dwk is checked, and the caller's restrictions applied, before any
+	// fetch: an unchecked dwk would let the request choose the path
+	// discovery reads on the id's origin.
+	if err := ValidateDWK(caller.DWK); err != nil {
+		return nil, fmt.Errorf("aauth: jwks_uri dwk: %w", err)
 	}
 	if len(opts.DWKs) > 0 && !contains(opts.DWKs, caller.DWK) {
 		return nil, fmt.Errorf("%w: signer role %q not accepted here", ErrInvalidKey, caller.DWK)

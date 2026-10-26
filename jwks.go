@@ -262,6 +262,10 @@ func (c *JWKSCache) key(ctx context.Context, hc *http.Client, iss, dwk, kid stri
 	if iss == "" || dwk == "" {
 		return JWK{}, fmt.Errorf("%w: iss/dwk required for JWKS discovery", ErrMissingClaim)
 	}
+	// Refuse an unknown dwk before it can create a cache entry or a fetch.
+	if err := ValidateDWK(dwk); err != nil {
+		return JWK{}, err
+	}
 	e, err := c.entry(iss, dwk)
 	if err != nil {
 		return JWK{}, err
