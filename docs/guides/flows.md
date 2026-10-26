@@ -135,15 +135,16 @@ sequenceDiagram
     Note over A: Transport.OnRequirement shows the url and code
     A-)P: show the interaction URL and code
     P->>PS: open consent page with the code
-    PS->>PS: ConsumeCode
+    PS->>PS: LookupCode (shows the request)
     P->>PS: sign in and approve
-    PS->>PS: Approve(person) binds the agent to the person
+    PS->>PS: ConsumeCode(person), then Approve(person) binds the agent to the person
     A->>PS: GET Location (poll, honoring Retry-After)
     PS-->>A: 200 person token
 ```
 
-Each interaction code is single use. The hosting application authenticates the
-person and calls `Approve`, `Deny`, or `Fail`; the library never decides. A
+Each interaction code is single use, consumed at the person's authenticated
+decision. The hosting application authenticates the person and calls
+`Approve`, `Deny`, or `Fail`; the library never decides. A
 PS may instead ask a clarifying question before deciding:
 
 ```mermaid

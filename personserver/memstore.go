@@ -381,6 +381,9 @@ func (m *MemoryStore) CreatePending(_ context.Context, p *Pending) error {
 	if _, ok := m.pending[p.ID]; ok {
 		return ErrExists
 	}
+	if _, ok := m.codes[p.CodeCanonical]; ok && p.CodeCanonical != "" {
+		return ErrCodeInUse
+	}
 	p.Version = 1
 	return m.putPending(p)
 }

@@ -26,6 +26,9 @@ var (
 	ErrBindingConflict = errors.New("personserver: agent is bound to another person")
 	// ErrExists means a record with the key already exists.
 	ErrExists = errors.New("personserver: already exists")
+	// ErrCodeInUse means another stored pending request has the same
+	// canonical interaction code; the server draws a new one.
+	ErrCodeInUse = errors.New("personserver: interaction code in use")
 	// ErrRevoked means the person token at the root of a grant has been
 	// revoked, so an auth token issued under it was not recorded.
 	ErrRevoked = errors.New("personserver: person token revoked")
@@ -306,7 +309,10 @@ type MissionStore interface {
 // optimistic: UpdatePending succeeds only when the stored Version equals
 // the given record's Version, and then increments it.
 type PendingStore interface {
-	// CreatePending stores a new pending request (Version 1).
+	// CreatePending stores a new pending request (Version 1). It MUST
+	// fail with ErrCodeInUse, storing nothing, when another stored request
+	// has the same non-empty CodeCanonical, so PendingByCode names one
+	// request.
 	CreatePending(ctx context.Context, p *Pending) error
 	// Pending returns the pending request id, or ErrNotFound.
 	Pending(ctx context.Context, id string) (*Pending, error)

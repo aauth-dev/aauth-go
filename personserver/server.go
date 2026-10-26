@@ -116,8 +116,9 @@ type Config struct {
 	CollocatedAS func(resource string) bool
 	// InteractionURL is the PS's user-facing interaction page (https, no
 	// query or fragment), sent as the url of requirement=interaction. The
-	// page reads ?code= and calls [Server.ConsumeCode]. Required for
-	// requirement=interaction decisions.
+	// page reads ?code=, shows the request ([Server.LookupCode]), and at
+	// the person's authenticated decision calls [Server.ConsumeCode].
+	// Required for requirement=interaction decisions.
 	InteractionURL string
 	// Paths overrides endpoint paths; zero fields take DefaultPaths.
 	Paths Paths
@@ -181,7 +182,8 @@ type Config struct {
 	PersonTokenTTL time.Duration
 	AuthTokenTTL   time.Duration
 	// Limiter, when set, rate-limits the actions the protocol defines a
-	// refusal for: interaction code attempts per client ("code:"), polls
+	// refusal for: interaction code attempts per client ("code:", see
+	// [Server.LookupCode]), polls
 	// per pending request ("poll:", answered slow_down), revocations per
 	// issuer ("revoke:", answered rate_limited), and new resources per
 	// agent at the person token endpoint ("resources:"). See the

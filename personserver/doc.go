@@ -44,7 +44,9 @@
 //	})
 //	http.Handle("/", ps)
 //
-// The consent page reads ?code=, calls [Server.ConsumeCode], authenticates
-// the person (§13.13), and calls [Server.Approve] with the person's
-// identifier, which binds the agent.
+// The consent page reads ?code= and shows the request ([Server.LookupCode],
+// which does not consume the code). At the decision it authenticates the
+// person (§13.13), consumes the code as that person ([Server.ConsumeCode]),
+// and calls [Server.Approve] with the person's identifier, which binds the
+// agent, and the Revision of the request it showed.
 package personserver

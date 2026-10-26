@@ -98,12 +98,15 @@ type Pending struct {
 	// Requirement is the AAuth-Requirement of the 202 (interaction,
 	// approval), and InteractionURL and Code its parameters. CodeCanonical
 	// is the canonical code PendingByCode looks up; CodeConsumed is set
-	// once the person arrived with it (single use, §11.6.3.1).
+	// once the code was used (single use, §11.6.3.1): by the person
+	// CodeConsumedBy at their decision ([Server.ConsumeCode]), or by an
+	// approval that completed the interaction out of band.
 	Requirement    string `json:"requirement,omitempty"`
 	InteractionURL string `json:"interaction_url,omitempty"`
 	Code           string `json:"code,omitempty"`
 	CodeCanonical  string `json:"code_canonical,omitempty"`
 	CodeConsumed   bool   `json:"code_consumed,omitempty"`
+	CodeConsumedBy string `json:"code_consumed_by,omitempty"`
 	RetryAfter     int    `json:"retry_after,omitempty"`
 
 	// Question is the clarification awaiting the agent's answer, asked at
@@ -183,6 +186,9 @@ var (
 	// not the request's Revision. Show the request again and approve the
 	// current revision.
 	ErrRequestChanged = errors.New("personserver: the request changed since it was shown")
+	// ErrWrongPerson means the request's interaction code was consumed by
+	// another person than the one the Grant names (§11.6.3.1).
+	ErrWrongPerson = errors.New("personserver: the interaction code was consumed by another person")
 	// ErrResourceInteraction means the resource's own interaction (§7.2.3)
 	// has not completed, so the request cannot be approved yet.
 	ErrResourceInteraction = errors.New("personserver: the resource's interaction has not completed (§7.2.3)")
@@ -243,17 +249,23 @@ func (s *Server) newPending(ctx context.Context, p *Pending, c *caller, body []b
 	if p.RetryAfter == 0 && d.Requirement != aauth.RequirementClarification {
 		p.RetryAfter = 1 // a person is deciding; do not poll in a tight loop
 	}
-	if err := s.applyRequirement(p, d); err != nil {
-		return err
+	for attempt := 0; ; attempt++ {
+		if err := s.applyRequirement(p, d); err != nil {
+			return err
+		}
+		if p.Federation != nil {
+			p.Federation.applyRequirement(p, now)
+		}
+		err := s.cfg.Store.CreatePending(ctx, p)
+		if errors.Is(err, ErrCodeInUse) && attempt < 4 {
+			continue // another request holds the code: draw a new one
+		}
+		if err != nil {
+			return storeErr("create pending", err)
+		}
+		s.changed(ctx, p)
+		return nil
 	}
-	if p.Federation != nil {
-		p.Federation.applyRequirement(p, now)
-	}
-	if err := s.cfg.Store.CreatePending(ctx, p); err != nil {
-		return storeErr("create pending", err)
-	}
-	s.changed(ctx, p)
-	return nil
 }
 
 // applyRequirement sets the 202's requirement from a Deferred decision.
@@ -742,24 +754,17 @@ func (s *Server) PendingRequest(ctx context.Context, id string) (*Pending, error
 	return s.advance(ctx, p), nil
 }
 
-// ConsumeCode is ConsumeCodeFor with no client key: attempts are limited
-// as one pool.
-func (s *Server) ConsumeCode(ctx context.Context, code string) (*Pending, error) {
-	return s.ConsumeCodeFor(ctx, code, "")
-}
+// ErrClientRequired means LookupCode or ConsumeCode was called without a
+// client key, which the per-client rate limit needs.
+var ErrClientRequired = errors.New("personserver: interaction code attempts need a client key")
 
-// ConsumeCodeFor is called by the interaction page when the person arrives
-// with ?code= (draft -11 §11.6.3.1). It canonicalizes the code (case,
-// hyphens, Crockford aliases), finds the pending request, consumes the code
-// (single use), and marks the request interacting. An unknown, malformed,
-// or already consumed code is ErrInvalidCode; an expired request is
-// ErrResolved. client identifies who is entering codes (the page's
-// session, or its address): with Config.Limiter set, attempts are limited
-// per client — key "code:<client>" — and a limited attempt is
-// *RateLimitError, checked before the code is looked up. The code only
-// correlates the browser with the request: the page MUST authenticate the
-// person before acting on their decision (§13.13).
-func (s *Server) ConsumeCodeFor(ctx context.Context, code, client string) (*Pending, error) {
+// codeAttempt rate-limits an interaction code attempt by client and finds
+// the open request the code names, brought up to date. An unknown or
+// malformed code is ErrInvalidCode, an expired request ErrResolved.
+func (s *Server) codeAttempt(ctx context.Context, code, client string) (*Pending, error) {
+	if client == "" {
+		return nil, ErrClientRequired
+	}
 	if ok, wait := s.allow(ctx, "code:"+client); !ok {
 		return nil, &RateLimitError{RetryAfter: wait}
 	}
@@ -777,14 +782,64 @@ func (s *Server) ConsumeCodeFor(ctx context.Context, code, client string) (*Pend
 	if p = s.advance(ctx, p); !p.Open() {
 		return nil, ErrResolved
 	}
+	if p.CodeConsumed {
+		return nil, ErrInvalidCode
+	}
+	return p, nil
+}
+
+// LookupCode is called by the interaction page when a browser arrives
+// with ?code= (draft -11 §11.6.3.1): it canonicalizes the code (case,
+// hyphens, Crockford aliases), finds the pending request for the page to
+// show, and marks it interacting. It does not consume the code, so a link
+// preview or the agent itself fetching the page cannot burn it: the code
+// is consumed by [Server.ConsumeCode] at the person's authenticated
+// decision. An unknown, malformed, or consumed code is ErrInvalidCode; an
+// expired request is ErrResolved.
+//
+// client identifies who is entering codes — the page's session, or the
+// browser's address — and must not be empty: with Config.Limiter set,
+// attempts are limited per client (key "code:<client>", checked before
+// the code is looked up), and a limited attempt is *RateLimitError. One
+// client failing does not lock out another.
+func (s *Server) LookupCode(ctx context.Context, code, client string) (*Pending, error) {
+	p, err := s.codeAttempt(ctx, code, client)
+	if err != nil || p.State != StatePending {
+		return p, err
+	}
+	return s.mutate(ctx, p.ID, func(p *Pending) error {
+		if !p.Open() {
+			return ErrResolved
+		}
+		p.State = StateInteracting
+		return nil
+	})
+}
+
+// ConsumeCode consumes an interaction code at the person's decision (draft
+// -11 §11.6.3.1): the interaction page calls it after authenticating
+// person (§13.13), then [Server.Approve] or [Server.Deny]. The code is
+// single use; it is recorded as consumed by person (Pending.CodeConsumedBy),
+// and Approve refuses a Grant for anyone else (ErrWrongPerson), so a code
+// seen by someone else cannot be approved under their account. The code
+// only correlates the browser with the request; it authorizes nothing.
+// Errors and the client key are as for [Server.LookupCode].
+func (s *Server) ConsumeCode(ctx context.Context, code, client, person string) (*Pending, error) {
+	if person == "" {
+		return nil, errors.New("personserver: ConsumeCode needs the authenticated person")
+	}
+	p, err := s.codeAttempt(ctx, code, client)
+	if err != nil {
+		return nil, err
+	}
 	return s.mutate(ctx, p.ID, func(p *Pending) error {
 		switch {
-		case !p.Open():
+		case !p.Open() || p.Approving:
 			return ErrResolved
 		case p.CodeConsumed:
 			return ErrInvalidCode
 		}
-		p.CodeConsumed, p.State = true, StateInteracting
+		p.CodeConsumed, p.CodeConsumedBy, p.State = true, person, StateInteracting
 		return nil
 	})
 }
@@ -862,8 +917,12 @@ func (s *Server) Approve(ctx context.Context, id string, g Grant) error {
 			return ErrRequestChanged
 		case p.ResourceInteraction != nil && !p.ResourceInteractionDone:
 			return ErrResourceInteraction
+		case p.CodeConsumedBy != "" && firstNonEmpty(g.Person, p.Person) != p.CodeConsumedBy:
+			return ErrWrongPerson
 		}
-		p.Approving = true
+		// An approval through another channel completes the interaction,
+		// which consumes its code (§11.6.3).
+		p.Approving, p.CodeConsumed = true, p.CodeConsumed || p.CodeCanonical != ""
 		return nil
 	})
 	if err != nil {
@@ -1048,4 +1107,14 @@ func logKindFor(k Kind) string {
 		return LogInteraction
 	}
 	return string(k)
+}
+
+// firstNonEmpty returns the first non-empty value.
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

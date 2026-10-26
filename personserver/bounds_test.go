@@ -136,3 +136,22 @@ func TestAutomaticPrune(t *testing.T) {
 		t.Fatalf("expired pending kept: %v", err)
 	}
 }
+
+// A pending request cannot take a code another stored request holds.
+func TestMemoryStoreRejectsDuplicateCode(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+	exp := time.Now().Add(time.Hour)
+	if err := m.CreatePending(ctx, &Pending{ID: "a", State: StatePending, ExpiresAt: exp, CodeCanonical: "AAAA-AAAA"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.CreatePending(ctx, &Pending{ID: "b", State: StatePending, ExpiresAt: exp, CodeCanonical: "AAAA-AAAA"}); !errors.Is(err, ErrCodeInUse) {
+		t.Fatalf("duplicate code: %v", err)
+	}
+	if p, err := m.PendingByCode(ctx, "AAAA-AAAA"); err != nil || p.ID != "a" {
+		t.Fatalf("code names %+v %v", p, err)
+	}
+	if _, err := m.Pending(ctx, "b"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("refused request stored: %v", err)
+	}
+}

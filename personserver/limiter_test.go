@@ -66,10 +66,13 @@ func TestLimiter(t *testing.T) {
 	// Interaction code attempts per client.
 	lim.block("code:kiosk")
 	var rle *RateLimitError
-	if _, err := w.ps.ConsumeCodeFor(ctx, "ABCD-EFGH", "kiosk"); !errors.As(err, &rle) || rle.RetryAfter != 3*time.Second || rle.Error() == "" {
+	if _, err := w.ps.LookupCode(ctx, "ABCD-EFGH", "kiosk"); !errors.As(err, &rle) || rle.RetryAfter != 3*time.Second || rle.Error() == "" {
 		t.Fatalf("code: %v", err)
 	}
-	if _, err := w.ps.ConsumeCodeFor(ctx, "ABCD-EFGH", "laptop"); !errors.Is(err, ErrInvalidCode) {
+	if _, err := w.ps.ConsumeCode(ctx, "ABCD-EFGH", "kiosk", "alice"); !errors.As(err, &rle) {
+		t.Fatalf("consume: %v", err)
+	}
+	if _, err := w.ps.LookupCode(ctx, "ABCD-EFGH", "laptop"); !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("other client: %v", err)
 	}
 

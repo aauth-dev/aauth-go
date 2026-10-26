@@ -147,11 +147,11 @@ func (s *Sandbox) autoApprovePS(ctx context.Context, p *personserver.Pending) {
 // approvePS approves the PS interaction a code names, as the configured
 // person.
 func (s *Sandbox) approvePS(ctx context.Context, code string) error {
-	p, err := s.ps.ConsumeCode(ctx, code)
+	p, err := s.ps.ConsumeCode(ctx, code, "sandbox", s.cfg.Person)
 	if err != nil {
 		return fmt.Errorf("consuming code: %w", err)
 	}
-	return s.ps.Approve(ctx, p.ID, personserver.Grant{Person: s.cfg.Person})
+	return s.ps.Approve(ctx, p.ID, personserver.Grant{Person: s.cfg.Person, Revision: p.Revision})
 }
 
 func (s *Sandbox) newAccessServer() (*accessserver.Server, error) {

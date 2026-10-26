@@ -32,20 +32,24 @@ var approvals atomic.Int64
 // consentPage is the person server's interaction page (Config.InteractionURL).
 func (w *world) consentPage(rw http.ResponseWriter, r *http.Request) {
 	// pidl:begin consent.approve.ps
-	p, err := w.ps.ConsumeCodeFor(r.Context(), r.URL.Query().Get("code"), r.RemoteAddr)
-	if err != nil {
-		http.Error(rw, "this link has expired or was already used", http.StatusBadRequest)
-		return
-	}
 	// The code only links this browser to the request: authenticate the
-	// person before acting on their decision.
+	// person before acting on their decision. (A page that first shows
+	// the request looks it up with LookupCode, which leaves the code
+	// unused.)
 	person, ok := signedInPerson(r)
 	if !ok {
 		http.Error(rw, "sign in first", http.StatusUnauthorized)
 		return
 	}
-	// After showing what the agent asks for, record the approval.
-	if err := w.ps.Approve(r.Context(), p.ID, personserver.Grant{Person: person}); err != nil {
+	// Consume the code as that person at their decision.
+	p, err := w.ps.ConsumeCode(r.Context(), r.URL.Query().Get("code"), r.RemoteAddr, person)
+	if err != nil {
+		http.Error(rw, "this link has expired or was already used", http.StatusBadRequest)
+		return
+	}
+	// After showing what the agent asks for, record the approval of the
+	// revision shown.
+	if err := w.ps.Approve(r.Context(), p.ID, personserver.Grant{Person: person, Revision: p.Revision}); err != nil {
 		http.Error(rw, err.Error(), http.StatusConflict)
 		return
 	}

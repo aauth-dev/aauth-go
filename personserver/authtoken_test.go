@@ -365,7 +365,7 @@ func TestResourceInteraction(t *testing.T) {
 				t.Errorf("pending %+v", p)
 				return
 			}
-			if _, err := w.ps.ConsumeCode(ctx, p.Code); err != nil {
+			if _, err := w.ps.ConsumeCode(ctx, p.Code, "browser", "alice"); err != nil {
 				t.Error(err)
 				return
 			}
