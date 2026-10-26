@@ -419,3 +419,64 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	c.n += n
 	return n, err
 }
+
+// A query is covered, so it cannot be changed after signing; a request
+// without one does not cover @query.
+func TestSignRequestCoversQuery(t *testing.T) {
+	a := testAgent(t)
+	tok, err := a.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sign := func(u string) *http.Request {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, u, nil)
+		AttachSignatureKey(req, tok)
+		if err := SignRequest(req, a.Key, ""); err != nil {
+			t.Fatal(err)
+		}
+		return req
+	}
+	req := sign("https://r.example/files?id=1")
+	if !strings.Contains(req.Header.Get(HeaderSignatureInput), `"@query"`) {
+		t.Fatalf("@query not covered: %s", req.Header.Get(HeaderSignatureInput))
+	}
+	if err := VerifyRequestWithOptions(req, a.Key.Public(), RequestVerifyOptions{RequiredComponents: []string{"@query"}}); err != nil {
+		t.Fatalf("untampered: %v", err)
+	}
+	req.URL.RawQuery = "id=999"
+	if err := VerifyRequest(req, a.Key.Public()); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("tampered query: err = %v, want ErrSignatureInvalid", err)
+	}
+	req = sign("https://r.example/files")
+	if strings.Contains(req.Header.Get(HeaderSignatureInput), "@query") {
+		t.Fatalf("@query covered without a query: %s", req.Header.Get(HeaderSignatureInput))
+	}
+	if err := VerifyRequest(req, a.Key.Public()); err != nil {
+		t.Fatalf("no query: %v", err)
+	}
+}
+
+func TestSignRequestCovering(t *testing.T) {
+	a := testAgent(t)
+	tok, err := a.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://r.example/files", nil)
+	req.Header.Set("X-Tenant", "t1")
+	AttachSignatureKey(req, tok)
+	if err := SignRequestCovering(req, a.Key, "", []string{"x-tenant", "@method"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyRequestWithOptions(req, a.Key.Public(), RequestVerifyOptions{RequiredComponents: []string{"x-tenant"}}); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(req.Header.Get(HeaderSignatureInput), `"@method"`); n != 1 {
+		t.Fatalf("@method covered %d times", n)
+	}
+	req.Header.Set("X-Tenant", "t2")
+	if err := VerifyRequest(req, a.Key.Public()); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("tampered header: err = %v", err)
+	}
+}

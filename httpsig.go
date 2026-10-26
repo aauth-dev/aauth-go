@@ -34,6 +34,9 @@ import (
 // When the request carries an opaque access token (`Authorization: AAuth …`,
 // §6.3), the authorization header is additionally covered — binding the
 // token to the signature so it can't be replayed as a bearer credential.
+// [SignRequest] also covers @query when the URL has a query, so the query
+// cannot be changed in transit; verifiers do not require it unless asked
+// to (RequestVerifyOptions.RequiredComponents).
 func coveredComponents(hasBody, hasContentType, hasAAuthAccess bool) []string {
 	base := []string{"@method", "@authority", "@path", "signature-key"}
 	if hasAAuthAccess {
@@ -205,7 +208,9 @@ func ParseSignatureKey(req *http.Request) (string, error) {
 
 // SignRequest signs req per the AAuth profile: sets Content-Digest when a
 // body is present, then Signature-Input and Signature under the default
-// label, with created set to the current time. The Signature-Key header
+// label, with created set to the current time. It covers the AAuth
+// components (see the profile above), plus @query when the URL has a
+// query. The Signature-Key header
 // MUST already be attached (it is a covered component). key may be any
 // supported crypto.Signer (see [GenerateKey]); the algorithm is determined
 // by the key and never sent on the wire (draft -11 §11.3.3.2).
@@ -214,6 +219,14 @@ func ParseSignatureKey(req *http.Request) (string, error) {
 // keyid parameter, since Signature-Key identifies the key. A non-empty value
 // is emitted as given (it MUST then identify the same key).
 func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
+	return SignRequestCovering(req, key, keyid, nil)
+}
+
+// SignRequestCovering is [SignRequest], covering the extra components as
+// well: for example a resource's additional_signature_components, or the
+// required_input of an invalid_input Signature-Error (draft -11 §11.3.3.1).
+// A component already covered is not repeated.
+func SignRequestCovering(req *http.Request, key crypto.Signer, keyid string, extra []string) error {
 	if req.Header.Get(HeaderSignatureKey) == "" {
 		return ErrMissingSigKey
 	}
@@ -241,8 +254,12 @@ func SignRequest(req *http.Request, key crypto.Signer, keyid string) error {
 	if keyid != "" {
 		cfg = cfg.SetKeyID(keyid)
 	}
-	fields := httpsign.Headers(coveredComponents(hasBody, req.Header.Get("Content-Type") != "", hasAAuthAuthorization(req))...)
-	signer, err := newHTTPSigner(key, cfg, fields)
+	components := coveredComponents(hasBody, req.Header.Get("Content-Type") != "", hasAAuthAuthorization(req))
+	if req.URL != nil && req.URL.RawQuery != "" {
+		components = append(components, "@query")
+	}
+	components = dedupe(append(components, extra...))
+	signer, err := newHTTPSigner(key, cfg, httpsign.Headers(components...))
 	if err != nil {
 		return err
 	}
