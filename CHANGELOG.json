@@ -23,6 +23,9 @@
         },
         {
           "description": "`examples/walkthrough` holds tested code for each step of the AAuth walkthroughs, for every role, marked as named regions that documentation tools quote"
+        },
+        {
+          "description": "Security hardening across signatures, tokens, consent and the sandbox: signatures bound to the receiving server, agent identifiers bound to their provider, auth tokens in four-party mode only from the access server, consent pinned to what the person saw, and bounded state. Some APIs change; see MIGRATION.md"
         }
       ],
       "added": [
@@ -59,11 +62,44 @@
         {
           "description": "The sandbox signing helper signs as a request's own `Signature-Key` names when no `X-Sandbox-Present` or `X-Sandbox-Token` is sent: `hwk` and `jkt-jwt` sign with that scheme, and `jwt` presents its token as the agent, person or auth token its `typ` names, or the helper's own agent token",
           "commit": "7bc64e0"
+        },
+        {
+          "description": "`Caller.AgentIssuer`, `Caller.Account`, `Caller.Tenant` and `Caller.JTI`, and `ResourceGuardConfig.IsRevoked` to check revocation of presented tokens"
+        },
+        {
+          "description": "`Transport` covers the components a resource requires: on a 401 `invalid_input` naming components the signature left out, it signs again covering them and resends once, and covers them on later requests to that resource (`SignRequestCovering`)"
         }
       ],
       "changed": [
         {
           "description": "`accessserver.Client` reports an access server's 402 as an error wrapping `*aauth.PaymentRequiredError` when no `Payment` handler is configured."
+        },
+        {
+          "description": "An access server POST that resolves a pending request answers 204 and delivers the result on the following poll, as the agent resumes polling after posting (draft -11 §7.5.2.2)"
+        },
+        {
+          "description": "`ResourceGuardConfig.Resource` must name a host, and `TrustIssuer` no longer admits four-party auth tokens; see Security",
+          "breaking": true
+        },
+        {
+          "description": "`AuthorizationHandler.TrustIssuer` is required: without it every person-token request is answered 500",
+          "breaking": true
+        },
+        {
+          "description": "`personserver`: `Approve` binds to `Grant.Revision`; `ConsumeCodeFor` is replaced by `LookupCode` and `ConsumeCode(ctx, code, client, person)`; `ClaimsProvider` takes a `*ClaimsRequest` naming the recipient access server, resource, scope, mission and agent; `Store` gains `Prune`, `TokenStore` gains `CountRevocations` and `PendingStore` gains `CountOpenPending`",
+          "breaking": true
+        },
+        {
+          "description": "`accessserver`: `Approve(ctx, id, revision, scope)`; `ConsumeCode(ctx, code, client, person)` and `LookupCode`; `Store` gains `CountRevocations`, `CountOpenPending` and `Prune`, and `CreatePending` and `UpdatePending` must refuse a duplicate code",
+          "breaking": true
+        },
+        {
+          "description": "`agentprovider.Config.Domain` must equal the issuer's host",
+          "breaking": true
+        },
+        {
+          "description": "Sandbox: `--listen` defaults to `127.0.0.1:443`; the Dockerfile and Compose files pass `--listen-any-interface`",
+          "breaking": true
         }
       ],
       "fixed": [
@@ -83,6 +119,74 @@
         },
         {
           "description": "Sandbox guide: running locally and in Docker, signing requests with the helper, the trace, testing another implementation, and fronting your own server"
+        },
+        {
+          "description": "Design and security notes: signature binding to the receiving server, agent identifiers and their provider, four-party issuers, and consent revisions; servers guide and README: looking up and consuming interaction codes, approval revisions, and opt-in call chaining; sandbox guide: loopback defaults, the helper's limits, and trusting the CA per tool"
+        }
+      ],
+      "security": [
+        {
+          "description": "Request signatures are bound to the server that receives them: `RequestVerifyOptions.Authority` (from `AuthorityOf`) refuses a signature whose `@authority` is another host with `ErrWrongAuthority`, and `ResourceGuard`, the person server, access server and agent provider set it from their identifiers, so a server an agent calls cannot replay the agent's request to another server"
+        },
+        {
+          "description": "`ResourceGuard` accepts an auth token in four-party mode only when its `iss` is the configured access server (`Audience`) and its `dwk` is `aauth-access.json`; in three-party mode only a PS-issued token (`dwk` `aauth-person.json`) whose issuer `TrustIssuer` accepts. A person server can no longer mint auth tokens that skip the resource's access server"
+        },
+        {
+          "description": "An agent token's `sub` must be in the domain of its `iss` (`VerifyAgentToken`, `NewAgent`, and `agentprovider.New`, which refuses a `Domain` other than its issuer's host), so one agent provider cannot issue another provider's agent identifiers"
+        },
+        {
+          "description": "`SelfSignedResolver` verifies only top-level agent tokens; person, auth, resource and sub-agent tokens are refused, so it can no longer be used to forge them"
+        },
+        {
+          "description": "An agent cannot widen the scope of a request after the person approved it: the person server records the consented scope and refuses an `updated_request` beyond it while an access server is deciding, and refuses a changed `aud`. Approvals at both servers carry the `Revision` of the request shown, failing with `ErrRequestChanged` when the agent replaced it, and the access server's pending request shows the scope of the current resource token"
+        },
+        {
+          "description": "`ResourceGuard` applies `Verify.Signature` (required components, body coverage, window, clock and authority) and the strict agent-token profile to agent-token requests too, and checks `TrustIssuer` before fetching an issuer's keys"
+        },
+        {
+          "description": "Key discovery accepts only the four AAuth metadata document names as `dwk` (`ValidateDWK`, `ErrUnknownDWK`), so a `dwk` cannot point to another path on the issuer's origin, and refuses redirects to another host (`CheckSameHostRedirect`), as signature-key §7.3 requires"
+        },
+        {
+          "description": "Verification reads at most `DefaultMaxVerifyBodyBytes` (4 MiB) of a request body (`RequestVerifyOptions.MaxBodySize`, `ErrBodyTooLarge`) and refuses covered components with the `tr` or `req` parameter, which made the whole body buffer before the signature was checked; components with parameters no longer count toward the required set"
+        },
+        {
+          "description": "Error responses no longer carry internal error text: `WriteSignatureFailure` sends a fixed description per Signature-Error code, `WriteTokenError` sends `TokenError.Detail` and nothing for `server_error` or `as_unreachable`, and the person server and agent provider log the causes of `as_unreachable` and refusals instead of returning them"
+        },
+        {
+          "description": "A JWK has one encoding and one thumbprint: `JWK.PublicKey` decodes members as strict base64url and refuses CR or LF, and `JWK.Thumbprint` hashes the canonical encoding"
+        },
+        {
+          "description": "`SignRequest` covers `@query` when the URL has a query, so query parameters cannot be changed on a replayed request"
+        },
+        {
+          "description": "The JWKS cache evicts the least recently used entry, caps entries that have not yet fetched a key set, and protects cached issuers from a flood of unknown ones; the person server keeps one resolver for revocation callers instead of building one per request"
+        },
+        {
+          "description": "Pending URLs answer 410 Gone once a terminal response has been delivered, and the stored result is discarded"
+        },
+        {
+          "description": "Interaction codes are looked up without being consumed (`LookupCode`) and consumed at the person's authenticated decision (`ConsumeCode(ctx, code, client, person)`), rate-limited per client at both servers; the access server refuses codes of expired requests, and stores refuse a duplicate code"
+        },
+        {
+          "description": "Call chaining is opt-in at the person server (`Config.AllowCallChaining`); without it an `upstream_token` is refused before the `Decider` runs"
+        },
+        {
+          "description": "Stores are bounded and pruned: open pending requests per agent (`MaxPendingPerAgent`) or per PS (`MaxPendingPerPS`), revocations per issuer (`MaxRevocationsPerIssuer`), and expired state removed every `PruneInterval`; the `ratelimit` token bucket bounds each key space separately"
+        },
+        {
+          "description": "Agent and resource tokens have a lifetime ceiling (`VerifyAgentTokenOptions.MaxLifetime`, 24 h by default; `ResourceTokenVerifyOptions.MaxLifetime`, 5 minutes by default), and client reads of person and access server responses are capped at 1 MiB"
+        },
+        {
+          "description": "The agent provider checks its rate limit before verifying attestation, bounds refreshes per durable key (`MemoryReplayCache.MaxEntriesPerGroup`), and `Enroll` refuses a token from another issuer; the access server federation client keeps `auth_token_endpoint` on the access server's origin"
+        },
+        {
+          "description": "Sandbox: the signing helper returns redirects unchanged, answers only loopback hosts (`--signer-host` adds names) and refuses browser requests, signs only for the sandbox's own hosts and upstreams unless `--signer-any-target` is set, and `/sandbox/trace` refuses browser requests"
+        },
+        {
+          "description": "Sandbox: `serve` listens on `127.0.0.1:443` by default and refuses another interface without `--listen-any-interface`; request bodies are capped at 4 MiB with read and idle timeouts; the development CA carries name constraints for the sandbox's names and is valid for one year, replacing an older CA on the next run"
+        },
+        {
+          "description": "The Docker image builds with Go 1.27.3 and pins its base images by digest"
         }
       ]
     },
