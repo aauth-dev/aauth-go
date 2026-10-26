@@ -238,6 +238,8 @@ func SignatureErrorFor(err error) (e SignatureError, ok bool) {
 		return SignatureError{}, false
 	case errors.As(err, &mce):
 		return SignatureError{Code: SigErrInvalidInput, RequiredInput: mce.Required}, true
+	case errors.Is(err, ErrBodyTooLarge):
+		return SignatureError{Code: SigErrInvalidRequest}, true
 	case errors.Is(err, ErrClockSkew):
 		return SignatureError{Code: SigErrClockSkew}, true
 	case errors.Is(err, ErrUnsupportedScheme):

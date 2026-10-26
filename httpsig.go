@@ -325,6 +325,30 @@ type RequestVerifyOptions struct {
 	// replayed to another. Servers set it from their identifier with
 	// [AuthorityOf].
 	Authority string
+	// MaxBodySize bounds how much of a request body verification reads to
+	// check its Content-Digest. A larger body is refused with
+	// [ErrBodyTooLarge] before it is read in full. Zero means
+	// DefaultMaxVerifyBodyBytes; a negative value means no limit.
+	MaxBodySize int64
+}
+
+// DefaultMaxVerifyBodyBytes is the default [RequestVerifyOptions.MaxBodySize]
+// (4 MiB, the most [SignRequest] buffers for a body of unknown length).
+const DefaultMaxVerifyBodyBytes = MaxSignedStreamBytes
+
+// ErrBodyTooLarge means a signed request body exceeds
+// [RequestVerifyOptions.MaxBodySize]. It is classified as the
+// Signature-Error invalid_request.
+var ErrBodyTooLarge = errors.New("aauth: request body too large to verify")
+
+func (o RequestVerifyOptions) maxBodySize() int64 {
+	switch {
+	case o.MaxBodySize > 0:
+		return o.MaxBodySize
+	case o.MaxBodySize < 0:
+		return 0 // httpsign: no limit
+	}
+	return DefaultMaxVerifyBodyBytes
 }
 
 func (o RequestVerifyOptions) now() time.Time {
@@ -343,7 +367,8 @@ func (o RequestVerifyOptions) window() time.Duration {
 
 // signatureInput is the parsed Signature-Input member for one label.
 type signatureInput struct {
-	components []string
+	components []string // covered component names, with or without parameters
+	plain      []string // covered components that carry no parameters
 	created    *int64
 	expires    *int64
 }
@@ -374,6 +399,18 @@ func parseSignatureInput(req *http.Request, label string) (signatureInput, error
 			return si, fmt.Errorf("%w: covered component is not a string", ErrSignatureInvalid)
 		}
 		si.components = append(si.components, name)
+		if it.Params == nil || len(it.Params.Names()) == 0 {
+			si.plain = append(si.plain, name)
+			continue
+		}
+		// AAuth never covers trailers (tr) or the request of a response
+		// (req). Either would make verification read the whole body
+		// before checking the signature, so they are refused here.
+		for _, p := range []string{"tr", "req"} {
+			if _, has := it.Params.Get(p); has {
+				return si, fmt.Errorf("%w: covered component %q has the %s parameter", ErrSignatureInvalid, name, p)
+			}
+		}
 	}
 	if il.Params != nil {
 		for _, p := range []struct {
@@ -408,13 +445,17 @@ func VerifyRequest(req *http.Request, pub crypto.PublicKey) error {
 //     ([ErrSignatureInvalid]).
 //  2. The covered components must include the base set, authorization
 //     when an AAuth credential is sent, and any the options require
-//     ([*MissingComponentsError], matching [ErrSignatureInput]).
+//     ([*MissingComponentsError], matching [ErrSignatureInput]). Only a
+//     component without parameters counts: "signature-key";key="other"
+//     does not cover signature-key. A component with the tr or req
+//     parameter is refused ([ErrSignatureInvalid]).
 //  3. created must be present and within the validity window: older is
 //     [ErrSignatureInvalid], further ahead than the window is
 //     [ErrClockSkew]. An expires in the past is [ErrSignatureInvalid].
 //  4. The signature must verify under pub, whose type fixes the algorithm
 //     (no alg parameter is consulted), and a Content-Digest must match the
-//     body ([ErrSignatureInvalid]).
+//     body ([ErrSignatureInvalid]). A body larger than opts.MaxBodySize is
+//     [ErrBodyTooLarge].
 func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts RequestVerifyOptions) error {
 	for _, h := range []string{HeaderSignature, HeaderSignatureInput, HeaderSignatureKey} {
 		if req.Header.Get(h) == "" {
@@ -435,7 +476,7 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 	if opts.RequireBodyCoverage && requestHasBody(req) {
 		required = append(required, "content-digest", "content-type")
 	}
-	if missing := missingComponents(si.components, required); len(missing) > 0 {
+	if missing := missingComponents(si.plain, required); len(missing) > 0 {
 		return &MissingComponentsError{Required: dedupe(required), Missing: missing}
 	}
 
@@ -455,7 +496,11 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 
 	// The window and expires checks above use the verifier's (injectable)
 	// clock, so httpsign's own wall-clock checks are disabled.
-	cfg := httpsign.NewVerifyConfig().SetVerifyCreated(false).SetRejectExpired(false)
+	limit := opts.maxBodySize()
+	if limit > 0 && req.ContentLength > limit {
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrBodyTooLarge, req.ContentLength, limit)
+	}
+	cfg := httpsign.NewVerifyConfig().SetVerifyCreated(false).SetRejectExpired(false).SetMaxBodySize(limit)
 	v, err := newHTTPVerifier(pub, cfg, httpsign.Headers(coveredComponents(false, false, hasAAuthAuthorization(req))...))
 	if err != nil {
 		return err
@@ -464,10 +509,36 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 		return fmt.Errorf("%w: %w: %w", ErrSignatureInvalid, errSignatureMismatch, err)
 	}
 	if cds := req.Header.Values("Content-Digest"); len(cds) > 0 && req.Body != nil {
-		if err := httpsign.ValidateContentDigestHeader(cds, &req.Body, []string{ContentDigestAlg}); err != nil {
+		if err := bufferVerifiedBody(req, limit); err != nil {
+			return err
+		}
+		if err := httpsign.ValidateContentDigestHeader(cds, &req.Body, []string{ContentDigestAlg}, httpsign.NewDigestOptions().SetMaxBodySize(limit)); err != nil {
 			return fmt.Errorf("%w: content-digest: %w", ErrSignatureInvalid, err)
 		}
 	}
+	return nil
+}
+
+// bufferVerifiedBody reads req's body into memory, up to limit bytes (zero
+// means no limit), so its digest can be checked; a longer body is
+// [ErrBodyTooLarge]. The body is replaced with the bytes read.
+func bufferVerifiedBody(req *http.Request, limit int64) error {
+	r := io.Reader(req.Body)
+	if limit > 0 {
+		r = io.LimitReader(req.Body, limit+1)
+	}
+	b, err := io.ReadAll(r)
+	cerr := req.Body.Close()
+	if err != nil {
+		return fmt.Errorf("aauth: read request body: %w", err)
+	}
+	if limit > 0 && int64(len(b)) > limit {
+		return fmt.Errorf("%w: more than %d bytes", ErrBodyTooLarge, limit)
+	}
+	if cerr != nil {
+		return fmt.Errorf("aauth: close request body: %w", cerr)
+	}
+	req.Body = io.NopCloser(bytes.NewReader(b))
 	return nil
 }
 

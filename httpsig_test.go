@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yaronf/httpsign"
 )
 
 func signedTestRequest(t *testing.T, a *Agent, body string, keyid string) *http.Request {
@@ -321,4 +323,99 @@ func TestAuthorityOf(t *testing.T) {
 	if _, err := AuthorityOf("not a url"); err == nil {
 		t.Error("AuthorityOf without a host succeeded")
 	}
+}
+
+// A covered component with tr or req is refused before the body is read:
+// either would make the signature library buffer the whole body first.
+func TestVerifyRequestRefusesTrailerAndReqComponents(t *testing.T) {
+	a := testAgent(t)
+	for _, param := range []string{"tr", "req"} {
+		req := signedTestRequest(t, a, "", "")
+		req.Body = io.NopCloser(failingReader{})
+		req.ContentLength = -1
+		in := req.Header.Get(HeaderSignatureInput)
+		req.Header.Set(HeaderSignatureInput, strings.Replace(in, `"signature-key"`, `"signature-key" "x";`+param, 1))
+		err := VerifyRequest(req, a.Key.Public())
+		if !errors.Is(err, ErrSignatureInvalid) || !strings.Contains(err.Error(), param+" parameter") {
+			t.Fatalf("%s: err = %v", param, err)
+		}
+	}
+}
+
+// A component with parameters does not satisfy a required one:
+// "signature-key";key="other" covers another member, not the one in use.
+func TestVerifyRequestParameterizedComponentDoesNotCover(t *testing.T) {
+	a := testAgent(t)
+	tok, err := a.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://r.example/x", nil)
+	req.Header.Set(HeaderSignatureKey, `sig=jwt;jwt="`+tok+`", other=jwt;jwt="x"`)
+	f := httpsign.NewFields().AddHeaders("@method", "@authority", "@path").AddDictHeader("signature-key", "other")
+	s, err := newHTTPSigner(a.Key, httpsign.NewSignConfig().SignAlg(false).SignCreated(true), *f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, sig, err := httpsign.SignRequest(DefaultSignatureLabel, *s, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(HeaderSignatureInput, in)
+	req.Header.Set(HeaderSignature, sig)
+	err = VerifyRequest(req, a.Key.Public())
+	var mce *MissingComponentsError
+	if !errors.As(err, &mce) || !slices.Equal(mce.Missing, []string{"signature-key"}) {
+		t.Fatalf("err = %v, want signature-key missing", err)
+	}
+}
+
+// Verification reads at most MaxBodySize bytes of the body.
+func TestVerifyRequestMaxBodySize(t *testing.T) {
+	a := testAgent(t)
+	body := strings.Repeat("a", 100)
+	pub := a.Key.Public()
+	opts := RequestVerifyOptions{MaxBodySize: 50}
+
+	// Known length over the limit: refused without reading.
+	req := signedTestRequest(t, a, body, "")
+	req.Body = io.NopCloser(failingReader{})
+	if err := VerifyRequestWithOptions(req, pub, opts); !errors.Is(err, ErrBodyTooLarge) {
+		t.Fatalf("known length: err = %v, want ErrBodyTooLarge", err)
+	}
+	// Unknown length: reading stops just past the limit.
+	req = signedTestRequest(t, a, body, "")
+	cr := &countingReader{r: zeroReader{}}
+	req.Body, req.ContentLength = io.NopCloser(cr), -1
+	if err := VerifyRequestWithOptions(req, pub, opts); !errors.Is(err, ErrBodyTooLarge) {
+		t.Fatalf("unknown length: err = %v, want ErrBodyTooLarge", err)
+	}
+	if cr.n > 51 {
+		t.Fatalf("read %d bytes for a 50-byte limit", cr.n)
+	}
+	if e, ok := SignatureErrorFor(ErrBodyTooLarge); !ok || e.Code != SigErrInvalidRequest {
+		t.Fatalf("classified as %+v", e)
+	}
+	// Within the limit, and with no limit, the body verifies and stays
+	// readable.
+	for _, limit := range []int64{0, 100, -1} {
+		req = signedTestRequest(t, a, body, "")
+		if err := VerifyRequestWithOptions(req, pub, RequestVerifyOptions{MaxBodySize: limit}); err != nil {
+			t.Fatalf("MaxBodySize %d: %v", limit, err)
+		}
+		if b, err := io.ReadAll(req.Body); err != nil || string(b) != body {
+			t.Fatalf("MaxBodySize %d: body after verify = %q, %v", limit, b, err)
+		}
+	}
+}
+
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
 }
