@@ -613,6 +613,10 @@ func (s *Server) serveClarification(w http.ResponseWriter, r *http.Request, c *c
 		}
 		ex := Exchange{Time: s.now(), Question: p.Question.Text, FromAS: p.QuestionFromAS}
 		if update != nil {
+			// Checked again: the PS may have consented since.
+			if err := update.check(p); err != nil {
+				return err
+			}
 			ex.Updated, ex.Justification = true, post.Justification
 			update.apply(p)
 		} else {
@@ -624,6 +628,10 @@ func (s *Server) serveClarification(w http.ResponseWriter, r *http.Request, c *c
 	})
 	if errors.Is(err, ErrResolved) {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "no clarification is awaiting an answer")
+		return
+	}
+	if errors.Is(err, errBeyondConsent) {
+		writeError(w, err)
 		return
 	}
 	if err != nil {

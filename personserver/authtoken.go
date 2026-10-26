@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	aauth "github.com/aauth-dev/aauth-go"
@@ -300,12 +301,29 @@ func (s *Server) completeAuthToken(ctx context.Context, p *Pending, snap snapsho
 type updatedRequest struct {
 	snap  []byte
 	scope string
+	as    string
 	rc    *aauth.ResourceClaims
 	hints aauth.TokenRequestHints
 }
 
+// errBeyondConsent refuses an updated_request asking for more than the
+// person consented to while the PS follows the access server.
+var errBeyondConsent = &aauth.TokenError{Code: aauth.TokenErrInvalidResourceToken,
+	Err: errors.New("the updated resource token asks for scope beyond what the person consented to")}
+
+// check refuses the update for p if it asks for more than p's consent: once
+// the PS has consented and is following the access server (§9.1.2), the
+// consent is not asked again, so the update may narrow the scope but not
+// widen it. Before consent the person sees the updated request.
+func (u *updatedRequest) check(p *Pending) error {
+	if p.Federation != nil && !scopeWithin(u.scope, p.Federation.GrantedScope) {
+		return errBeyondConsent
+	}
+	return nil
+}
+
 func (u *updatedRequest) apply(p *Pending) {
-	p.Request, p.Scope, p.Hints = u.snap, u.scope, u.hints
+	p.Request, p.Scope, p.Hints, p.AccessServer = u.snap, u.scope, u.hints, u.as
 	p.ResourceTokenIssuer, p.ResourceTokenJTI = u.rc.Issuer, u.rc.ID
 }
 
@@ -313,7 +331,8 @@ func (u *updatedRequest) apply(p *Pending) {
 // clarification on pending auth token request p (§7.5.2.2): the new
 // resource token and presented token verify as a pair, and the resource
 // token has the same iss, ps, sub, agent_jkt, mission_s256, and tenant as
-// the original.
+// the original, and the same aud, so the request stays with the same
+// person server or access server.
 func (s *Server) verifyUpdatedRequest(ctx context.Context, c *caller, p *Pending, post *aauth.ClarificationPost) (*updatedRequest, error) {
 	var snap snapshot
 	if err := json.Unmarshal(p.Request, &snap); err != nil {
@@ -342,15 +361,19 @@ func (s *Server) verifyUpdatedRequest(ctx context.Context, c *caller, p *Pending
 	}
 	rc := job.rc
 	if rc.Issuer != origRC.Issuer || rc.PS != origRC.PS || rc.Subject != origRC.Subject || rc.AgentJKT != origRC.AgentJKT ||
-		rc.MissionS256 != origRC.MissionS256 || rc.Tenant != origRC.Tenant {
+		rc.MissionS256 != origRC.MissionS256 || rc.Tenant != origRC.Tenant || !slices.Equal(rc.Audience, origRC.Audience) {
 		return nil, &aauth.TokenError{Code: aauth.TokenErrInvalidResourceToken,
-			Err: errors.New("the updated resource token must keep iss, ps, sub, agent_jkt, mission_s256, and tenant")}
+			Err: errors.New("the updated resource token must keep iss, aud, ps, sub, agent_jkt, mission_s256, and tenant")}
 	}
 	raw, err := json.Marshal(snapshot{AgentToken: c.token, Body: body, ReceivedAt: c.at})
 	if err != nil {
 		return nil, err
 	}
-	return &updatedRequest{snap: raw, scope: rc.Scope, rc: rc, hints: next.TokenRequestHints}, nil
+	u := &updatedRequest{snap: raw, scope: rc.Scope, as: job.as, rc: rc, hints: next.TokenRequestHints}
+	if err := u.check(p); err != nil {
+		return nil, err
+	}
+	return u, nil
 }
 
 // resourceTokenAudience reads a resource token's aud and iss before

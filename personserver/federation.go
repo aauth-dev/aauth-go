@@ -80,8 +80,10 @@ type FederationState struct {
 	Status       string            `json:"status,omitempty"`
 	Question     *Question         `json:"question,omitempty"`
 	RetryAfter   int               `json:"retry_after,omitempty"`
-	// GrantedScope is the scope the PS consented to; the AS's token may
-	// not be broader.
+	// GrantedScope is the scope the person consented to: the Grant's
+	// Scope, or the resource token's scope when the Grant left it empty.
+	// The AS's token may not be broader, and while the PS follows the AS an
+	// updated_request may not ask for more (§7.5.2.2).
 	GrantedScope string `json:"granted_scope,omitempty"`
 }
 
@@ -128,12 +130,22 @@ func (s *Server) federate(ctx context.Context, j *authTokenJob, g Grant) (*Resul
 		AccessServer: j.as, ResourceToken: j.req.ResourceToken, AgentToken: j.agentToken,
 		PresentedToken: j.req.PresentedToken, SubagentToken: j.req.SubagentToken, UpstreamToken: j.req.UpstreamToken,
 	})
-	return s.federationOutcome(ctx, j, g, resp, err)
+	return s.federationOutcome(ctx, j, consentedScope(g, j.rc), resp, err)
+}
+
+// consentedScope is the scope a person consented to with g for the
+// resource token rc: g.Scope, or rc's scope when g leaves it empty.
+func consentedScope(g Grant, rc *aauth.ResourceClaims) string {
+	if g.Scope != "" {
+		return g.Scope
+	}
+	return rc.Scope
 }
 
 // federationOutcome acts on an AS response: deliver a granted token,
 // answer claims, keep following a pending request, or relay an error.
-func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, g Grant, resp *FederationResponse, err error) (*Result, *FederationState, error) {
+// consented is the scope the person consented to.
+func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, consented string, resp *FederationResponse, err error) (*Result, *FederationState, error) {
 	for range maxClaimsRounds {
 		if err != nil {
 			s.logger().WarnContext(ctx, "personserver: federation", "access_server", j.as, "error", err)
@@ -141,7 +153,7 @@ func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, g Grant
 		}
 		switch {
 		case resp.AuthToken != "":
-			return s.deliverFederated(ctx, j, g, resp)
+			return s.deliverFederated(ctx, j, consented, resp)
 		case resp.ErrorCode != "":
 			status := resp.ErrorStatus
 			if status < 400 {
@@ -163,7 +175,7 @@ func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, g Grant
 		}
 		return nil, &FederationState{
 			AccessServer: j.as, PendingURL: resp.PendingURL, Requirement: resp.Requirement,
-			Status: resp.Status, Question: resp.Question, RetryAfter: resp.RetryAfter, GrantedScope: g.Scope,
+			Status: resp.Status, Question: resp.Question, RetryAfter: resp.RetryAfter, GrantedScope: consented,
 		}, nil
 	}
 	return asUnreachable(errors.New("the access server kept requiring claims")), nil, nil
@@ -195,11 +207,11 @@ func (s *Server) claimsFor(ctx context.Context, person string, required []string
 
 // deliverFederated verifies an auth token the access server issued before
 // returning it to the agent (draft -11 §9.1.3), and records it.
-func (s *Server) deliverFederated(ctx context.Context, j *authTokenJob, g Grant, resp *FederationResponse) (*Result, *FederationState, error) {
+func (s *Server) deliverFederated(ctx context.Context, j *authTokenJob, consented string, resp *FederationResponse) (*Result, *FederationState, error) {
 	now := s.now()
 	ac, err := aauth.VerifyAuthToken(ctx, resp.AuthToken, j.rc.Issuer, aauth.AuthTokenVerifyOptions{TokenVerifyOptions: s.tokenOptions(now)})
 	if err == nil {
-		err = s.checkDelivered(j, g, ac)
+		err = s.checkDelivered(j, consented, ac)
 	}
 	if err != nil {
 		s.logger().WarnContext(ctx, "personserver: federated auth token failed delivery checks", "access_server", j.as, "error", err)
@@ -215,8 +227,9 @@ func (s *Server) deliverFederated(ctx context.Context, j *authTokenJob, g Grant,
 }
 
 // checkDelivered applies the delivery checks of §9.1.3 steps 2–7 to a
-// verified auth token (step 1, its signature and aud, already passed).
-func (s *Server) checkDelivered(j *authTokenJob, g Grant, ac *aauth.AuthClaims) error {
+// verified auth token (step 1, its signature and aud, already passed). Its
+// scope must be within both the request's and the consented scope.
+func (s *Server) checkDelivered(j *authTokenJob, consented string, ac *aauth.AuthClaims) error {
 	switch {
 	case ac.Issuer != j.as:
 		return fmt.Errorf("iss %q is not the access server %q", ac.Issuer, j.as)
@@ -228,7 +241,7 @@ func (s *Server) checkDelivered(j *authTokenJob, g Grant, ac *aauth.AuthClaims) 
 		return errors.New("cnf.jwk is not the agent's key")
 	case ac.Subject != j.rc.Subject || ac.Subject != s.subjects.derive(j.person, j.rc.Issuer):
 		return errors.New("sub is not the person's directed identifier at the resource")
-	case !scopeWithin(ac.Scope, j.rc.Scope) || (g.Scope != "" && !scopeWithin(ac.Scope, g.Scope)):
+	case !scopeWithin(ac.Scope, j.rc.Scope) || !scopeWithin(ac.Scope, consented):
 		return fmt.Errorf("scope %q is broader than requested", ac.Scope)
 	case ac.ExpiresAt.After(presentedExp(j.presented)):
 		return errors.New("exp is later than the presented token's")
@@ -252,8 +265,7 @@ func (s *Server) pollFederation(ctx context.Context, p *Pending) *Pending {
 			res = r
 		}
 	} else {
-		g := Grant{Scope: fed.GrantedScope}
-		if res, next, err = s.federationOutcome(ctx, j, g, resp, perr); err != nil {
+		if res, next, err = s.federationOutcome(ctx, j, fed.GrantedScope, resp, perr); err != nil {
 			res = errorResult(err)
 		}
 	}
