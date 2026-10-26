@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -58,9 +59,13 @@ func New(cfg Config, logger *slog.Logger) (*Sandbox, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	ca, err := LoadOrCreateCA(cfg.StateDir)
+	ca, err := LoadOrCreateCA(cfg.StateDir, cfg.CADomains()...)
 	if err != nil {
 		return nil, err
+	}
+	if ca.Replaced != "" {
+		logger.Warn("created a new sandbox CA; trust the new one where you trusted the old (aauth-sandbox ca export)",
+			"reason", ca.Replaced, "ca", filepath.Join(cfg.StateDir, CACertFile))
 	}
 	cert, err := ca.IssueServerCert(cfg.LocalHosts())
 	if err != nil {

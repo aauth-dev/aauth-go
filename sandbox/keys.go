@@ -116,7 +116,7 @@ func Init(cfg Config) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if _, err := LoadOrCreateCA(cfg.StateDir); err != nil {
+	if _, err := LoadOrCreateCA(cfg.StateDir, cfg.CADomains()...); err != nil {
 		return cfg, err
 	}
 	names := make([]string, 0, len(keyAlg))

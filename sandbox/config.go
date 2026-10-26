@@ -173,6 +173,19 @@ func (c Config) LocalHosts() []string {
 	return append(hosts, c.UpstreamHosts()...)
 }
 
+// CADomains returns the DNS names the sandbox CA is constrained to:
+// Domain, and each local host name that is not under Domain (a Hosts
+// override or an upstream named outside it).
+func (c Config) CADomains() []string {
+	domains := []string{c.Domain}
+	for _, h := range c.LocalHosts() {
+		if !permits(domains, h) {
+			domains = append(domains, h)
+		}
+	}
+	return domains
+}
+
 // UpstreamHosts returns the upstream host names in name order.
 func (c Config) UpstreamHosts() []string {
 	return slices.Sorted(maps.Keys(c.Upstreams))

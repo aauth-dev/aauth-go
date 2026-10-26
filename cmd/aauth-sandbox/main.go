@@ -217,7 +217,7 @@ func newCA(c *common) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if _, err := sandbox.LoadOrCreateCA(cfg.StateDir); err != nil {
+			if _, err := loadCA(cmd, cfg); err != nil {
 				return err
 			}
 			_, err = fmt.Fprintln(cmd.OutOrStdout(), filepath.Join(cfg.StateDir, sandbox.CACertFile))
@@ -232,7 +232,7 @@ func newCA(c *common) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			authority, err := sandbox.LoadOrCreateCA(cfg.StateDir)
+			authority, err := loadCA(cmd, cfg)
 			if err != nil {
 				return err
 			}
@@ -241,6 +241,23 @@ func newCA(c *common) *cobra.Command {
 		},
 	})
 	return ca
+}
+
+// loadCA loads or creates the CA for cfg, telling the user when an old CA
+// was replaced and must be trusted again.
+func loadCA(cmd *cobra.Command, cfg sandbox.Config) (*sandbox.CA, error) {
+	authority, err := sandbox.LoadOrCreateCA(cfg.StateDir, cfg.CADomains()...)
+	if err != nil {
+		return nil, err
+	}
+	if authority.Replaced != "" {
+		msg := "created a new sandbox CA because " + authority.Replaced + "; trust the new " +
+			filepath.Join(cfg.StateDir, sandbox.CACertFile) + " where you trusted the old one"
+		if _, err := fmt.Fprintln(cmd.ErrOrStderr(), msg); err != nil {
+			return nil, err
+		}
+	}
+	return authority, nil
 }
 
 func (c *common) defaults() (sandbox.Config, error) {
@@ -277,7 +294,7 @@ func newTrace(c *common) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			authority, err := sandbox.LoadOrCreateCA(cfg.StateDir)
+			authority, err := loadCA(cmd, cfg)
 			if err != nil {
 				return err
 			}
@@ -325,8 +342,11 @@ func newInit(c *common) *cobra.Command {
 		Use:   "init",
 		Short: "Create the CA and every key in the state directory, once, before starting several sandbox processes that share it",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := c.config()
+			cfg, err := c.defaults()
 			if err != nil {
+				return err
+			}
+			if _, err := loadCA(cmd, cfg); err != nil {
 				return err
 			}
 			cfg, err = sandbox.Init(cfg)
@@ -352,7 +372,7 @@ func newHealth(c *common) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			authority, err := sandbox.LoadOrCreateCA(cfg.StateDir)
+			authority, err := loadCA(cmd, cfg)
 			if err != nil {
 				return err
 			}
