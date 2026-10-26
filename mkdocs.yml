@@ -1,5 +1,6 @@
 site_name: aauth-go
 site_description: A Go implementation of the AAuth protocol
+site_url: https://aauth-dev.github.io/aauth-go/
 repo_url: https://github.com/aauth-dev/aauth-go
 repo_name: aauth-dev/aauth-go
 

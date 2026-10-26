@@ -179,6 +179,40 @@ aauth-sandbox trace --clear  # clear
 
 The same list is at `GET https://<any role host>/sandbox/trace`; `DELETE` clears it. The trace holds every token the roles exchanged, so it refuses requests from web pages (those carrying `Origin`, or `Sec-Fetch-Site` set to `cross-site` or `same-site`). Opening it directly in a browser works.
 
+## Use It from Other Containers
+
+A client or resource in its own container reaches the sandbox over a Compose network. Three things make that work:
+
+- **Names.** Give the sandbox service the role names as network aliases, so a container resolves `ap.aauth.test`, `ps.aauth.test` and the rest, and any `--upstream` name, to it.
+- **The CA.** Mount the sandbox's state volume read-only (`state:/state:ro`) and point the client at `/state/ca.pem`. The Petstore example below passes it as `--ca-file`.
+- **The helper.** A tool that calls the signing helper by service name, such as Newman, needs `--signer-host <service>`, because the helper answers only loopback names otherwise.
+
+```yaml
+services:
+  sandbox:
+    image: aauth-sandbox:dev
+    command: ["serve", "--state", "/state",
+              "--signer", "0.0.0.0:8099", "--signer-any-interface", "--signer-host", "sandbox",
+              "--upstream", "petstore=http://petstore:8080"]
+    volumes:
+      - state:/state
+    networks:
+      default:
+        aliases: [ap.aauth.test, ps.aauth.test, as.aauth.test, resource.aauth.test, docs.aauth.test, petstore.aauth.test]
+  petstore:
+    image: petstore-server:dev
+    command: ["--listen", ":8080", "--auth", "aauth",
+              "--url", "https://petstore.aauth.test",
+              "--trust", "https://ps.aauth.test",
+              "--ca-file", "/state/ca.pem"]
+    volumes:
+      - state:/state:ro
+volumes:
+  state:
+```
+
+The image's default command already listens on every interface, so a command of your own needs only the options you add. Do not drop `--listen-any-interface` if you replace the whole command: without it the roles listen on loopback and other containers get "connection refused".
+
 ## Test Another Implementation
 
 Replace a role with an external implementation with `--remote`:
