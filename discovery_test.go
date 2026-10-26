@@ -2,10 +2,14 @@ package aauth
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 )
 
@@ -110,5 +114,73 @@ func TestPSClientDefaultsToGuardedClient(t *testing.T) {
 	hc := &http.Client{}
 	if got := (&PSClient{HTTPClient: hc}).httpClient(); got != hc {
 		t.Fatal("explicit HTTPClient was not honored")
+	}
+}
+
+func TestCheckSameHostRedirect(t *testing.T) {
+	mk := func(u string) *http.Request {
+		req, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return req
+	}
+	orig := []*http.Request{mk("https://ps.example/.well-known/aauth-person.json")}
+	for u, ok := range map[string]bool{
+		"https://ps.example/meta.json":     true,
+		"https://PS.example:443/meta.json": true,
+		"https://evil.example/meta.json":   false,
+		"https://ps.example:8443/x":        false,
+		"https://sub.ps.example/x":         false,
+		"http://ps.example/x":              false,
+	} {
+		err := CheckSameHostRedirect(mk(u), orig)
+		if ok && err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+		if !ok && !errors.Is(err, ErrDisallowedDestination) {
+			t.Errorf("%s: err = %v, want ErrDisallowedDestination", u, err)
+		}
+	}
+	via := make([]*http.Request, maxDiscoveryRedirects)
+	for i := range via {
+		via[i] = orig[0]
+	}
+	if err := CheckSameHostRedirect(mk("https://ps.example/x"), via); !errors.Is(err, ErrDisallowedDestination) {
+		t.Errorf("too many redirects: err = %v", err)
+	}
+}
+
+// Discovery does not follow a redirect from the issuer's well-known
+// document to another host, even one that claims the issuer.
+func TestDiscoveryRefusesCrossHostRedirect(t *testing.T) {
+	var evilHit atomic.Bool
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Host {
+		case "victim.example":
+			http.Redirect(w, r, "https://evil.example/meta.json", http.StatusFound)
+		default:
+			evilHit.Store(true)
+			_, _ = io.WriteString(w, `{"issuer":"https://victim.example","jwks_uri":"https://evil.example/jwks.json"}`)
+		}
+	}))
+	defer srv.Close()
+	addr := srv.Listener.Addr().String()
+	hc := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, network, addr)
+			},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test server certificate
+		},
+		CheckRedirect: newDiscoveryClient().CheckRedirect,
+	}
+	var md PersonServerMetadata
+	err := FetchMetadata(context.Background(), hc, "https://victim.example", WellKnownPerson, &md)
+	if !errors.Is(err, ErrDisallowedDestination) {
+		t.Fatalf("err = %v, want ErrDisallowedDestination", err)
+	}
+	if evilHit.Load() {
+		t.Fatal("followed the redirect to another host")
 	}
 }

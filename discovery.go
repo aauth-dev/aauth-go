@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -31,7 +33,11 @@ const maxDiscoveryRedirects = 5
 //     link-local, CGNAT, unspecified, multicast, and other special-purpose
 //     addresses are refused at dial time, after name resolution, so a DNS
 //     answer cannot redirect it to an internal address;
-//   - it follows at most five redirects, ignores proxy settings from the
+//   - it follows a redirect only to the same scheme, host, and port as the
+//     original request (signature-key §7.3: a redirect to another host
+//     would let that host answer for the issuer), and at most five of
+//     them; see [CheckSameHostRedirect];
+//   - it ignores proxy settings from the
 //     environment (a proxy would hide the destination), and gives up after
 //     10 seconds.
 //
@@ -49,7 +55,8 @@ func newDiscoveryClient() *http.Client {
 // EgressClient returns the http.Client that agent-side requests to a person
 // server use when the caller supplies none (see [PSClient]). It applies the
 // same destination rules as [DiscoveryClient] (https only, public unicast
-// addresses only, checked at dial time and on every redirect) but has no
+// addresses only, checked at dial time and on every redirect; redirects
+// only to the same host) but has no
 // overall timeout and a longer response-header timeout, because deferred
 // requests long-poll with Prefer: wait. Callers bound each request with its
 // context.
@@ -80,15 +87,46 @@ func newGuardedClient(dial, total time.Duration) *http.Client {
 		ResponseHeaderTimeout: headerTimeout,
 	}
 	return &http.Client{
-		Transport: httpsOnly{t},
-		Timeout:   total,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxDiscoveryRedirects {
-				return fmt.Errorf("%w: more than %d redirects", ErrDisallowedDestination, maxDiscoveryRedirects)
-			}
-			return nil
-		},
+		Transport:     httpsOnly{t},
+		Timeout:       total,
+		CheckRedirect: CheckSameHostRedirect,
 	}
+}
+
+// CheckSameHostRedirect is an http.Client CheckRedirect function for
+// discovery: it refuses a redirect to a different scheme, host, or port
+// than the original request (signature-key §7.3), and more than five
+// redirects. Refusals wrap [ErrDisallowedDestination]. Set it on a client
+// you supply for discovery.
+func CheckSameHostRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxDiscoveryRedirects {
+		return fmt.Errorf("%w: more than %d redirects", ErrDisallowedDestination, maxDiscoveryRedirects)
+	}
+	if len(via) > 0 && !sameOrigin(req.URL, via[0].URL) {
+		return fmt.Errorf("%w: redirect from %s to another host %s", ErrDisallowedDestination, via[0].URL.Host, req.URL.Host)
+	}
+	return nil
+}
+
+// sameOrigin reports whether a and b have the same scheme, host, and port,
+// treating an omitted port as the scheme's default.
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		portOrDefault(a) == portOrDefault(b)
+}
+
+func portOrDefault(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
 }
 
 // httpsOnly refuses any request that is not https, which covers redirects
