@@ -47,6 +47,12 @@ import (
 //     is minted fresh for each request, a person token is replaced through
 //     the PS cache, and an auth token is replaced by presenting the (fresh)
 //     person token and redeeming the new challenge;
+//   - on 401 Signature-Error invalid_input whose required_input names
+//     components the signature left out (a resource's
+//     additional_signature_components, §11.3.3.1), signs the request again
+//     covering them and resends it once; later requests to that resource
+//     cover them from the start. If the request cannot cover them (a
+//     required header is absent) the 401 is returned;
 //   - on 401 Signature-Error clock_skew, waits out the skew the response
 //     Date header shows (up to MaxClockSkewWait) and presents the same
 //     signed request once more (signature-key §5.4.14);
@@ -134,6 +140,7 @@ type Transport struct {
 	auth    map[string]cachedToken // resource → auth token
 	persons map[string]bool        // resources that asked for the person (§6.4)
 	session map[string]string      // resource → session token (AAuth-Access, §6.3)
+	cover   map[string][]string    // resource → extra components it requires (invalid_input)
 }
 
 // NewTransport builds a Transport for agent, obtaining tokens from ps
@@ -172,16 +179,30 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	skewRetried := false
+	skewRetried, inputRetried := false, false
 	settlements := 0
 	for range maxChallenges + maxSettlements + 1 {
-		signed, presented, err := t.sign(req, body, cred, t.cachedSession(resource))
+		session := t.cachedSession(resource)
+		signed, presented, err := t.sign(req, body, cred, session)
 		if err != nil {
 			return nil, err
 		}
 		res, err := t.base().RoundTrip(signed)
 		if err != nil {
 			return nil, err
+		}
+		if !inputRetried && res.StatusCode == http.StatusUnauthorized {
+			if retry, components, ok := t.coverRequiredInput(req, body, res, signed, presented, session); ok {
+				// §11.3.3.1: the resource requires components beyond the
+				// base set; cover them and send the request once more.
+				inputRetried = true
+				drainBody(res.Body)
+				t.setCover(resource, components)
+				signed = retry
+				if res, err = t.base().RoundTrip(retry); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if !skewRetried && res.StatusCode == http.StatusUnauthorized {
 			if wait, ok := t.clockSkewWait(res, signed, presented); ok {
@@ -400,10 +421,70 @@ func (t *Transport) challengeOptions(resource, presented string) ResourceChallen
 	return opts
 }
 
+// coverRequiredInput handles a 401 Signature-Error invalid_input: when its
+// required_input names components signed did not cover, it signs req
+// again covering them as well, with the same credential and session, and
+// returns that request and the full list of extra components. ok is false
+// when the response is not such an error, or the request cannot cover the
+// components; the 401 then goes to the caller unchanged.
+func (t *Transport) coverRequiredInput(req *http.Request, body []byte, res *http.Response, signed *http.Request, presented, session string) (*http.Request, []string, bool) {
+	se, err := SignatureErrorFromResponse(res)
+	if err != nil || se == nil || se.Code != SigErrInvalidInput {
+		return nil, nil, false
+	}
+	si, err := parseSignatureInput(signed, DefaultSignatureLabel)
+	if err != nil {
+		return nil, nil, false
+	}
+	missing := missingComponents(si.plain, se.RequiredInput)
+	if len(missing) == 0 {
+		return nil, nil, false
+	}
+	components := dedupe(append(t.coverFor(origin(req)), missing...))
+	retry, _, err := t.signCovering(req, body, presented, session, components)
+	if err != nil {
+		// The request lacks what the resource asks to be covered (for
+		// example a header it does not carry). Not an error of the
+		// transport: the resource's 401 is returned to the caller.
+		return nil, nil, false
+	}
+	return retry, components, true
+}
+
+// coverFor returns the extra components resource requires.
+func (t *Transport) coverFor(resource string) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cover[resource]
+}
+
+func (t *Transport) setCover(resource string, components []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cover == nil {
+		t.cover = map[string][]string{}
+	}
+	t.cover[resource] = components
+}
+
 // sign clones req, attaches credential (the agent token when empty) and
-// the optional session token, and signs it, returning the signed request
-// and the credential it presents.
+// the optional session token, and signs it, covering those extra
+// components its origin requires that the request carries; it returns the
+// signed request and the credential it presents.
 func (t *Transport) sign(req *http.Request, body []byte, credential, session string) (*http.Request, string, error) {
+	var extra []string
+	for _, c := range t.coverFor(origin(req)) {
+		// A header the request lacks cannot be covered; leave it to the
+		// resource to refuse this request if it needs it.
+		if strings.HasPrefix(c, "@") || req.Header.Get(c) != "" || (c == "content-digest" && body != nil) {
+			extra = append(extra, c)
+		}
+	}
+	return t.signCovering(req, body, credential, session, extra)
+}
+
+// signCovering is sign, covering the given extra components.
+func (t *Transport) signCovering(req *http.Request, body []byte, credential, session string, extra []string) (*http.Request, string, error) {
 	c := req.Clone(req.Context())
 	if body != nil {
 		c.Body = io.NopCloser(bytes.NewReader(body))
@@ -427,7 +508,7 @@ func (t *Transport) sign(req *http.Request, body []byte, credential, session str
 	if session != "" {
 		c.Header.Set("Authorization", "AAuth "+session)
 	}
-	if err := SignRequest(c, t.Agent.Key, ""); err != nil {
+	if err := SignRequestCovering(c, t.Agent.Key, "", extra); err != nil {
 		return nil, "", err
 	}
 	return c, credential, nil
