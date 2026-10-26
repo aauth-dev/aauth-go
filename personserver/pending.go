@@ -148,8 +148,11 @@ type Pending struct {
 	// race the issuance.
 	Approving bool `json:"approving,omitempty"`
 
-	// Result is the terminal response, once resolved.
-	Result *Result `json:"result,omitempty"`
+	// Result is the terminal response, once resolved. Delivered is set
+	// when the pending URL has returned it to the agent; its body is then
+	// discarded, and the pending URL answers 410 Gone (§11.8.3).
+	Result    *Result `json:"result,omitempty"`
+	Delivered bool    `json:"delivered,omitempty"`
 	// Version supports optimistic updates (see PendingStore).
 	Version int64 `json:"version"`
 }
@@ -477,12 +480,50 @@ func (s *Server) respondStep(w http.ResponseWriter, r *http.Request, p *Pending,
 	}
 	switch {
 	case p.Result != nil:
-		p.Result.write(w)
+		res, err := s.deliver(ctx, p.ID)
+		switch {
+		case errors.Is(err, errDelivered):
+			writeGone(w)
+		case err != nil:
+			s.serverError(w, r, "deliver pending result", err)
+		default:
+			res.write(w)
+		}
 	case p.State == StateCancelled:
 		aauth.WriteProblem(w, http.StatusGone, aauth.ErrCodeInvalidRequest, "the request was cancelled")
 	default:
 		s.writeAccepted(w, p)
 	}
+}
+
+// errDelivered means a pending request's terminal response has already
+// been returned.
+var errDelivered = errors.New("personserver: the result was already delivered")
+
+// deliver takes pending id's terminal response for the agent, once: it
+// marks the request delivered and discards the stored body, so a later
+// request to the pending URL answers 410 Gone (§11.8.3). Of concurrent
+// polls exactly one receives the response.
+func (s *Server) deliver(ctx context.Context, id string) (*Result, error) {
+	var out Result
+	_, err := s.mutateQuietly(ctx, id, func(p *Pending) error {
+		if p.Delivered || p.Result == nil {
+			return errDelivered
+		}
+		out = *p.Result
+		p.Delivered = true
+		p.Result = &Result{Status: out.Status, ContentType: out.ContentType}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// writeGone answers a pending URL whose terminal response was delivered.
+func writeGone(w http.ResponseWriter) {
+	aauth.WriteProblem(w, http.StatusGone, aauth.ErrCodeInvalidRequest, "the request's result was already delivered")
 }
 
 // needsAgent reports whether p should be answered at once rather than
@@ -574,6 +615,10 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 	}
 	if p.State == StateCancelled {
 		aauth.WriteProblem(w, http.StatusGone, aauth.ErrCodeInvalidRequest, "the request was cancelled")
+		return
+	}
+	if p.Delivered {
+		writeGone(w)
 		return
 	}
 	switch r.Method {
