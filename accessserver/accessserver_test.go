@@ -302,8 +302,8 @@ func TestFourPartyOverHTTPAndCollapsed(t *testing.T) {
 
 func TestClaimsAndClarification(t *testing.T) {
 	for _, local := range []bool{false, true} {
-		f := newFourParty(t, local, func(_ context.Context, person string, required []string) (map[string]any, error) {
-			return map[string]any{"email": person + "@example.com"}, nil
+		f := newFourParty(t, local, func(_ context.Context, r *personserver.ClaimsRequest) (map[string]any, error) {
+			return map[string]any{"email": r.Person + "@example.com"}, nil
 		}, nil)
 		var transcript []Exchange
 		f.setAuthz(func(r *AuthorizationRequest) Decision {

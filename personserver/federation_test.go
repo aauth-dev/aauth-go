@@ -227,9 +227,10 @@ func TestFederationDeliveryChecks(t *testing.T) {
 
 func TestFederationClaimsInteractionAndClarification(t *testing.T) {
 	var asked []string
-	w, f := newFederatedWorld(t, func(_ context.Context, person string, required []string) (map[string]any, error) {
-		asked = required
-		return map[string]any{"email": person + "@example.com", "sub": "never"}, nil
+	var seen *ClaimsRequest
+	w, f := newFederatedWorld(t, func(_ context.Context, r *ClaimsRequest) (map[string]any, error) {
+		asked, seen = r.Required, r
+		return map[string]any{"email": r.Person + "@example.com", "sub": "never"}, nil
 	})
 	ctx := context.Background()
 	// Claims are answered by the PS itself.
@@ -245,6 +246,9 @@ func TestFederationClaimsInteractionAndClarification(t *testing.T) {
 	c := w.psClient(w.agent)
 	if _, err := c.RequestAuthToken(ctx, aauth.AuthTokenRequest{ResourceToken: rt, PresentedToken: pt}); err != nil {
 		t.Fatal(err)
+	}
+	if seen == nil || seen.AccessServer != testAS || seen.Resource != w.resURL || seen.Scope != "files:read" || seen.Agent != agentRefOf(w.agent) || seen.Person != "alice" {
+		t.Fatalf("claims request %+v", seen)
 	}
 	if len(asked) != 1 || asked[0] != "email" {
 		t.Fatalf("claims provider asked for %v", asked)

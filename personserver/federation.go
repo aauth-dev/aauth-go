@@ -67,9 +67,31 @@ type FederationResponse struct {
 }
 
 // ClaimsProvider supplies identity claims an access server requires about
-// the person (draft -11 §9.2). It is never asked for sub. Nil answers
-// with no claims; the AS ignores what it does not get.
-type ClaimsProvider func(ctx context.Context, person string, required []string) (map[string]any, error)
+// the person (draft -11 §9.2), deciding what to release to that recipient:
+// r names the access server asking, the resource, the scope, and the
+// mission, so a host can apply per-recipient release policy and answer
+// only part of what was asked. It is never asked for sub, and sub is
+// never sent. Nil answers with no claims; the AS ignores what it does not
+// get.
+type ClaimsProvider func(ctx context.Context, r *ClaimsRequest) (map[string]any, error)
+
+// ClaimsRequest is an access server's requirement=claims (draft -11 §9.2)
+// with what the PS knows of the request it is for.
+type ClaimsRequest struct {
+	// Person is the person the claims are about.
+	Person string
+	// Required are the claims the access server asked for, without sub.
+	Required []string
+	// AccessServer is the access server that will receive the claims.
+	AccessServer string
+	// Resource is the resource the token is for, Scope the scope the
+	// person consented to, and MissionS256 the mission, if any.
+	Resource    string
+	Scope       string
+	MissionS256 string
+	// Agent is the agent the token is for.
+	Agent AgentRef
+}
 
 // FederationState is an access server's pending request the PS is
 // following on the agent's behalf (draft -11 §9.1.2).
@@ -164,7 +186,7 @@ func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, consent
 			return asUnreachable(errors.New("the access server answered neither a token, a pending URL, nor an error")), nil, nil
 		case resp.Requirement.Requirement == aauth.RequirementClaims:
 			// The PS answers claims itself (§9.2), then looks again.
-			claims, cerr := s.claimsFor(ctx, j.person, resp.RequiredClaims)
+			claims, cerr := s.claimsFor(ctx, j, consented, resp.RequiredClaims)
 			if cerr != nil {
 				return nil, nil, cerr
 			}
@@ -181,8 +203,9 @@ func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, consent
 	return asUnreachable(errors.New("the access server kept requiring claims")), nil, nil
 }
 
-// claimsFor asks the ClaimsProvider for the required claims, never sub.
-func (s *Server) claimsFor(ctx context.Context, person string, required []string) (map[string]any, error) {
+// claimsFor asks the ClaimsProvider for the claims the access server
+// requires for job j, never sub.
+func (s *Server) claimsFor(ctx context.Context, j *authTokenJob, consented string, required []string) (map[string]any, error) {
 	out := map[string]any{}
 	if s.cfg.ClaimsProvider == nil {
 		return out, nil
@@ -193,7 +216,10 @@ func (s *Server) claimsFor(ctx context.Context, person string, required []string
 			names = append(names, n)
 		}
 	}
-	claims, err := s.cfg.ClaimsProvider(ctx, person, names)
+	claims, err := s.cfg.ClaimsProvider(ctx, &ClaimsRequest{
+		Person: j.person, Required: names, AccessServer: j.as, Resource: j.rc.Issuer, Scope: consented,
+		MissionS256: j.rc.MissionS256, Agent: agentRef(j.agent),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("personserver: claims provider: %w", err)
 	}
