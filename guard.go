@@ -79,8 +79,13 @@ type Caller struct {
 	Issuer, Subject string
 	// PS is the person's person server, for a person or an auth token.
 	PS string
-	// Scope is the scope an auth token grants.
-	Scope string
+	// Scope is the scope an auth token grants, and Account the account at
+	// this resource it grants it for (§11.11), if the token names one: a
+	// handler enforces per-account access against it.
+	Scope, Account string
+	// Tenant is the person's organization from a person or an auth token,
+	// if any; (Issuer, Tenant) names it.
+	Tenant string
 	// MissionS256 is the mission a person or an auth token was issued
 	// under (§8), if any.
 	MissionS256 string
@@ -306,6 +311,7 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 		return &Caller{
 			TokenType: typ, AgentJKT: person.Cnf.JWK.Thumbprint(),
 			Issuer: person.Issuer, Subject: person.Subject, PS: person.Issuer, MissionS256: person.MissionS256,
+			Tenant: person.Tenant,
 		}, true
 	case TypAuth:
 		opts := g.cfg.Verify
@@ -318,6 +324,7 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 		c := &Caller{
 			TokenType: typ, AgentJKT: auth.Cnf.JWK.Thumbprint(),
 			Issuer: auth.Issuer, Subject: auth.Subject, PS: auth.PS, Scope: auth.Scope, MissionS256: auth.MissionS256,
+			Account: auth.Account, Tenant: auth.Tenant,
 		}
 		if access.Level == AccessAuth && !c.HasScope(access.Scope) {
 			g.challengeAuth(w, auth, unionScope(auth.Scope, access.Scope))

@@ -263,3 +263,23 @@ func TestResourceGuardTrustBeforeKeyResolution(t *testing.T) {
 		t.Fatalf("resolver called %d times for an untrusted issuer", resolver.calls)
 	}
 }
+
+// The caller carries the account and tenant the token names, so handlers
+// can enforce per-account access.
+func TestResourceGuardCallerAccountAndTenant(t *testing.T) {
+	f := newGuardFixture(t)
+	cg := newCallerGuard(t, f.config, Access{Level: AccessPerson})
+	if res := f.call(t, http.MethodGet, cg.url+"/op", f.personToken(t, cg.url), nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("person token: %d", res.StatusCode)
+	}
+	if cg.caller.Tenant != "acme" || cg.caller.Account != "" {
+		t.Errorf("person caller %+v", cg.caller)
+	}
+	auth := f.authToken(t, f.ps, gfPS, WellKnownPerson, cg.url, "files:read", nil)
+	if res := f.call(t, http.MethodGet, cg.url+"/op", auth, nil); res.StatusCode != http.StatusOK {
+		t.Fatalf("auth token: %d", res.StatusCode)
+	}
+	if cg.caller.Tenant != "acme" || cg.caller.Account != "acct-7" {
+		t.Errorf("auth caller %+v", cg.caller)
+	}
+}
