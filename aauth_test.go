@@ -414,3 +414,26 @@ func TestAgentTokenSubInIssuerDomain(t *testing.T) {
 		t.Error("NewAgent accepted an identifier outside its issuer's domain")
 	}
 }
+
+// An agent token may live at most 24 hours unless the verifier raises the
+// ceiling.
+func TestAgentTokenLifetime(t *testing.T) {
+	a := testAgent(t, WithIssuer("https://agent.example"))
+	jwk := a.JWK()
+	now := time.Now()
+	tok, err := MintAgentToken(AgentClaims{DWK: WellKnownAgent, Cnf: Cnf{JWK: &jwk}, RegisteredClaims: jwt.RegisteredClaims{
+		Issuer: a.Issuer, Subject: a.ID.String(), ID: "j",
+		IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(10 * 365 * 24 * time.Hour)),
+	}}, a.Key, jwk.Kid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := VerifyAgentTokenOptions{Resolver: StaticResolver{a.Issuer: a.JWKS()}}
+	if _, err := VerifyAgentToken(context.Background(), tok, opts); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("10-year agent token: err = %v", err)
+	}
+	opts.MaxLifetime = 20 * 365 * 24 * time.Hour
+	if _, err := VerifyAgentToken(context.Background(), tok, opts); err != nil {
+		t.Fatalf("raised ceiling: %v", err)
+	}
+}

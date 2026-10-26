@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -211,12 +212,16 @@ type VerifyAgentTokenOptions struct {
 	// Signature tunes HTTP message-signature verification in
 	// VerifyAndExtractAgent (validity window, required components, clock).
 	Signature RequestVerifyOptions
+	// MaxLifetime bounds the token's lifetime (exp − iat); zero means
+	// [MaxAgentTokenLifetime], the most a provider SHOULD issue (§5.3.1).
+	MaxLifetime time.Duration
 }
 
 // VerifyAgentToken verifies an aa-agent+jwt per draft -11 §5.3.3 and the
 // common JWT rules (§11.5.2) and returns its claims: typ, alg, signature,
 // iat REQUIRED (refused as [ErrClockSkew] when further ahead of the
-// verifier's clock than opts.Signature's window), and exp in the future
+// verifier's clock than opts.Signature's window), a lifetime of at most
+// opts.MaxLifetime (24 hours by default), and exp in the future
 // with no skew tolerance ([ErrExpired]). sub must be an agent of iss: the
 // identifier's domain is the host of iss (§5.2), so a provider cannot name
 // another provider's agents; outside RequireProviderClaims an iss on a
@@ -229,7 +234,10 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 	if opts.Resolver == nil {
 		return nil, errors.New("aauth: VerifyAgentTokenOptions.Resolver is required")
 	}
-	check := jwtCheck{typ: TypAgent, resolver: opts.Resolver, clock: opts.Signature}
+	check := jwtCheck{typ: TypAgent, maxLifetime: opts.MaxLifetime, resolver: opts.Resolver, clock: opts.Signature}
+	if check.maxLifetime <= 0 {
+		check.maxLifetime = MaxAgentTokenLifetime
+	}
 	if opts.RequireProviderClaims {
 		check.dwks = []string{WellKnownAgent}
 		check.issuer = func(iss string) error {

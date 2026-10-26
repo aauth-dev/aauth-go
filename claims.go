@@ -113,8 +113,7 @@ func (c *AgentClaims) confirmation() *JWK                { return c.Cnf.JWK }
 type jwtCheck struct {
 	typ  string   // expected typ header
 	dwks []string // accepted dwk values; empty skips the check
-	// maxLifetime is a MUST ceiling on exp − iat (person and auth
-	// tokens); zero means none.
+	// maxLifetime is a ceiling on exp − iat; zero means none.
 	maxLifetime time.Duration
 	// issuer, when non-nil, validates iss before any key is resolved.
 	issuer func(iss string) error

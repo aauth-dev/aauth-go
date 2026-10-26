@@ -583,7 +583,11 @@ func verifyVectorToken(t *testing.T, c jwtCase) error {
 	clock := RequestVerifyOptions{Now: func() time.Time { return time.Unix(at, 0) }}
 	switch c.Typ {
 	case TypAgent:
-		_, err := VerifyAgentToken(ctx, c.Token, VerifyAgentTokenOptions{Resolver: resolver, RequireProviderClaims: true, Signature: clock})
+		// The vectors' agent tokens outlive any clock that checks them,
+		// so the lifetime ceiling is lifted.
+		_, err := VerifyAgentToken(ctx, c.Token, VerifyAgentTokenOptions{
+			Resolver: resolver, RequireProviderClaims: true, Signature: clock, MaxLifetime: 100 * 365 * 24 * time.Hour,
+		})
 		return err
 	case TypAuth:
 		_, err := VerifyAuthToken(ctx, c.Token, c.Audience, AuthTokenVerifyOptions{TokenVerifyOptions: TokenVerifyOptions{Resolver: resolver, Signature: clock}})
@@ -594,7 +598,7 @@ func verifyVectorToken(t *testing.T, c jwtCase) error {
 	case TypResource:
 		// The token alone; the cross-check with its presented token is
 		// covered by unit tests.
-		_, err := verifyResourceJWT(ctx, c.Token, TokenVerifyOptions{Resolver: resolver, Signature: clock})
+		_, err := verifyResourceJWT(ctx, c.Token, TokenVerifyOptions{Resolver: resolver, Signature: clock}, MaxResourceTokenLifetime)
 		return err
 	}
 	return nil
