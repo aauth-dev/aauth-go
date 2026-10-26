@@ -207,6 +207,15 @@ func (l *locationWriter) Flush() {
 	}
 }
 
+// Limits on the listeners: the largest request body a role or the
+// signing helper reads, the time a client has to send a request, and the
+// time an idle connection is kept.
+const (
+	maxRequestBody = 4 << 20
+	readTimeout    = 30 * time.Second
+	idleTimeout    = 120 * time.Second
+)
+
 // DefaultListenAddr is the roles' default TLS listen address: loopback
 // only, since the roles hand out tokens and approve consent on their own.
 const DefaultListenAddr = "127.0.0.1:443"
@@ -284,6 +293,9 @@ func (s *Sandbox) Handler() http.Handler {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown host " + host, "hosts": s.cfg.LocalHosts()})
 			return
 		}
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		}
 		if r.URL.Path == PathTrace {
 			s.trace.serveHTTP(w, r)
 			return
@@ -300,8 +312,11 @@ func (s *Sandbox) TLSConfig() *tls.Config {
 // Serve serves the roles on ln over TLS until ctx ends.
 func (s *Sandbox) Serve(ctx context.Context, ln net.Listener) error {
 	s.SetAddr(ln.Addr().String())
+	// No WriteTimeout: token and pending requests may wait (Prefer: wait)
+	// before answering.
 	srv := &http.Server{
-		Handler: s.Handler(), TLSConfig: s.TLSConfig(), ReadHeaderTimeout: 10 * time.Second,
+		Handler: s.Handler(), TLSConfig: s.TLSConfig(),
+		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout, IdleTimeout: idleTimeout,
 		ErrorLog: slog.NewLogLogger(s.logger.Handler(), slog.LevelDebug),
 	}
 	go func() {

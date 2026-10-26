@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -171,5 +172,25 @@ func TestSignerSignsOnlyForSandboxHosts(t *testing.T) {
 	h.sb.Signer().AnyTarget = true
 	if got := sign("https://example.com/"); got != http.StatusOK {
 		t.Errorf("/sign with AnyTarget: %d", got)
+	}
+}
+
+func TestRolesBoundRequestBodies(t *testing.T) {
+	h := newHarness(t, Config{})
+	post := func(n int) int {
+		res, err := h.sb.Client("client").Post(h.url(RoleResource, "/authorize"), "application/json", bytes.NewReader(bytes.Repeat([]byte(" "), n)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := res.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return res.StatusCode
+	}
+	if got := post(maxRequestBody + 1); got != http.StatusRequestEntityTooLarge {
+		t.Errorf("a body over the limit: %d", got)
+	}
+	if got := post(16); got == http.StatusRequestEntityTooLarge {
+		t.Errorf("a small body: %d", got)
 	}
 }

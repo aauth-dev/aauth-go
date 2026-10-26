@@ -48,7 +48,7 @@ const (
 const DefaultSignerAddr = "127.0.0.1:8099"
 
 // maxForwardBody bounds a request body the helper forwards.
-const maxForwardBody = 4 << 20
+const maxForwardBody = maxRequestBody
 
 // Signer is the sandbox's test agent and its signing helper: HTTP clients
 // that cannot sign send requests through it, and it signs them as the
@@ -577,7 +577,8 @@ func (sg *Signer) ListenAndServe(ctx context.Context, addr string) error {
 		lh := strings.ToLower(strings.Trim(host, "[]"))
 		sg.listenHost.Store(&lh)
 	}
-	srv := &http.Server{Addr: addr, Handler: sg, ReadHeaderTimeout: 10 * time.Second}
+	// No WriteTimeout: forwarded requests may wait (Prefer: wait).
+	srv := &http.Server{Addr: addr, Handler: sg, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout, IdleTimeout: idleTimeout}
 	go func() {
 		<-ctx.Done()
 		if err := srv.Close(); err != nil {
