@@ -414,3 +414,85 @@ func TestJWKSCacheNoEvictionOfHandedOutEntry(t *testing.T) {
 		t.Fatalf("after release: %v", err)
 	}
 }
+
+// Eviction removes the least recently used entry, not the one fetched
+// longest ago: an issuer in steady use stays cached.
+func TestJWKSCacheEvictsLeastRecentlyUsed(t *testing.T) {
+	cache := &JWKSCache{MaxEntries: 2}
+	use := func(iss string, proven bool) {
+		t.Helper()
+		e, err := cache.entry(iss, WellKnownAgent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cache.mu.Lock()
+		e.proven = proven
+		cache.mu.Unlock()
+		cache.release(e)
+	}
+	use("https://a.example", true)
+	use("https://b.example", true)
+	use("https://a.example", true) // a is now the more recently used
+	use("https://c.example", false)
+	if _, ok := cache.entries["https://a.example\x00"+WellKnownAgent]; !ok {
+		t.Fatal("recently used entry evicted")
+	}
+	if _, ok := cache.entries["https://b.example\x00"+WellKnownAgent]; ok {
+		t.Fatal("least recently used entry kept")
+	}
+}
+
+// Requests naming many unknown issuers evict only entries without a key
+// set, never the issuers whose keys are cached.
+func TestJWKSCacheFloodKeepsKnownIssuers(t *testing.T) {
+	a := testAgent(t)
+	cache := &JWKSCache{MaxEntries: 64}
+	r := JWKSResolver{Cache: cache}
+	ctx := context.Background()
+	var known []string
+	for i := 0; i < 20; i++ {
+		s := newJWKSServer(t, a.JWK())
+		if _, err := r.ResolveKey(ctx, s.srv.URL, WellKnownAgent, a.JWK().Kid, nil); err != nil {
+			t.Fatal(err)
+		}
+		known = append(known, s.srv.URL)
+	}
+	down := newJWKSServer(t)
+	down.update(func(s *jwksServer) { s.fail = true })
+	for i := 0; i < 200; i++ {
+		// Distinct issuers that do not resolve to a key set.
+		if _, err := r.ResolveKey(ctx, fmt.Sprintf("%s/i%d", down.srv.URL, i), WellKnownAgent, "k", nil); err == nil {
+			t.Fatal("unreachable issuer resolved")
+		}
+	}
+	cache.mu.Lock()
+	n := len(cache.entries)
+	cache.mu.Unlock()
+	if n > 64 {
+		t.Fatalf("entries = %d, want <= 64", n)
+	}
+	for _, iss := range known {
+		if _, ok := cache.entries[iss+"\x00"+WellKnownAgent]; !ok {
+			t.Fatalf("known issuer %s evicted by the flood", iss)
+		}
+	}
+}
+
+// Varying dwk does not multiply fetches of one issuer: only the four
+// document names are accepted, each subject to the refresh floor.
+func TestJWKSCacheFloorAcrossDWKs(t *testing.T) {
+	s := newJWKSServer(t)
+	s.update(func(s *jwksServer) { s.fail = true })
+	var hits atomic.Int32
+	s.srv.Config.Handler = countRequests(s.srv.Config.Handler, &hits)
+	r := NewJWKSResolver(nil)
+	dwks := []string{WellKnownAgent, WellKnownPerson, WellKnownResource, WellKnownAccess, "x1", "../x2", "aauth-agent.json?x"}
+	for i := 0; i < 50; i++ {
+		if _, err := r.ResolveKey(context.Background(), s.srv.URL, dwks[i%len(dwks)], "k", nil); err == nil {
+			t.Fatal("resolved against a failing issuer")
+		}
+	}
+	if n := hits.Load(); n > 4 {
+		t.Fatalf("%d fetches of one issuer within the floor, want <= 4", n)
+	}
+}
