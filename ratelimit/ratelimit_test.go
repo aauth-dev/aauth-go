@@ -46,3 +46,21 @@ func TestBoundedKeys(t *testing.T) {
 		t.Fatal("an unconfigured bucket allowed")
 	}
 }
+
+// Filling one key space does not exhaust another: interaction code
+// clients cannot lock out polling.
+func TestKeySpacesBoundedSeparately(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0)
+	b := &TokenBucket{Rate: 1, Burst: 1, MaxKeys: 2, Now: func() time.Time { return now }}
+	b.Allow(ctx, "code:1.2.3.4:80")
+	b.Allow(ctx, "code:5.6.7.8:80")
+	if ok, _ := b.Allow(ctx, "code:9.9.9.9:80"); ok {
+		t.Fatal("code space grew past MaxKeys")
+	}
+	for _, k := range []string{"poll:abc", "revoke:https://ap.example"} {
+		if ok, _ := b.Allow(ctx, k); !ok {
+			t.Fatalf("%s refused after another space filled", k)
+		}
+	}
+}
