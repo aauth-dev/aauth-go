@@ -71,3 +71,105 @@ func TestClientRefusesCrossOriginRedirects(t *testing.T) {
 		t.Fatalf("same-origin redirect: %d at %s", res.StatusCode, res.Request.URL)
 	}
 }
+
+// rawHelper sends a request to the signing helper with the given Host and
+// extra headers, and returns the status.
+func (h *harness) rawHelper(method, path, host string, headers map[string]string, body string) int {
+	h.t.Helper()
+	req, err := http.NewRequest(method, h.signer+path, strings.NewReader(body))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if host != "" {
+		req.Host = host
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	res, err := h.hc.Do(req)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := res.Body.Close(); err != nil {
+		h.t.Fatal(err)
+	}
+	return res.StatusCode
+}
+
+func TestSignerRefusesForeignHostsAndWebPages(t *testing.T) {
+	h := newHarness(t, Config{})
+	docs := "/" + h.url(RoleResource, "/api/documents")
+	for _, tc := range []struct {
+		name, method, path, host string
+		headers                  map[string]string
+		want                     int
+	}{
+		{"loopback address", http.MethodGet, docs, "", nil, http.StatusOK},
+		{"localhost", http.MethodGet, docs, "localhost:8099", nil, http.StatusOK},
+		{"IPv6 loopback", http.MethodGet, docs, "[::1]:8099", nil, http.StatusOK},
+		{"rebound DNS name", http.MethodGet, docs, "evil.example:8099", nil, http.StatusMisdirectedRequest},
+		{"rebound DNS name, info", http.MethodGet, "/", "evil.example", nil, http.StatusMisdirectedRequest},
+		{"rebound DNS name, sign", http.MethodPost, "/sign", "evil.example", nil, http.StatusMisdirectedRequest},
+		{"Origin", http.MethodPost, docs, "", map[string]string{"Origin": "https://evil.example"}, http.StatusForbidden},
+		{"null Origin", http.MethodGet, docs, "", map[string]string{"Origin": "null"}, http.StatusForbidden},
+		{"cross-site fetch", http.MethodGet, docs, "", map[string]string{"Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"same-site fetch", http.MethodGet, docs, "", map[string]string{"Sec-Fetch-Site": "same-site"}, http.StatusForbidden},
+		{"typed into the address bar", http.MethodGet, docs, "", map[string]string{"Sec-Fetch-Site": "none"}, http.StatusOK},
+		{"OPTIONS", http.MethodOptions, docs, "", nil, http.StatusNoContent},
+	} {
+		if got := h.rawHelper(tc.method, tc.path, tc.host, tc.headers, ""); got != tc.want {
+			t.Errorf("%s: %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	h.sb.Signer().Hosts = []string{"signer.internal"}
+	if got := h.rawHelper(http.MethodGet, docs, "signer.internal:8099", nil, ""); got != http.StatusOK {
+		t.Errorf("an extra Host name: %d", got)
+	}
+}
+
+func TestSignerOptionsIsNotForwarded(t *testing.T) {
+	h, _, hits := redirectHarness(t)
+	upstreamHits := len(h.sb.Trace().Exchanges())
+	if got := h.rawHelper(http.MethodOptions, "/https://redir.aauth.test/go", "", nil, ""); got != http.StatusNoContent {
+		t.Fatalf("OPTIONS: %d", got)
+	}
+	if n := len(h.sb.Trace().Exchanges()); n != upstreamHits || hits.Load() != 0 {
+		t.Fatalf("OPTIONS was forwarded: %d exchanges", n-upstreamHits)
+	}
+}
+
+func TestSignerSignsOnlyForSandboxHosts(t *testing.T) {
+	h := newHarness(t, Config{
+		Remote:    map[string]string{RoleAS: "https://as.example.com:8443"},
+		Upstreams: map[string]string{"petstore": "http://127.0.0.1:1"},
+	})
+	sign := func(target string) int {
+		return h.rawHelper(http.MethodPost, "/sign", "", nil, `{"url":"`+target+`","present":"none"}`)
+	}
+	resourceHost := "resource.aauth.test"
+	for _, tc := range []struct {
+		target string
+		want   int
+	}{
+		{target: "https://resource.aauth.test/api/documents", want: http.StatusOK},
+		{target: "https://ps.aauth.test:443/token", want: http.StatusOK},
+		{target: "https://as.example.com:8443/token", want: http.StatusOK},
+		{target: "https://petstore.aauth.test/pets", want: http.StatusOK},
+		{target: "https://as.example.com/token", want: http.StatusForbidden},
+		{target: "https://example.com/", want: http.StatusForbidden},
+		{target: "https://169.254.169.254/latest/meta-data/", want: http.StatusForbidden},
+		{target: "https://" + resourceHost + ".evil.example/", want: http.StatusForbidden},
+		{target: "https://" + resourceHost + ":8443/api/things", want: http.StatusForbidden},
+	} {
+		if got := sign(tc.target); got != tc.want {
+			t.Errorf("/sign %s: %d, want %d", tc.target, got, tc.want)
+		}
+	}
+	if got := h.rawHelper(http.MethodGet, "/https://example.com/", "", nil, ""); got != http.StatusForbidden {
+		t.Errorf("forward to example.com: %d", got)
+	}
+	h.sb.Signer().AnyTarget = true
+	if got := sign("https://example.com/"); got != http.StatusOK {
+		t.Errorf("/sign with AnyTarget: %d", got)
+	}
+}

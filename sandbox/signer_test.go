@@ -60,12 +60,17 @@ func TestSignerRefusesBadForwards(t *testing.T) {
 		{"plain http target", http.MethodGet, "/http://resource.aauth.test/api/documents", nil, http.StatusNotFound},
 		{"no host", http.MethodGet, "/https:///api/documents", nil, http.StatusBadRequest},
 		{"body too large", http.MethodPost, "/https://resource.aauth.test/api/documents", bytes.Repeat([]byte("x"), maxForwardBody+1), http.StatusRequestEntityTooLarge},
-		{"unreachable", http.MethodGet, "/https://127.0.0.1:1/api", nil, http.StatusBadGateway},
+		{"not a sandbox host", http.MethodGet, "/https://127.0.0.1:1/api", nil, http.StatusForbidden},
 	} {
 		if status, body := h.helper(tc.method, tc.path, tc.body); status != tc.want {
 			t.Errorf("%s: %d %v, want %d", tc.name, status, body, tc.want)
 		}
 	}
+	h.sb.Signer().AnyTarget = true
+	if status, body := h.helper(http.MethodGet, "/https://127.0.0.1:1/api", nil); status != http.StatusBadGateway {
+		t.Errorf("unreachable with AnyTarget: %d %v", status, body)
+	}
+	h.sb.Signer().AnyTarget = false
 	// Presenting a person token needs the token.
 	status, _, body := h.call(http.MethodGet, h.url(RoleResource, "/api/documents"), map[string]string{HeaderPresent: PresentPerson}, nil)
 	if status != http.StatusBadRequest || !strings.Contains(body["error"].(string), HeaderToken) {

@@ -110,7 +110,8 @@ func newRoot() *cobra.Command {
 
 func newServe(c *common) *cobra.Command {
 	var listen, signerAddr, consent, person string
-	var noSigner, signerAnyInterface bool
+	var noSigner, signerAnyInterface, signerAnyTarget bool
+	var signerHosts []string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve the roles on one TLS listener, and the signing helper",
@@ -146,6 +147,8 @@ func newServe(c *common) *cobra.Command {
 			}
 			if !noSigner {
 				sb.Signer().AnyInterface = signerAnyInterface
+				sb.Signer().AnyTarget = signerAnyTarget
+				sb.Signer().Hosts = signerHosts
 				go func() { errs <- sb.Signer().ListenAndServe(ctx, signerAddr) }()
 			}
 			if _, err := sb.Signer().AgentToken(ctx); err != nil {
@@ -164,6 +167,8 @@ func newServe(c *common) *cobra.Command {
 	cmd.Flags().StringVar(&signerAddr, "signer", sandbox.DefaultSignerAddr, "signing helper address (loopback only)")
 	cmd.Flags().BoolVar(&noSigner, "no-signer", false, "do not run the signing helper")
 	cmd.Flags().BoolVar(&signerAnyInterface, "signer-any-interface", false, "let the signing helper listen on a non-loopback address; only inside a container whose port is published to the host's loopback address")
+	cmd.Flags().BoolVar(&signerAnyTarget, "signer-any-target", false, "let the signing helper sign for any https host, not only the sandbox's roles, upstreams and remote origins")
+	cmd.Flags().StringSliceVar(&signerHosts, "signer-host", nil, "extra Host name the signing helper answers to, besides localhost and loopback addresses (repeatable)")
 	cmd.Flags().StringVar(&consent, "consent", sandbox.ConsentAuto, "auto approves every interaction; manual waits for a person or /sandbox/approve")
 	cmd.Flags().StringVar(&person, "person", sandbox.DefaultPerson, "the person approvals act for")
 	return cmd
