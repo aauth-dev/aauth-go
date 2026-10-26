@@ -73,6 +73,11 @@ type TokenVerifyOptions struct {
 	// development and tests against local servers. Never set it in
 	// production.
 	InsecureSkipIdentifierCheck bool
+
+	// trust, when set, decides on the unverified iss and dwk before the
+	// issuer's key is resolved, so an untrusted issuer causes no key
+	// discovery. [ResourceGuard] and [AuthorizationHandler] set it.
+	trust func(ctx context.Context, iss, dwk string) error
 }
 
 func (o TokenVerifyOptions) checkServerIdentifier(claim, v string) error {
@@ -112,7 +117,10 @@ type jwtCheck struct {
 	// tokens); zero means none.
 	maxLifetime time.Duration
 	// issuer, when non-nil, validates iss before any key is resolved.
-	issuer   func(iss string) error
+	issuer func(iss string) error
+	// trust, when non-nil, decides on iss and dwk after issuer and before
+	// any key is resolved.
+	trust    func(ctx context.Context, iss, dwk string) error
 	resolver KeyResolver
 	clock    RequestVerifyOptions
 }
@@ -143,6 +151,11 @@ func (c jwtCheck) verify(ctx context.Context, token string, dst aauthClaims) err
 	rc := dst.registered()
 	if c.issuer != nil {
 		if err := c.issuer(rc.Issuer); err != nil {
+			return err
+		}
+	}
+	if c.trust != nil {
+		if err := c.trust(ctx, rc.Issuer, dst.wellKnown()); err != nil {
 			return err
 		}
 	}

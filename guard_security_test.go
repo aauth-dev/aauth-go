@@ -1,6 +1,8 @@
 package aauth
 
 import (
+	"context"
+	"crypto"
 	"net/http"
 	"strings"
 	"testing"
@@ -183,5 +185,81 @@ func TestResourceGuardAgentPathRequiresProviderClaims(t *testing.T) {
 	}, Access{Level: AccessAgent})
 	if res := f.call(t, http.MethodGet, relaxed.url+"/op", tok, nil); res.StatusCode != http.StatusOK {
 		t.Fatalf("relaxed: %d", res.StatusCode)
+	}
+}
+
+// Who may issue the auth tokens a guard accepts: in four-party only its
+// access server, in three-party only a trusted person server.
+func TestResourceGuardAuthTokenIssuer(t *testing.T) {
+	f := newGuardFixture(t)
+	const scope = "admin:delete"
+	fourParty := func(self string) ResourceGuardConfig {
+		cfg := f.config(self)
+		cfg.Audience = gfAS
+		// A deployment may well list the AS too; it must not let the PS
+		// issue auth tokens.
+		cfg.TrustIssuer = TrustIssuers(gfPS, gfAS)
+		return cfg
+	}
+	for _, c := range []struct {
+		name   string
+		cfg    func(self string) ResourceGuardConfig
+		issuer *Agent
+		iss    string
+		dwk    string
+		ps     string
+		want   int
+	}{
+		{"four-party: from the AS", fourParty, f.as, gfAS, WellKnownAccess, gfPS, http.StatusOK},
+		{"four-party: from the PS", fourParty, f.ps, gfPS, WellKnownPerson, gfPS, http.StatusForbidden},
+		{"four-party: PS posing as an AS", fourParty, f.ps, gfPS, WellKnownAccess, gfPS, http.StatusForbidden},
+		{"four-party: AS with the PS's dwk", fourParty, f.as, gfAS, WellKnownPerson, gfAS, http.StatusForbidden},
+		{"three-party: from the PS", f.config, f.ps, gfPS, WellKnownPerson, gfPS, http.StatusOK},
+		{"three-party: from an AS", f.config, f.as, gfAS, WellKnownAccess, gfPS, http.StatusForbidden},
+		// dwk aauth-access.json would skip the ps == iss rule, naming any PS.
+		{"three-party: trusted PS claiming another ps", f.config, f.ps, gfPS, WellKnownAccess, "https://other-ps.example", http.StatusForbidden},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cg := newCallerGuard(t, c.cfg, Access{Level: AccessAuth, Scope: scope})
+			tok := f.authToken(t, c.issuer, c.iss, c.dwk, cg.url, scope, func(a *AuthClaims) { a.PS = c.ps })
+			if res := f.call(t, http.MethodPost, cg.url+"/op", tok, nil); res.StatusCode != c.want {
+				t.Fatalf("status %d, want %d", res.StatusCode, c.want)
+			}
+		})
+	}
+}
+
+// countingResolver counts the keys it is asked for.
+type countingResolver struct {
+	KeyResolver
+	calls int
+}
+
+func (r *countingResolver) ResolveKey(ctx context.Context, iss, dwk, kid string, cnf *JWK) (crypto.PublicKey, error) {
+	r.calls++
+	return r.KeyResolver.ResolveKey(ctx, iss, dwk, kid, cnf)
+}
+
+// An untrusted issuer is refused before its keys are looked up, so naming
+// one causes no key discovery.
+func TestResourceGuardTrustBeforeKeyResolution(t *testing.T) {
+	f := newGuardFixture(t)
+	resolver := &countingResolver{KeyResolver: f.resolver()}
+	cg := newCallerGuard(t, func(self string) ResourceGuardConfig {
+		cfg := f.config(self)
+		cfg.Verify.Resolver = resolver
+		cfg.TrustIssuer = TrustIssuers("https://other-ps.example")
+		return cfg
+	}, Access{Level: AccessAuth, Scope: "files:read"})
+	for name, tok := range map[string]string{
+		"person token": f.personToken(t, cg.url),
+		"auth token":   f.authToken(t, f.ps, gfPS, WellKnownPerson, cg.url, "files:read", nil),
+	} {
+		if res := f.call(t, http.MethodPost, cg.url+"/op", tok, nil); res.StatusCode != http.StatusForbidden {
+			t.Errorf("%s: status %d, want 403", name, res.StatusCode)
+		}
+	}
+	if resolver.calls != 0 {
+		t.Fatalf("resolver called %d times for an untrusted issuer", resolver.calls)
 	}
 }
