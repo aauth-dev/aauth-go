@@ -89,6 +89,9 @@ type Caller struct {
 	// MissionS256 is the mission a person or an auth token was issued
 	// under (§8), if any.
 	MissionS256 string
+	// JTI is the presented token's jti. Its issuer is AgentIssuer for an
+	// agent token and Issuer otherwise; revocation is keyed by the pair.
+	JTI string
 }
 
 // HasScope reports whether the caller's auth token grants every value in
@@ -147,6 +150,12 @@ type ResourceGuardConfig struct {
 	// causes no key discovery. Required when any operation requires more
 	// than AccessAgent; see [TrustIssuers].
 	TrustIssuer func(ctx context.Context, iss string) error
+	// IsRevoked, when set, is asked about every token after it and the
+	// request signature verify: iss and jti name the token (§11.12).
+	// Return nil for a token in force, an error wrapping [ErrRevoked] for
+	// a revoked one (answered 401 revoked_jwt), or any other error when
+	// revocation state is unavailable (answered 500).
+	IsRevoked func(ctx context.Context, iss, jti string) error
 	// Metadata is published by [ResourceGuard.WellKnown]; its issuer and
 	// jwks_uri are filled in.
 	Metadata ResourceMetadata
@@ -291,17 +300,25 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 			WriteSignatureFailure(w, err)
 			return nil, false
 		}
+		if !g.inForce(w, r, agent.Issuer, agent.ID) {
+			return nil, false
+		}
 		if access.Level > AccessAgent {
 			ChallengePersonToken(w)
 			return nil, false
 		}
-		return &Caller{TokenType: typ, Agent: agent.Subject, AgentIssuer: agent.Issuer, AgentJKT: agent.Cnf.JWK.Thumbprint()}, true
+		return &Caller{
+			TokenType: typ, Agent: agent.Subject, AgentIssuer: agent.Issuer, AgentJKT: agent.Cnf.JWK.Thumbprint(), JTI: agent.ID,
+		}, true
 	case TypPerson:
 		opts := g.cfg.Verify
 		opts.trust = g.trustPerson
 		person, err := VerifyAndExtractPerson(ctx, r, g.cfg.Resource, opts)
 		if err != nil {
 			g.writeFailure(w, err)
+			return nil, false
+		}
+		if !g.inForce(w, r, person.Issuer, person.ID) {
 			return nil, false
 		}
 		if access.Level == AccessAuth {
@@ -311,7 +328,7 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 		return &Caller{
 			TokenType: typ, AgentJKT: person.Cnf.JWK.Thumbprint(),
 			Issuer: person.Issuer, Subject: person.Subject, PS: person.Issuer, MissionS256: person.MissionS256,
-			Tenant: person.Tenant,
+			Tenant: person.Tenant, JTI: person.ID,
 		}, true
 	case TypAuth:
 		opts := g.cfg.Verify
@@ -321,10 +338,13 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 			g.writeFailure(w, err)
 			return nil, false
 		}
+		if !g.inForce(w, r, auth.Issuer, auth.ID) {
+			return nil, false
+		}
 		c := &Caller{
 			TokenType: typ, AgentJKT: auth.Cnf.JWK.Thumbprint(),
 			Issuer: auth.Issuer, Subject: auth.Subject, PS: auth.PS, Scope: auth.Scope, MissionS256: auth.MissionS256,
-			Account: auth.Account, Tenant: auth.Tenant,
+			Account: auth.Account, Tenant: auth.Tenant, JTI: auth.ID,
 		}
 		if access.Level == AccessAuth && !c.HasScope(access.Scope) {
 			g.challengeAuth(w, auth, unionScope(auth.Scope, access.Scope))
@@ -361,6 +381,24 @@ func (g *ResourceGuard) trustAuth(ctx context.Context, iss, dwk string) error {
 		return fmt.Errorf("%w: this resource accepts auth tokens only from a person server (dwk %s)", ErrUntrustedIssuer, WellKnownPerson)
 	}
 	return g.trustPerson(ctx, iss, dwk)
+}
+
+// inForce applies IsRevoked, answering a revoked token with 401
+// revoked_jwt and an unavailable answer with 500.
+func (g *ResourceGuard) inForce(w http.ResponseWriter, r *http.Request, iss, jti string) bool {
+	if g.cfg.IsRevoked == nil {
+		return true
+	}
+	err := g.cfg.IsRevoked(r.Context(), iss, jti)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, ErrRevoked):
+		WriteSignatureFailure(w, err)
+	default:
+		WriteProblem(w, http.StatusInternalServerError, ErrCodeServerError, "")
+	}
+	return false
 }
 
 // writeFailure answers a failed verification: 403 for an issuer the

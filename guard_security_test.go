@@ -3,6 +3,8 @@ package aauth
 import (
 	"context"
 	"crypto"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -281,5 +283,55 @@ func TestResourceGuardCallerAccountAndTenant(t *testing.T) {
 	}
 	if cg.caller.Tenant != "acme" || cg.caller.Account != "acct-7" {
 		t.Errorf("auth caller %+v", cg.caller)
+	}
+}
+
+// IsRevoked is asked about every token type by (iss, jti).
+func TestResourceGuardRevocation(t *testing.T) {
+	f := newGuardFixture(t)
+	revoked := map[[2]string]bool{}
+	unavailable := false
+	cg := newCallerGuard(t, func(self string) ResourceGuardConfig {
+		cfg := f.config(self)
+		cfg.IsRevoked = func(_ context.Context, iss, jti string) error {
+			if unavailable {
+				return errors.New("revocation store down")
+			}
+			if revoked[[2]string{iss, jti}] {
+				return fmt.Errorf("%w: %s %s", ErrRevoked, iss, jti)
+			}
+			return nil
+		}
+		return cfg
+	}, Access{Level: AccessAgent})
+	for _, c := range []struct {
+		name, token string
+	}{
+		{"agent token", f.agentToken(t)},
+		{"person token", f.personToken(t, cg.url)},
+		{"auth token", f.authToken(t, f.ps, gfPS, WellKnownPerson, cg.url, "files:read", nil)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if res := f.call(t, http.MethodGet, cg.url+"/op", c.token, nil); res.StatusCode != http.StatusOK {
+				t.Fatalf("in force: %d", res.StatusCode)
+			}
+			iss := cg.caller.Issuer
+			if cg.caller.TokenType == TypAgent {
+				iss = cg.caller.AgentIssuer
+			}
+			if iss == "" || cg.caller.JTI == "" {
+				t.Fatalf("caller %+v names no token", cg.caller)
+			}
+			revoked[[2]string{iss, cg.caller.JTI}] = true
+			res := f.call(t, http.MethodGet, cg.url+"/op", c.token, nil)
+			if res.StatusCode != http.StatusUnauthorized || !strings.Contains(res.Header.Get(HeaderSignatureError), SigErrRevokedJWT) {
+				t.Fatalf("revoked: %d %q", res.StatusCode, res.Header.Get(HeaderSignatureError))
+			}
+			unavailable = true
+			defer func() { unavailable = false }()
+			if res := f.call(t, http.MethodGet, cg.url+"/op", c.token, nil); res.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("unavailable: %d", res.StatusCode)
+			}
+		})
 	}
 }
