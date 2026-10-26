@@ -319,7 +319,7 @@ func newDeployment(t *testing.T, tp topology) *deployment {
 			if p.Open() {
 				go func() {
 					// The ledger owner approves read access.
-					if err := d.as.Approve(context.Background(), p.ID, "ledger:read"); err != nil {
+					if err := d.as.Approve(context.Background(), p.ID, p.Revision, "ledger:read"); err != nil {
 						t.Error(err)
 					}
 				}()

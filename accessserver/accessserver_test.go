@@ -346,7 +346,7 @@ func TestInteractionApproveDeny(t *testing.T) {
 				if _, err := f.as.ConsumeCode(ctx, p.Code); !errors.Is(err, ErrInvalidCode) {
 					t.Errorf("code reuse: %v", err)
 				}
-				if err := f.as.Approve(ctx, q.ID, "files:read"); err != nil {
+				if err := f.as.Approve(ctx, q.ID, q.Revision, "files:read"); err != nil {
 					t.Error(err)
 				}
 			}()
@@ -695,7 +695,7 @@ func TestPendingURL(t *testing.T) {
 	if p, err := f.as.PendingRequest(ctx, id); err != nil || !p.Delivered || len(p.Result.Body) != 0 {
 		t.Fatalf("after delivery %+v %v", p, err)
 	}
-	if err := f.as.Approve(ctx, id, ""); !errors.Is(err, ErrResolved) {
+	if err := f.as.Approve(ctx, id, 1, ""); !errors.Is(err, ErrResolved) {
 		t.Fatal(err)
 	}
 	// Cancel, and expiry.
