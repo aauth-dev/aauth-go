@@ -32,8 +32,11 @@ ps, err := personserver.New(personserver.Config{
 	Store:          personserver.NewMemoryStore(),
 	InteractionURL: issuer + "/consent",
 	Decider: personserver.DeciderFunc(func(ctx context.Context, r *personserver.TokenRequest) (personserver.Decision, error) {
-		if r.Person == "" {
+		switch {
+		case r.Person == "":
 			return personserver.DeferInteraction(), nil // a new agent: the person signs in at /consent
+		case r.Chained && r.Mission == nil:
+			return personserver.DeferApproval(), nil // call chaining: ask the person
 		}
 		return personserver.Allow(personserver.Grant{}), nil
 	}),

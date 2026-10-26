@@ -73,8 +73,13 @@ func Example_collapsedDeployment() {
 		Store:          personserver.NewMemoryStore(), // implement personserver.Store over your database
 		InteractionURL: issuer + "/consent",
 		Decider: personserver.DeciderFunc(func(ctx context.Context, r *personserver.TokenRequest) (personserver.Decision, error) {
-			if r.Person == "" {
+			switch {
+			case r.Person == "":
 				return personserver.DeferInteraction(), nil // a new agent: the person signs in at /consent
+			case r.Chained && r.Mission == nil:
+				// Call chaining (Config.AllowCallChaining) acts for the
+				// person behind another agent's token: ask them.
+				return personserver.DeferApproval(), nil
 			}
 			return personserver.Allow(personserver.Grant{}), nil
 		}),

@@ -324,6 +324,10 @@ func (s *Server) verifySubagent(ctx context.Context, token string, agent *aauth.
 // signed by intermediary (draft -11 §9.4.5) and identifies the person and
 // mission behind it from the PS's own records.
 func (s *Server) verifyUpstream(ctx context.Context, token string, intermediary *aauth.AgentClaims, at time.Time) (*upstreamInfo, error) {
+	if !s.cfg.AllowCallChaining {
+		return nil, &aauth.TokenError{Code: aauth.TokenErrInvalidUpstreamToken,
+			Err: errors.New("this person server does not accept call chaining")}
+	}
 	pt, err := aauth.VerifyUpstreamToken(ctx, token, aauth.UpstreamVerifyOptions{
 		TokenVerifyOptions: s.tokenOptions(at),
 		Intermediary:       intermediary,

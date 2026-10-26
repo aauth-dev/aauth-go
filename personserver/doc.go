@@ -36,13 +36,24 @@
 //		Store:          store,
 //		InteractionURL: "https://ps.example/consent",
 //		Decider: personserver.DeciderFunc(func(ctx context.Context, r *personserver.TokenRequest) (personserver.Decision, error) {
-//			if r.Person == "" {
+//			switch {
+//			case r.Person == "":
 //				return personserver.DeferInteraction(), nil // enroll a new agent
+//			case r.Chained && r.Mission == nil:
+//				// Call chaining acts for the person behind another
+//				// agent's token: ask them.
+//				return personserver.DeferApproval(), nil
 //			}
 //			return personserver.Allow(personserver.Grant{}), nil
 //		}),
 //	})
 //	http.Handle("/", ps)
+//
+// Call chaining (§10.1.1) is off unless Config.AllowCallChaining is set. A
+// chained request arrives with Person already known — the person behind
+// the upstream token — so a Decider that allows every request for a known
+// person would grant it without the person's consent: check r.Chained, as
+// above, before enabling it.
 //
 // The consent page reads ?code= and shows the request ([Server.LookupCode],
 // which does not consume the code). At the decision it authenticates the

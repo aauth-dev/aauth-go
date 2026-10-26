@@ -114,6 +114,15 @@ type Config struct {
 	// token (dwk aauth-access.json). Roles that share an origin share an
 	// identifier, so aud alone cannot tell them apart.
 	CollocatedAS func(resource string) bool
+	// AllowCallChaining accepts call chaining requests (§10.1.1): a
+	// resource acting as an agent presents the upstream token it received,
+	// and the PS issues a token for the person behind it. Such requests
+	// reach the Decider with Chained set and Person already known, so a
+	// Decider that allows every request for a known person would grant
+	// them without the person's say. Off by default: an upstream_token is
+	// refused with invalid_upstream_token. Enable it only with a Decider
+	// that checks r.Chained.
+	AllowCallChaining bool
 	// InteractionURL is the PS's user-facing interaction page (https, no
 	// query or fragment), sent as the url of requirement=interaction. The
 	// page reads ?code=, shows the request ([Server.LookupCode]), and at
