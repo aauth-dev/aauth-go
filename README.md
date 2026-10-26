@@ -421,7 +421,7 @@ aauth-sandbox serve
 curl http://127.0.0.1:8099/https://resource.aauth.test/api/documents
 ```
 
-It also runs in Docker (`deploy/docker`), one container for every role or one per role, and fronts a resource of your own at `https://<name>.aauth.test` with `--upstream`. See the [sandbox guide](docs/guides/sandbox.md).
+It listens on loopback only. It also runs in Docker (`deploy/docker`), one container for every role or one per role, and fronts a resource of your own at `https://<name>.aauth.test` with `--upstream`. See the [sandbox guide](docs/guides/sandbox.md).
 
 ## Examples
 
