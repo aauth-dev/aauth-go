@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	aauth "github.com/aauth-dev/aauth-go"
 )
 
 func TestConfigDefaults(t *testing.T) {
@@ -242,4 +245,45 @@ func TestTLSConfig(t *testing.T) {
 
 func x509VerifyOptions(ca *CA) x509.VerifyOptions {
 	return x509.VerifyOptions{Roots: ca.Pool(), DNSName: "ps.aauth.test"}
+}
+
+func TestPresentation(t *testing.T) {
+	jws := func(typ string) string {
+		return base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","typ":"`+typ+`"}`)) + ".e30.c2ln"
+	}
+	tests := []struct {
+		name           string
+		headers        map[string]string
+		present, token string
+		wantErr        bool
+	}{
+		{"nothing: the helper's agent token", nil, PresentAgent, "", false},
+		{"sandbox headers win", map[string]string{HeaderPresent: "PERSON", HeaderToken: "t", "Signature-Key": "sig=hwk"}, PresentPerson, "t", false},
+		{"a token alone presents it as the agent", map[string]string{HeaderToken: "t"}, "", "t", false},
+		{"jwt without a token", map[string]string{"Signature-Key": "sig=jwt"}, PresentAgent, "", false},
+		{"agent token", map[string]string{"Signature-Key": `sig=jwt;jwt="` + jws(aauth.TypAgent) + `"`}, PresentAgent, jws(aauth.TypAgent), false},
+		{"person token", map[string]string{"Signature-Key": `sig=jwt;jwt="` + jws(aauth.TypPerson) + `"`}, PresentPerson, jws(aauth.TypPerson), false},
+		{"auth token", map[string]string{"Signature-Key": `sig=jwt;jwt="` + jws(aauth.TypAuth) + `"`}, PresentAuth, jws(aauth.TypAuth), false},
+		{"hwk", map[string]string{"Signature-Key": "sig=hwk"}, PresentHWK, "", false},
+		{"jkt-jwt", map[string]string{"Signature-Key": "sig=jkt-jwt"}, PresentJKTJWT, "", false},
+		{"another typ", map[string]string{"Signature-Key": `sig=jwt;jwt="` + jws("JWT") + `"`}, "", "", true},
+		{"not a JWS", map[string]string{"Signature-Key": `sig=jwt;jwt="nope"`}, "", "", true},
+		{"another scheme", map[string]string{"Signature-Key": "sig=jwks_uri"}, "", "", true},
+		{"malformed", map[string]string{"Signature-Key": "sig=("}, "", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			in := http.Header{}
+			for k, v := range tt.headers {
+				in.Set(k, v)
+			}
+			present, token, err := presentation(in)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("presentation() error = %v, want error %v", err, tt.wantErr)
+			}
+			if present != tt.present || token != tt.token {
+				t.Errorf("presentation() = %q, %q; want %q, %q", present, token, tt.present, tt.token)
+			}
+		})
+	}
 }
