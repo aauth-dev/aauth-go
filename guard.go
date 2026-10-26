@@ -122,7 +122,11 @@ type ResourceGuardConfig struct {
 	// access server in four-party. Empty is three-party: the agent's PS.
 	Audience string
 	// Verify resolves the keys of person servers and access servers, and
-	// of agent providers unless AgentResolver is set.
+	// of agent providers unless AgentResolver is set. Its Signature
+	// options apply to every request, whichever token it presents;
+	// Signature.Authority defaults to the host of Resource, so a request
+	// signed for another server is refused. Agent tokens are verified with
+	// RequireProviderClaims unless InsecureSkipIdentifierCheck is set.
 	Verify TokenVerifyOptions
 	// AgentResolver, when set, resolves agent token issuers' keys instead
 	// of Verify.Resolver.
@@ -182,6 +186,13 @@ type ResourceGuard struct {
 func NewResourceGuard(cfg ResourceGuardConfig) (*ResourceGuard, error) {
 	if cfg.Resource == "" {
 		return nil, errors.New("aauth: ResourceGuardConfig.Resource is required")
+	}
+	if cfg.Verify.Signature.Authority == "" {
+		authority, err := AuthorityOf(cfg.Resource)
+		if err != nil {
+			return nil, fmt.Errorf("aauth: ResourceGuardConfig.Resource: %w", err)
+		}
+		cfg.Verify.Signature.Authority = authority
 	}
 	if cfg.JWKSPath == "" {
 		cfg.JWKSPath = "/jwks.json"
@@ -261,7 +272,11 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 	ctx := r.Context()
 	switch typ {
 	case TypAgent:
-		agent, err := VerifyAndExtractAgent(ctx, r, VerifyAgentTokenOptions{Resolver: g.agentResolver()})
+		agent, err := VerifyAndExtractAgent(ctx, r, VerifyAgentTokenOptions{
+			Resolver:              g.agentResolver(),
+			RequireProviderClaims: !g.cfg.Verify.InsecureSkipIdentifierCheck,
+			Signature:             g.cfg.Verify.Signature,
+		})
 		if err != nil {
 			WriteSignatureFailure(w, err)
 			return nil, false
