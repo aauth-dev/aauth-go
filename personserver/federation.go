@@ -102,6 +102,9 @@ type FederationState struct {
 	Status       string            `json:"status,omitempty"`
 	Question     *Question         `json:"question,omitempty"`
 	RetryAfter   int               `json:"retry_after,omitempty"`
+	// PolledAt is when the PS last heard from the access server; it polls
+	// again only after RetryAfter seconds (at least one).
+	PolledAt time.Time `json:"polled_at,omitzero"`
 	// GrantedScope is the scope the person consented to: the Grant's
 	// Scope, or the resource token's scope when the Grant left it empty.
 	// The AS's token may not be broader, and while the PS follows the AS an
@@ -131,6 +134,12 @@ func (f *FederationState) applyRequirement(p *Pending, now time.Time) {
 }
 
 func (s *Server) federates() bool { return s.cfg.Federator != nil }
+
+// due reports whether the access server's Retry-After has passed since
+// the PS last polled it.
+func (f *FederationState) due(now time.Time) bool {
+	return !now.Before(f.PolledAt.Add(time.Duration(max(f.RetryAfter, 1)) * time.Second))
+}
 
 // maxClaimsRounds bounds consecutive claims requirements answered in one
 // step.
@@ -197,6 +206,7 @@ func (s *Server) federationOutcome(ctx context.Context, j *authTokenJob, consent
 		return nil, &FederationState{
 			AccessServer: j.as, PendingURL: resp.PendingURL, Requirement: resp.Requirement,
 			Status: resp.Status, Question: resp.Question, RetryAfter: resp.RetryAfter, GrantedScope: consented,
+			PolledAt: s.now(),
 		}, nil
 	}
 	return s.asUnreachable(ctx, j.as, errors.New("the access server kept requiring claims")), nil, nil

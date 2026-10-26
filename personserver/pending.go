@@ -419,7 +419,7 @@ func (s *Server) step(ctx context.Context, p *Pending, federate bool) *Pending {
 			res = pollError(aauth.PollErrRevoked, detail)
 		}
 	}
-	if res == nil && federate && p.Federation != nil && p.Question == nil {
+	if res == nil && federate && p.Federation != nil && p.Question == nil && p.Federation.due(now) {
 		return s.pollFederation(ctx, p)
 	}
 	if res == nil {
@@ -726,6 +726,10 @@ func (s *Server) serveClarification(w http.ResponseWriter, r *http.Request, c *c
 			ex.Answer = post.ClarificationResponse
 		}
 		p.Transcript = append(p.Transcript, ex)
+		if p.QuestionFromAS && p.Federation != nil {
+			// The answer went to the access server: look again at once.
+			p.Federation.PolledAt = time.Time{}
+		}
 		p.Question, p.QuestionFromAS = nil, false
 		return nil
 	})
