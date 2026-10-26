@@ -92,7 +92,8 @@ type SubagentGrant struct {
 // Registrar is the hosting application's issuance policy. It decides who
 // gets an agent token for which key, so tokens can be tied to the
 // application's own records (an enrollment, a work session). Returning an
-// error refuses the request (403 denied).
+// error refuses the request (403 denied); the error is logged, and the
+// caller sees only a generic denial.
 type Registrar interface {
 	// AuthorizeIssue authorizes an hwk-signed issuance request; r is the
 	// HTTP request, so the application can read its own authentication
@@ -519,7 +520,7 @@ func (s *Server) serveSubagent(w http.ResponseWriter, r *http.Request) {
 	}
 	g, err := s.cfg.Registrar.AuthorizeSubagent(r.Context(), &SubagentRequest{Parent: parent, Key: *body.JWK, Discriminator: body.Discriminator})
 	if err != nil {
-		aauth.WriteProblem(w, http.StatusForbidden, aauth.PollErrDenied, err.Error())
+		s.deny(w, r, "sub-agent refused", err)
 		return
 	}
 	disc := body.Discriminator
@@ -597,7 +598,7 @@ func (s *Server) attest(w http.ResponseWriter, r *http.Request, body []byte, key
 	}
 	att, err := s.cfg.Attestation.VerifyAttestation(r.Context(), b.Attestation, key)
 	if err != nil {
-		aauth.WriteProblem(w, http.StatusForbidden, aauth.PollErrDenied, "attestation: "+err.Error())
+		s.deny(w, r, "attestation refused", err)
 		return nil, false
 	}
 	return att, true
@@ -606,7 +607,7 @@ func (s *Server) attest(w http.ResponseWriter, r *http.Request, body []byte, key
 // finish issues the token a Registrar authorized for key.
 func (s *Server) finish(w http.ResponseWriter, r *http.Request, reg *Registration, err error, key aauth.JWK) {
 	if err != nil {
-		aauth.WriteProblem(w, http.StatusForbidden, aauth.PollErrDenied, err.Error())
+		s.deny(w, r, "issuance refused", err)
 		return
 	}
 	tok, claims, err := s.IssueAgentToken(r.Context(), AgentTokenParams{Name: reg.Name, Key: key, PS: reg.PS, TTL: reg.TTL})
@@ -615,6 +616,14 @@ func (s *Server) finish(w http.ResponseWriter, r *http.Request, reg *Registratio
 		return
 	}
 	writeJSON(w, http.StatusOK, TokenResponse{AgentToken: tok, ExpiresIn: int64(claims.ExpiresAt.Sub(s.now()) / time.Second)})
+}
+
+// deny answers 403 denied with a generic detail and logs why: the
+// Registrar's and the attestation verifier's errors are the hosting
+// application's and may describe its records.
+func (s *Server) deny(w http.ResponseWriter, r *http.Request, what string, err error) {
+	s.logger().InfoContext(r.Context(), "agentprovider: "+what, "error", err)
+	aauth.WriteProblem(w, http.StatusForbidden, aauth.PollErrDenied, "the agent provider refused the request")
 }
 
 func (s *Server) serverError(w http.ResponseWriter, r *http.Request, err error) {
