@@ -66,8 +66,10 @@ type Caller struct {
 	// TokenType is the type of the token the request presented: TypAgent,
 	// TypPerson or TypAuth.
 	TokenType string
-	// Agent is the agent identifier, known only from an agent token.
-	Agent string
+	// Agent is the agent identifier, known only from an agent token, and
+	// AgentIssuer is that token's iss, its agent provider. The identifier's
+	// domain is the provider's host, but key records by the pair.
+	Agent, AgentIssuer string
 	// AgentJKT is the JWK thumbprint of the key that signed the request,
 	// known for every token type.
 	AgentJKT string
@@ -268,7 +270,7 @@ func (g *ResourceGuard) authorize(w http.ResponseWriter, r *http.Request, access
 			ChallengePersonToken(w)
 			return nil, false
 		}
-		return &Caller{TokenType: typ, Agent: agent.Subject, AgentJKT: agent.Cnf.JWK.Thumbprint()}, true
+		return &Caller{TokenType: typ, Agent: agent.Subject, AgentIssuer: agent.Issuer, AgentJKT: agent.Cnf.JWK.Thumbprint()}, true
 	case TypPerson:
 		person, err := VerifyAndExtractPerson(ctx, r, g.cfg.Resource, g.cfg.Verify)
 		if err != nil {

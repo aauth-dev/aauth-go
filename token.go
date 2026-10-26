@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -214,7 +217,11 @@ type VerifyAgentTokenOptions struct {
 // common JWT rules (§11.5.2) and returns its claims: typ, alg, signature,
 // iat REQUIRED (refused as [ErrClockSkew] when further ahead of the
 // verifier's clock than opts.Signature's window), and exp in the future
-// with no skew tolerance ([ErrExpired]). With RequireProviderClaims it also
+// with no skew tolerance ([ErrExpired]). sub must be an agent of iss: the
+// identifier's domain is the host of iss (§5.2), so a provider cannot name
+// another provider's agents; outside RequireProviderClaims an iss on a
+// loopback host may name any domain, for local development. Key agents by (iss, sub). With
+// RequireProviderClaims it also
 // requires dwk aauth-agent.json, jti, and iss and ps to be server
 // identifiers. The caller still MUST verify the HTTP message signature
 // against claims.Cnf.JWK — see [VerifyAndExtractAgent].
@@ -249,8 +256,12 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 	if claims.Subject == "" {
 		return nil, fmt.Errorf("%w: sub", ErrMissingClaim)
 	}
-	if _, err := ParseAgentIdentifier(claims.Subject); err != nil {
+	id, err := ParseAgentIdentifier(claims.Subject)
+	if err != nil {
 		return nil, fmt.Errorf("%w: sub: %w", ErrInvalidToken, err)
+	}
+	if err := checkAgentDomain(id, claims.Issuer, opts.RequireProviderClaims); err != nil {
+		return nil, err
 	}
 	if claims.ParentAgent != "" {
 		if _, err := ParseAgentIdentifier(claims.ParentAgent); err != nil {
@@ -271,6 +282,41 @@ func VerifyAgentToken(ctx context.Context, token string, opts VerifyAgentTokenOp
 		return nil, err
 	}
 	return claims, nil
+}
+
+// checkAgentDomain requires the agent identifier's domain to be the host
+// of iss, the agent provider that issued it (draft -11 §5.1, §5.2): a
+// provider names only its own agents. The port of iss, if any, is ignored,
+// since an identifier's domain carries none. A token with no iss names no
+// provider, so its sub is only as good as the key that signed it.
+//
+// Unless strict, an iss on a loopback host (localhost, 127.0.0.0/8, ::1)
+// may name agents of any domain, so local development and tests can run
+// an agent provider on a loopback port while issuing its real domain's
+// identifiers. Strict verification requires an https server identifier,
+// which is never a loopback address with a port.
+func checkAgentDomain(id AgentIdentifier, iss string, strict bool) error {
+	if iss == "" {
+		return nil
+	}
+	u, err := url.Parse(iss)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("%w: iss %q is not a URL with a host", ErrInvalidToken, iss)
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, id.Domain) || (!strict && isLoopbackHost(host)) {
+		return nil
+	}
+	return fmt.Errorf("%w: sub %q is not an agent of iss %q (domain %q)", ErrInvalidToken, id, iss, host)
+}
+
+// isLoopbackHost reports whether host is localhost or a loopback address.
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // VerifySubagentToken verifies a subagent_token request parameter (draft

@@ -450,3 +450,47 @@ func TestResourceGuardWellKnownWithoutKey(t *testing.T) {
 		t.Error("String of an unknown level")
 	}
 }
+
+// callerGuard serves /op behind a guard built by cfg for the server's own
+// URL, and records the caller each admitted request carried.
+type callerGuard struct {
+	url    string
+	caller *Caller
+}
+
+func newCallerGuard(t *testing.T, cfg func(self string) ResourceGuardConfig, access Access) *callerGuard {
+	t.Helper()
+	cg := &callerGuard{}
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	cg.url = srv.URL
+	g, err := NewResourceGuard(cfg(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux.Handle("/op", g.Require(access, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		cg.caller, _ = CallerFromContext(r.Context())
+		writeBody(t, rw, "ok")
+	})))
+	return cg
+}
+
+func TestResourceGuardCallerAgentIssuer(t *testing.T) {
+	a := testAgent(t, WithIssuer("https://agent.example"))
+	cg := newCallerGuard(t, func(self string) ResourceGuardConfig {
+		return ResourceGuardConfig{Resource: self, Verify: TokenVerifyOptions{Resolver: StaticResolver{a.Issuer: a.JWKS()}}}
+	}, Access{Level: AccessAgent})
+	tok, err := a.MintToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := signedCall(t, a, http.MethodGet, cg.url+"/op", tok)
+	closeBody(res.Body)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", res.StatusCode)
+	}
+	if cg.caller.Agent != a.ID.String() || cg.caller.AgentIssuer != a.Issuer {
+		t.Fatalf("caller %+v", cg.caller)
+	}
+}
