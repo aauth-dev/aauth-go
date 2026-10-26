@@ -10,7 +10,7 @@
   "releases": [
     {
       "version": "v0.3.0",
-      "date": "2026-10-20",
+      "date": "2026-10-26",
       "highlights": [
         {
           "description": "Completes the agent side of draft -11 resource access: agents declare what they can handle with `AAuth-Capabilities`, request access ahead of a call at a resource's authorization endpoint (`Transport.Authorize`), and settle 402 Payment Required through a `PaymentHandler`. Still tracks `draft-hardt-oauth-aauth-protocol-11`, `draft-hardt-httpbis-signature-key-09` and `draft-hardt-aauth-bootstrap-02`; the wire format is unchanged from v0.2.0"
