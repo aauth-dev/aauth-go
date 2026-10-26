@@ -62,6 +62,14 @@ type Store interface {
 	TokenStore
 	MissionStore
 	PendingStore
+	// Prune discards the records whose lifetime ended before cutoff:
+	// pending requests whose ExpiresAt, and revocations and agent, person,
+	// and auth token records whose exp, is before it. The server calls it
+	// with the current time less clock skew (draft -11 §11.12.4: records
+	// are kept until exp plus skew), every Config.PruneInterval, and
+	// [Server.Prune] calls it on demand. Bindings, directed identifiers,
+	// and missions are not pruned.
+	Prune(ctx context.Context, cutoff time.Time) error
 }
 
 // BindingStore holds the agent-person binding (draft -11 §13.14): each
@@ -216,6 +224,10 @@ type TokenStore interface {
 	Revoke(ctx context.Context, iss, jti string, exp time.Time) error
 	// IsRevoked reports whether (iss, jti) was revoked.
 	IsRevoked(ctx context.Context, iss, jti string) (bool, error)
+	// CountRevocations returns how many revocations of tokens issued by
+	// iss are recorded, so the server can bound what one issuer stores
+	// (Config.MaxRevocationsPerIssuer).
+	CountRevocations(ctx context.Context, iss string) (int, error)
 }
 
 // Mission states (draft -11 §8.6).
@@ -317,4 +329,8 @@ type PendingStore interface {
 	// PendingForMission returns the unresolved pending requests that
 	// belong to the mission s256 (Pending.MissionS256).
 	PendingForMission(ctx context.Context, s256 string) ([]*Pending, error)
+	// CountOpenPending returns how many of agent's pending requests
+	// (Pending.Agent) are open, so the server can bound them
+	// (Config.MaxPendingPerAgent).
+	CountOpenPending(ctx context.Context, agent AgentRef) (int, error)
 }

@@ -10,8 +10,9 @@ import (
 
 // MemoryStore is an in-memory [Store] for tests and examples. It keeps
 // everything in maps guarded by one mutex, copies records in and out (as a
-// database would), and never prunes. Do not use it in production: state
-// is lost on restart and is not shared between instances.
+// database would), and discards expired records when Prune is called. Do
+// not use it in production: state is lost on restart and is not shared
+// between instances.
 type MemoryStore struct {
 	mu        sync.Mutex
 	bindings  map[AgentRef]string
@@ -20,11 +21,24 @@ type MemoryStore struct {
 	persons   map[string]PersonTokenRecord
 	auths     map[[2]string]AuthTokenRecord
 	revoked   map[[2]string]time.Time
+	revCount  map[string]int // iss → revocations recorded
 	missions  map[string]MissionRecord
 	logs      map[string][]MissionLogEntry
-	pending   map[string][]byte // id → JSON
-	codes     map[string]string // canonical code → id
+	pending   map[string][]byte      // id → JSON
+	meta      map[string]pendingMeta // id → what the lookups need
+	codes     map[string]string      // canonical code → id
 	authOrder []([2]string)
+}
+
+// pendingMeta indexes a stored pending request, so lookups do not decode
+// every record.
+type pendingMeta struct {
+	agent        AgentRef
+	open         bool
+	rtIss, rtJTI string
+	mission      string
+	code         string
+	expires      time.Time
 }
 
 // NewMemoryStore returns an empty MemoryStore.
@@ -36,9 +50,11 @@ func NewMemoryStore() *MemoryStore {
 		persons:  map[string]PersonTokenRecord{},
 		auths:    map[[2]string]AuthTokenRecord{},
 		revoked:  map[[2]string]time.Time{},
+		revCount: map[string]int{},
 		missions: map[string]MissionRecord{},
 		logs:     map[string][]MissionLogEntry{},
 		pending:  map[string][]byte{},
+		meta:     map[string]pendingMeta{},
 		codes:    map[string]string{},
 	}
 }
@@ -269,8 +285,23 @@ func (m *MemoryStore) authsWhere(keep func(AuthTokenRecord) bool) []AuthTokenRec
 func (m *MemoryStore) Revoke(_ context.Context, iss, jti string, exp time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.revoked[[2]string{iss, jti}] = exp
+	k := [2]string{iss, jti}
+	if prev, ok := m.revoked[k]; ok {
+		if exp.Before(prev) {
+			exp = prev // never shorten a revocation
+		}
+	} else {
+		m.revCount[iss]++
+	}
+	m.revoked[k] = exp
 	return nil
+}
+
+// CountRevocations implements TokenStore.
+func (m *MemoryStore) CountRevocations(_ context.Context, iss string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.revCount[iss], nil
 }
 
 // IsRevoked implements TokenStore.
@@ -409,32 +440,81 @@ func (m *MemoryStore) ResolvePendingIfMissionActive(_ context.Context, p *Pendin
 func (m *MemoryStore) PendingForResourceToken(_ context.Context, iss, jti string) ([]*Pending, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []*Pending
-	for id := range m.pending {
-		p, err := m.getPending(id)
-		if err != nil {
-			return nil, err
-		}
-		if p.Open() && p.ResourceTokenIssuer == iss && p.ResourceTokenJTI == jti {
-			out = append(out, p)
-		}
-	}
-	return out, nil
+	return m.pendingWhere(func(mt pendingMeta) bool { return mt.open && mt.rtIss == iss && mt.rtJTI == jti })
 }
 
 // PendingForMission implements PendingStore.
 func (m *MemoryStore) PendingForMission(_ context.Context, s256 string) ([]*Pending, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.pendingWhere(func(mt pendingMeta) bool { return mt.open && mt.mission == s256 })
+}
+
+// CountOpenPending implements PendingStore.
+func (m *MemoryStore) CountOpenPending(_ context.Context, agent AgentRef) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, mt := range m.meta {
+		if mt.open && mt.agent == agent {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// Prune implements Store.
+func (m *MemoryStore) Prune(_ context.Context, cutoff time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, mt := range m.meta {
+		if mt.expires.Before(cutoff) {
+			m.deletePending(id, mt)
+		}
+	}
+	for k, exp := range m.revoked {
+		if exp.Before(cutoff) {
+			delete(m.revoked, k)
+			if m.revCount[k[0]]--; m.revCount[k[0]] <= 0 {
+				delete(m.revCount, k[0])
+			}
+		}
+	}
+	for k, r := range m.agents {
+		if r.Exp.Before(cutoff) {
+			delete(m.agents, k)
+		}
+	}
+	for k, r := range m.persons {
+		if r.Exp.Before(cutoff) {
+			delete(m.persons, k)
+		}
+	}
+	kept := m.authOrder[:0]
+	for _, k := range m.authOrder {
+		if m.auths[k].Exp.Before(cutoff) {
+			delete(m.auths, k)
+			continue
+		}
+		kept = append(kept, k)
+	}
+	m.authOrder = kept
+	return nil
+}
+
+// pendingWhere decodes the pending requests whose index entry matches;
+// m.mu is held.
+func (m *MemoryStore) pendingWhere(keep func(pendingMeta) bool) ([]*Pending, error) {
 	var out []*Pending
-	for id := range m.pending {
+	for id, mt := range m.meta {
+		if !keep(mt) {
+			continue
+		}
 		p, err := m.getPending(id)
 		if err != nil {
 			return nil, err
 		}
-		if p.Open() && p.MissionS256 == s256 {
-			out = append(out, p)
-		}
+		out = append(out, p)
 	}
 	return out, nil
 }
@@ -446,10 +526,23 @@ func (m *MemoryStore) putPending(p *Pending) error {
 		return err
 	}
 	m.pending[p.ID] = b
+	m.meta[p.ID] = pendingMeta{
+		agent: p.Agent, open: p.Open(), rtIss: p.ResourceTokenIssuer, rtJTI: p.ResourceTokenJTI,
+		mission: p.MissionS256, code: p.CodeCanonical, expires: p.ExpiresAt,
+	}
 	if p.CodeCanonical != "" {
 		m.codes[p.CodeCanonical] = p.ID
 	}
 	return nil
+}
+
+// deletePending removes pending id and its code; m.mu is held.
+func (m *MemoryStore) deletePending(id string, mt pendingMeta) {
+	delete(m.pending, id)
+	delete(m.meta, id)
+	if mt.code != "" && m.codes[mt.code] == id {
+		delete(m.codes, mt.code)
+	}
 }
 
 // getPending returns a copy of pending id; m.mu is held.
