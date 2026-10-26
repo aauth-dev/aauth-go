@@ -161,8 +161,10 @@ type Config struct {
 	// Limiter, when set, limits issuance per presented key ("issue:"),
 	// refreshes per durable key ("refresh:"), and sub-agent requests per
 	// parent ("subagent:"), answered 429 rate_limited with Retry-After.
-	// It is checked after the request authenticates and before the
-	// Registrar is asked.
+	// It is checked after the request authenticates and before attestation
+	// is verified or the Registrar is asked. Independently of it, the
+	// default replay cache admits [DefaultReplayEntriesPerGroup] recent
+	// refreshes per durable key.
 	Limiter aauth.Limiter
 	// OnIssue is called for every token issued.
 	OnIssue func(ctx context.Context, t IssuedToken)
@@ -344,10 +346,13 @@ func (s *Server) IssueAgentToken(ctx context.Context, p AgentTokenParams) (strin
 	if err := p.Key.Validate(); err != nil {
 		return "", nil, fmt.Errorf("agentprovider: agent key: %w", err)
 	}
-	if _, err := p.Key.PublicKey(); err != nil {
+	pub, err := p.Key.PublicKey()
+	if err != nil {
 		return "", nil, fmt.Errorf("agentprovider: agent key: %w", err)
 	}
-	if s.jwks.Keys[0].Thumbprint() == p.Key.Thumbprint() {
+	// Compared as decoded keys, so another encoding of the same key does
+	// not pass as a different one.
+	if sameKey(pub, s.cfg.Key.Public()) {
 		return "", nil, errors.New("agentprovider: an agent key must not be the provider's signing key")
 	}
 	ttl := firstPositive(p.TTL, s.cfg.TokenTTL, time.Hour)
@@ -415,11 +420,12 @@ func (s *Server) serveIssue(w http.ResponseWriter, r *http.Request) {
 		aauth.WriteSignatureFailure(w, err)
 		return
 	}
-	att, ok := s.attest(w, r, body, key)
-	if !ok {
+	// Limited before attestation, which may be costly or call out.
+	if !s.limit(w, r, "issue:"+key.Thumbprint()) {
 		return
 	}
-	if !s.limit(w, r, "issue:"+key.Thumbprint()) {
+	att, ok := s.attest(w, r, body, key)
+	if !ok {
 		return
 	}
 	reg, err := s.cfg.Registrar.AuthorizeIssue(r.Context(), r, &IssueRequest{Key: key, Body: body, Attestation: att})
@@ -462,6 +468,10 @@ func (s *Server) serveRefresh(w http.ResponseWriter, r *http.Request) {
 		switch fresh, err = s.replay.Remember(r.Context(), JKTURN(d.durable)+"|"+d.jti, d.exp); {
 		case errors.Is(err, ErrReplayCacheFull):
 			aauth.WriteProblem(w, http.StatusServiceUnavailable, aauth.ErrCodeServerError, "the replay cache is full; retry later")
+			return
+		case errors.Is(err, ErrReplayGroupFull):
+			w.Header().Set(aauth.HeaderRetryAfter, strconv.Itoa(int(s.maxNamingJWTLifetime()/time.Second)))
+			aauth.WriteProblem(w, http.StatusTooManyRequests, aauth.ErrCodeRateLimited, "too many recent refreshes for this key")
 			return
 		case err != nil:
 			s.serverError(w, r, err)
@@ -510,11 +520,17 @@ func (s *Server) serveSubagent(w http.ResponseWriter, r *http.Request) {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "the body must carry the sub-agent's jwk")
 		return
 	}
-	if _, err := body.JWK.PublicKey(); err != nil {
+	subPub, err := body.JWK.PublicKey()
+	if err != nil {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "jwk: "+err.Error())
 		return
 	}
-	if body.JWK.Thumbprint() == parent.Cnf.JWK.Thumbprint() {
+	parentPub, err := parent.Cnf.JWK.PublicKey()
+	if err != nil {
+		s.serverError(w, r, err) // verified above, so it decodes
+		return
+	}
+	if sameKey(subPub, parentPub) {
 		aauth.WriteProblem(w, http.StatusBadRequest, aauth.ErrCodeInvalidRequest, "a sub-agent holds its own key, never its parent's")
 		return
 	}
@@ -656,6 +672,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	// The status and headers are already sent; a body write error cannot
 	// change the response and there is no caller to report it to.
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// sameKey reports whether two public keys are the same key: by the keys'
+// own comparison, or by the thumbprints of their canonical JWKs.
+func sameKey(a, b crypto.PublicKey) bool {
+	if ak, ok := a.(interface{ Equal(crypto.PublicKey) bool }); ok && ak.Equal(b) {
+		return true
+	}
+	aj, aerr := aauth.NewJWK(a)
+	bj, berr := aauth.NewJWK(b)
+	return aerr == nil && berr == nil && aj.Thumbprint() == bj.Thumbprint()
 }
 
 func firstPositive(ds ...time.Duration) time.Duration {
