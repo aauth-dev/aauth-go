@@ -90,7 +90,7 @@ type FederationState struct {
 // applyRequirement passes the AS's requirement through to the agent's
 // pending request: its interaction URL and code, approval, or its
 // clarification question.
-func (f *FederationState) applyRequirement(p *Pending) {
+func (f *FederationState) applyRequirement(p *Pending, now time.Time) {
 	p.RetryAfter = max(f.RetryAfter, 1)
 	switch f.Requirement.Requirement {
 	case aauth.RequirementInteraction:
@@ -98,7 +98,7 @@ func (f *FederationState) applyRequirement(p *Pending) {
 	case aauth.RequirementClarification:
 		p.Requirement = aauth.RequirementApproval
 		if f.Question != nil && p.Question == nil {
-			p.Question, p.QuestionAt, p.QuestionFromAS = f.Question, time.Now(), true
+			p.Question, p.QuestionAt, p.QuestionFromAS = f.Question, now, true
 		}
 	default:
 		p.Requirement = aauth.RequirementApproval
@@ -278,7 +278,7 @@ func (s *Server) pollFederation(ctx context.Context, p *Pending) *Pending {
 			return nil
 		}
 		p.Federation = next
-		next.applyRequirement(p)
+		next.applyRequirement(p, s.now())
 		return nil
 	})
 	if err != nil {

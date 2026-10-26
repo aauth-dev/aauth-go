@@ -325,6 +325,7 @@ func (u *updatedRequest) check(p *Pending) error {
 func (u *updatedRequest) apply(p *Pending) {
 	p.Request, p.Scope, p.Hints, p.AccessServer = u.snap, u.scope, u.hints, u.as
 	p.ResourceTokenIssuer, p.ResourceTokenJTI = u.rc.Issuer, u.rc.ID
+	p.Revision++
 }
 
 // verifyUpdatedRequest verifies an updated_request answering a

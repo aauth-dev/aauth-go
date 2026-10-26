@@ -802,12 +802,15 @@ func TestApprovalRefusedAfterTerminationFailedToResolveIt(t *testing.T) {
 	if res.StatusCode != http.StatusAccepted {
 		t.Fatalf("defer: %d", res.StatusCode)
 	}
-	fo.mu.Lock()
-	fo.id = id
-	fo.mu.Unlock()
-
 	var termErr error
-	hook.fn = func() { _, termErr = w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked) }
+	hook.fn = func() {
+		// Armed after Approve has claimed the request, so the update that
+		// fails is the termination's.
+		fo.mu.Lock()
+		fo.id = id
+		fo.mu.Unlock()
+		_, termErr = w.ps.TerminateMission(ctx, m.S256, aauth.TerminationRevoked)
+	}
 	if err := w.ps.Approve(ctx, id, Grant{}); !errors.Is(err, ErrResolved) {
 		t.Fatalf("approve: %v, want ErrResolved", err)
 	}

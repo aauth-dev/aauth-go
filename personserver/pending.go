@@ -139,6 +139,15 @@ type Pending struct {
 	// relay resolves even if the person has not engaged (§7.6.2).
 	RelayDeadline time.Time `json:"relay_deadline,omitzero"`
 
+	// Revision counts the updated_requests that replaced the request
+	// (§7.5.2.2); zero is the original. An approval names the revision the
+	// person was shown (Grant.Revision).
+	Revision int `json:"revision,omitempty"`
+	// Approving is set while [Server.Approve] completes the request, so a
+	// concurrent approval, denial, cancellation, or clarification cannot
+	// race the issuance.
+	Approving bool `json:"approving,omitempty"`
+
 	// Result is the terminal response, once resolved.
 	Result *Result `json:"result,omitempty"`
 	// Version supports optimistic updates (see PendingStore).
@@ -166,6 +175,14 @@ var (
 	// waits on the access server (§9.1.2); it resolves when the AS
 	// answers, not by Approve.
 	ErrFederating = errors.New("personserver: the request is waiting on the access server")
+	// ErrRequestChanged means the agent replaced the request with an
+	// updated_request after the approver was shown it: Grant.Revision is
+	// not the request's Revision. Show the request again and approve the
+	// current revision.
+	ErrRequestChanged = errors.New("personserver: the request changed since it was shown")
+	// ErrResourceInteraction means the resource's own interaction (§7.2.3)
+	// has not completed, so the request cannot be approved yet.
+	ErrResourceInteraction = errors.New("personserver: the resource's interaction has not completed (§7.2.3)")
 )
 
 // snapshot is what a pending request keeps of the original request, so
@@ -227,7 +244,7 @@ func (s *Server) newPending(ctx context.Context, p *Pending, c *caller, body []b
 		return err
 	}
 	if p.Federation != nil {
-		p.Federation.applyRequirement(p)
+		p.Federation.applyRequirement(p, now)
 	}
 	if err := s.cfg.Store.CreatePending(ctx, p); err != nil {
 		return storeErr("create pending", err)
@@ -283,6 +300,16 @@ func (s *Server) mutate(ctx context.Context, id string, fn func(p *Pending) erro
 // mutateWith is mutate storing the change through update, which a caller
 // publishing a grant makes [PendingStore.ResolvePendingIfMissionActive].
 func (s *Server) mutateWith(ctx context.Context, id string, fn func(p *Pending) error, update func(context.Context, *Pending) error) (*Pending, error) {
+	return s.mutateNotify(ctx, id, fn, update, true)
+}
+
+// mutateQuietly is mutate without Config.Notify, for internal bookkeeping
+// the approval UI has no use for (Approve's claim on a request).
+func (s *Server) mutateQuietly(ctx context.Context, id string, fn func(p *Pending) error) (*Pending, error) {
+	return s.mutateNotify(ctx, id, fn, s.cfg.Store.UpdatePending, false)
+}
+
+func (s *Server) mutateNotify(ctx context.Context, id string, fn func(p *Pending) error, update func(context.Context, *Pending) error, notify bool) (*Pending, error) {
 	for range 8 {
 		p, err := s.cfg.Store.Pending(ctx, id)
 		if err != nil {
@@ -298,16 +325,35 @@ func (s *Server) mutateWith(ctx context.Context, id string, fn func(p *Pending) 
 		if err != nil {
 			return nil, storeErr("update pending", err)
 		}
-		s.changed(ctx, p)
+		if notify {
+			s.changed(ctx, p)
+		} else {
+			s.waiters.notify(p.ID)
+		}
 		return p, nil
 	}
 	return nil, storeErr("update pending", ErrConflict)
 }
 
-// resolve stores res as p's terminal response.
+// resolve stores res as p's terminal response. It is how the PS ends a
+// request on its own (expiry, revocation, a terminated mission), and wins
+// over an approval in progress, whose completion then finds the request
+// resolved.
 func (s *Server) resolve(ctx context.Context, id string, res *Result) (*Pending, error) {
 	return s.mutate(ctx, id, func(p *Pending) error {
 		if !p.Open() {
+			return ErrResolved
+		}
+		p.State, p.Result, p.Question = StateDone, res, nil
+		return nil
+	})
+}
+
+// decide is resolve for a decision of the person or the application (Deny,
+// Fail): it does not overtake an approval in progress.
+func (s *Server) decide(ctx context.Context, id string, res *Result) (*Pending, error) {
+	return s.mutate(ctx, id, func(p *Pending) error {
+		if !p.Open() || p.Approving {
 			return ErrResolved
 		}
 		p.State, p.Result, p.Question = StateDone, res, nil
@@ -554,7 +600,7 @@ func (s *Server) servePending(w http.ResponseWriter, r *http.Request) {
 // pending URL answer 410 Gone.
 func (s *Server) serveCancel(w http.ResponseWriter, r *http.Request, p *Pending) {
 	_, err := s.mutate(r.Context(), p.ID, func(p *Pending) error {
-		if !p.Open() {
+		if !p.Open() || p.Approving {
 			return ErrResolved
 		}
 		p.State, p.Question = StateCancelled, nil
@@ -608,7 +654,7 @@ func (s *Server) serveClarification(w http.ResponseWriter, r *http.Request, c *c
 		}
 	}
 	np, err := s.mutate(ctx, p.ID, func(p *Pending) error {
-		if !p.Open() || p.Question == nil {
+		if !p.Open() || p.Question == nil || p.Approving {
 			return ErrResolved
 		}
 		ex := Exchange{Time: s.now(), Question: p.Question.Text, FromAS: p.QuestionFromAS}
@@ -722,7 +768,7 @@ func (s *Server) Ask(ctx context.Context, id string, q Question) error {
 	}
 	_, err := s.mutate(ctx, id, func(p *Pending) error {
 		switch {
-		case !p.Open():
+		case !p.Open() || p.Approving:
 			return ErrResolved
 		case p.Question != nil:
 			return ErrQuestionPending
@@ -743,6 +789,16 @@ func (s *Server) Ask(ctx context.Context, id string, q Question) error {
 // terminated) resolves the request with that error instead. In
 // four-party, approval of an auth token request starts federation and the
 // request stays open until the access server answers.
+//
+// g.Revision must be the Revision of the request the person was shown:
+// if the agent has since replaced it with an updated_request, Approve
+// fails with ErrRequestChanged and nothing is granted. Requests that were
+// never updated have Revision zero, so a Grant that leaves it unset
+// approves only the original request.
+//
+// Approve first claims the request (Pending.Approving), so a concurrent
+// Approve, Deny, Fail, cancellation, or clarification answer finds it
+// taken (ErrResolved) and the request is completed once.
 func (s *Server) Approve(ctx context.Context, id string, g Grant) error {
 	p, err := s.cfg.Store.Pending(ctx, id)
 	if err != nil {
@@ -751,28 +807,55 @@ func (s *Server) Approve(ctx context.Context, id string, g Grant) error {
 	if p = s.advance(ctx, p); !p.Open() {
 		return ErrResolved
 	}
-	if p.Federation != nil {
-		return ErrFederating
-	}
-	if p.ResourceInteraction != nil && !p.ResourceInteractionDone {
-		return errors.New("personserver: the resource's interaction has not completed (§7.2.3)")
+	p, err = s.mutateQuietly(ctx, id, func(p *Pending) error {
+		switch {
+		case !p.Open() || p.Approving:
+			return ErrResolved
+		case p.Federation != nil:
+			return ErrFederating
+		case p.Revision != g.Revision:
+			return ErrRequestChanged
+		case p.ResourceInteraction != nil && !p.ResourceInteractionDone:
+			return ErrResourceInteraction
+		}
+		p.Approving = true
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	res, fed, err := s.complete(ctx, p, g)
 	if err != nil {
-		return err
+		return errors.Join(err, s.release(ctx, id))
 	}
 	if fed != nil {
 		_, err = s.mutate(ctx, id, func(p *Pending) error {
 			if !p.Open() {
 				return ErrResolved
 			}
-			p.Federation = fed
-			fed.applyRequirement(p)
+			p.Federation, p.Approving = fed, false
+			fed.applyRequirement(p, s.now())
 			return nil
 		})
 		return err
 	}
 	return s.resolveApproval(ctx, p, res)
+}
+
+// release gives up Approve's claim on pending id after a completion that
+// failed without a result, so the request can be decided again.
+func (s *Server) release(ctx context.Context, id string) error {
+	_, err := s.mutateQuietly(ctx, id, func(p *Pending) error {
+		if !p.Open() {
+			return ErrResolved
+		}
+		p.Approving = false
+		return nil
+	})
+	if errors.Is(err, ErrResolved) {
+		return nil
+	}
+	return err
 }
 
 // resolveApproval publishes the result of an approved request. A grant for a
@@ -824,7 +907,7 @@ func (s *Server) Deny(ctx context.Context, id, reason string) error {
 			return err
 		}
 	}
-	_, err = s.resolve(ctx, id, res)
+	_, err = s.decide(ctx, id, res)
 	if err == nil {
 		s.missionLog(ctx, p.MissionS256, logKindFor(p.Kind), p.Agent, map[string]any{"pending": id, "decision": "denied", "reason": reason})
 	}
@@ -835,7 +918,7 @@ func (s *Server) Deny(ctx context.Context, id, reason string) error {
 // aauth.PollErrAbandoned when the person opened the interaction but did not
 // complete it, aauth.PollErrExpired, or aauth.ErrCodeServerError.
 func (s *Server) Fail(ctx context.Context, id, code, detail string) error {
-	_, err := s.resolve(ctx, id, pollError(code, detail))
+	_, err := s.decide(ctx, id, pollError(code, detail))
 	return err
 }
 

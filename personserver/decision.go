@@ -65,6 +65,11 @@ type Grant struct {
 	Mission *MissionGrant
 	// Answer is the person's answer to an interaction question.
 	Answer string
+	// Revision is the Pending.Revision of the request the person was
+	// shown ([Server.Approve] only): an approval of a request the agent
+	// has since replaced fails with ErrRequestChanged. Zero is the
+	// original request.
+	Revision int
 }
 
 // MissionGrant shapes the mission blob the PS approves (draft -11 §8.2).
