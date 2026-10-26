@@ -148,13 +148,13 @@ func NewJWK(pub crypto.PublicKey) (JWK, error) {
 // decodeP256 decodes and validates (on-curve) the x/y coordinates of a
 // P-256 JWK.
 func decodeP256(x, y string) (*ecdsa.PublicKey, error) {
-	xb, err := base64.RawURLEncoding.DecodeString(x)
+	xb, err := decodeKeyMember("x", x)
 	if err != nil {
-		return nil, fmt.Errorf("%w: JWK x decode: %w", ErrInvalidKey, err)
+		return nil, err
 	}
-	yb, err := base64.RawURLEncoding.DecodeString(y)
+	yb, err := decodeKeyMember("y", y)
 	if err != nil {
-		return nil, fmt.Errorf("%w: JWK y decode: %w", ErrInvalidKey, err)
+		return nil, err
 	}
 	if len(xb) != 32 || len(yb) != 32 {
 		return nil, fmt.Errorf("%w: P-256 coordinates must be 32 bytes", ErrInvalidKey)
