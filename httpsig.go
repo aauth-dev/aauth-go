@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -316,6 +318,13 @@ type RequestVerifyOptions struct {
 	RequireBodyCoverage bool
 	// Now returns the verifier's current time; nil means time.Now.
 	Now func() time.Time
+	// Authority is the verifier's own host, with a port only when it is not
+	// the scheme's default, as the signer covers it in @authority. When set,
+	// a signature whose @authority names another host is refused
+	// ([ErrWrongAuthority]), so a request signed for one server cannot be
+	// replayed to another. Servers set it from their identifier with
+	// [AuthorityOf].
+	Authority string
 }
 
 func (o RequestVerifyOptions) now() time.Time {
@@ -417,6 +426,10 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 		return err
 	}
 
+	if opts.Authority != "" && !strings.EqualFold(normalizeAuthority(req.Host), normalizeAuthority(opts.Authority)) {
+		return fmt.Errorf("%w: @authority %q is not %q", ErrWrongAuthority, req.Host, opts.Authority)
+	}
+
 	required := coveredComponents(false, false, hasAAuthAuthorization(req))
 	required = append(required, opts.RequiredComponents...)
 	if opts.RequireBodyCoverage && requestHasBody(req) {
@@ -456,6 +469,41 @@ func VerifyRequestWithOptions(req *http.Request, pub crypto.PublicKey, opts Requ
 		}
 	}
 	return nil
+}
+
+// ErrWrongAuthority reports a signature whose @authority is not the
+// verifier's own host (RFC 9421 §2.2.3). It matches [ErrSignatureInvalid].
+var ErrWrongAuthority = fmt.Errorf("%w: wrong @authority", ErrSignatureInvalid)
+
+// AuthorityOf returns the @authority a request to a server with the given
+// identifier carries: its host, with the port only when it is not the
+// scheme's default.
+func AuthorityOf(identifier string) (string, error) {
+	u, err := url.Parse(identifier)
+	if err != nil {
+		return "", fmt.Errorf("aauth: authority of %q: %w", identifier, err)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("aauth: authority of %q: no host", identifier)
+	}
+	return normalizeAuthority(u.Host), nil
+}
+
+// normalizeAuthority lowercases host and drops a default port (443 or 80),
+// which RFC 9421 §2.2.3 omits from @authority. Dropping either keeps the
+// comparison working behind a proxy that terminates TLS, where the request
+// the verifier sees is plain http.
+func normalizeAuthority(host string) string {
+	host = strings.ToLower(host)
+	if h, port, err := net.SplitHostPort(host); err == nil {
+		if port == "443" || port == "80" {
+			if strings.Contains(h, ":") {
+				return "[" + h + "]"
+			}
+			return h
+		}
+	}
+	return host
 }
 
 // errSignatureMismatch marks a failure of the RFC 9421 cryptographic check.

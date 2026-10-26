@@ -266,3 +266,59 @@ func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
 type failingReader struct{}
 
 func (failingReader) Read([]byte) (int, error) { return 0, errors.New("body must not be read") }
+
+func TestVerifyRequestAuthority(t *testing.T) {
+	a := testAgent(t)
+	for _, tc := range []struct {
+		name, url, authority string
+		wantErr              bool
+	}{
+		{"same host", "https://resource.example/data", "resource.example", false},
+		{"default port", "https://resource.example:443/data", "resource.example", false},
+		{"case", "https://Resource.Example/data", "resource.example", false},
+		{"explicit port", "https://resource.example:8443/data", "resource.example:8443", false},
+		{"other host", "https://evil.example/data", "resource.example", true},
+		{"other port", "https://resource.example:8443/data", "resource.example", true},
+		{"unset", "https://evil.example/data", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			tok, err := a.MintToken()
+			if err != nil {
+				t.Fatal(err)
+			}
+			AttachSignatureKey(req, tok)
+			if err := SignRequest(req, a.Key, ""); err != nil {
+				t.Fatal(err)
+			}
+			err = VerifyRequestWithOptions(req, a.Key.Public(), RequestVerifyOptions{Authority: tc.authority})
+			if tc.wantErr {
+				if !errors.Is(err, ErrWrongAuthority) || !errors.Is(err, ErrSignatureInvalid) {
+					t.Fatalf("err = %v, want ErrWrongAuthority", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAuthorityOf(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://ps.example":      "ps.example",
+		"https://PS.example:443":  "ps.example",
+		"https://ps.example:8443": "ps.example:8443",
+		"http://127.0.0.1:8080/x": "127.0.0.1:8080",
+	} {
+		got, err := AuthorityOf(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("AuthorityOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if _, err := AuthorityOf("not a url"); err == nil {
+		t.Error("AuthorityOf without a host succeeded")
+	}
+}
