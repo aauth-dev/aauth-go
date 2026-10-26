@@ -31,9 +31,17 @@ type Client struct {
 	BaseURL string
 	// Paths are the provider's endpoint paths (default DefaultPaths).
 	Paths Paths
-	// HTTPClient makes requests; nil uses http.DefaultClient.
+	// HTTPClient makes requests; nil uses a client with a
+	// DefaultClientTimeout timeout.
 	HTTPClient *http.Client
 }
+
+// DefaultClientTimeout bounds a request when Client.HTTPClient is nil,
+// and each token fetch of a [Client.TokenSource].
+const DefaultClientTimeout = 30 * time.Second
+
+// defaultHTTPClient is the client used when Client.HTTPClient is nil.
+var defaultHTTPClient = &http.Client{Timeout: DefaultClientTimeout}
 
 func (c *Client) path(p, def string) string {
 	if p == "" {
@@ -72,6 +80,9 @@ func (c *Client) Enroll(ctx context.Context, key crypto.Signer, body any) (*aaut
 	var claims aauth.AgentClaims
 	if _, _, err := jwt.NewParser().ParseUnverified(first.AgentToken, &claims); err != nil {
 		return nil, fmt.Errorf("agentprovider: reading the agent token: %w", err)
+	}
+	if strings.TrimSuffix(claims.Issuer, "/") != strings.TrimSuffix(c.BaseURL, "/") {
+		return nil, fmt.Errorf("agentprovider: the agent token's iss %q is not the provider %q", claims.Issuer, c.BaseURL)
 	}
 	jwk, err := aauth.NewJWK(key.Public())
 	if err != nil {
@@ -159,7 +170,7 @@ func (c *Client) newRequest(ctx context.Context, u string, body any) (*http.Requ
 func (c *Client) do(req *http.Request) (*TokenResponse, error) {
 	hc := c.HTTPClient
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = defaultHTTPClient
 	}
 	res, err := hc.Do(req)
 	if err != nil {
@@ -186,7 +197,9 @@ func (c *Client) do(req *http.Request) (*TokenResponse, error) {
 
 // TokenSource caches the token fetch returns and fetches a new one when
 // fewer than the refresh margin (aauth.DefaultRefreshMargin) remain, for
-// use with [aauth.WithTokenSource].
+// use with [aauth.WithTokenSource]. Callers wait for one fetch at a time,
+// and each fetch's context expires after DefaultClientTimeout, so a
+// stalled provider cannot hold every caller indefinitely.
 func (c *Client) TokenSource(fetch func(ctx context.Context) (*TokenResponse, error)) func() (string, error) {
 	var (
 		mu  sync.Mutex
@@ -199,7 +212,9 @@ func (c *Client) TokenSource(fetch func(ctx context.Context) (*TokenResponse, er
 		if tok != "" && time.Now().Add(aauth.DefaultRefreshMargin).Before(exp) {
 			return tok, nil
 		}
-		tr, err := fetch(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultClientTimeout)
+		defer cancel()
+		tr, err := fetch(ctx)
 		if err != nil {
 			return "", err
 		}
