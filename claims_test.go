@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,6 +260,37 @@ func TestWriteTokenError(t *testing.T) {
 		// A client reads the same code back.
 		if te := tokenErrorFrom(rec.Body.Bytes()); te == nil || te.Code != c.code {
 			t.Errorf("%v: client decode %v", c.err, te)
+		}
+	}
+}
+
+// Internal causes stay on the server: server_error and as_unreachable carry
+// no detail, while a classified token failure explains itself.
+func TestWriteTokenErrorDetail(t *testing.T) {
+	secret := "dial tcp 10.0.0.7:5432: connection refused"
+	for _, c := range []struct {
+		err        error
+		wantDetail bool
+	}{
+		{errors.New(secret), false},
+		{&TokenError{Code: TokenErrServerError, Err: errors.New(secret)}, false},
+		{&TokenError{Code: TokenErrASUnreachable, Err: errors.New(secret)}, false},
+		{NewTokenParamError(ParamPresentedToken, errors.New(secret)), false},
+		{NewTokenParamError(ParamPresentedToken, fmt.Errorf("%w: %s", ErrInvalidToken, "aud mismatch")), true},
+	} {
+		rec := httptest.NewRecorder()
+		WriteTokenError(rec, c.err)
+		var body struct {
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(body.Detail, secret) {
+			t.Errorf("%v: detail leaks the internal cause: %q", c.err, body.Detail)
+		}
+		if c.wantDetail != (body.Detail != "") {
+			t.Errorf("%v: detail %q", c.err, body.Detail)
 		}
 	}
 }

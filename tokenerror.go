@@ -67,6 +67,21 @@ func (e *TokenError) Error() string {
 // Unwrap returns the underlying failure.
 func (e *TokenError) Unwrap() error { return e.Err }
 
+// Detail is the problem detail sent to the client: the underlying failure
+// for a code that classifies the client's own request or tokens, and
+// nothing for server_error and as_unreachable, whose causes are internal
+// (for example a network error reaching another server).
+func (e *TokenError) Detail() string {
+	if e.Err == nil {
+		return ""
+	}
+	switch e.Code {
+	case TokenErrServerError, TokenErrASUnreachable:
+		return ""
+	}
+	return e.Err.Error()
+}
+
 // Status is the HTTP status the code is answered with (§11.9.3).
 func (e *TokenError) Status() int {
 	switch e.Code {
@@ -132,17 +147,14 @@ type tokenErrorBody struct {
 
 // WriteTokenError writes a token endpoint error response (draft -11
 // §11.9.2): the status for the code and an application/problem+json body
-// carrying error and detail. An err that is not a [*TokenError] is
-// answered as server_error.
+// carrying error and detail ([TokenError.Detail]). An err that is not a
+// [*TokenError] is answered as server_error with no detail.
 func WriteTokenError(w http.ResponseWriter, err error) {
 	var te *TokenError
 	if !errors.As(err, &te) {
 		te = &TokenError{Code: TokenErrServerError, Err: err}
 	}
-	detail := ""
-	if te.Err != nil {
-		detail = te.Err.Error()
-	}
+	detail := te.Detail()
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(te.Status())
 	// The status and headers are already sent; a body write error cannot
