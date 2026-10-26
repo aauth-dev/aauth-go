@@ -281,7 +281,7 @@ func (s *Sandbox) Client(from string) *http.Client {
 }
 
 // Handler routes requests to local roles by host, and serves the trace
-// on every role host.
+// on every role host to clients other than web pages.
 func (s *Sandbox) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := strings.ToLower(r.Host)
@@ -297,6 +297,12 @@ func (s *Sandbox) Handler() http.Handler {
 			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		}
 		if r.URL.Path == PathTrace {
+			// The trace holds every token: a web page must not read or
+			// clear it, even through a name rebound to this machine.
+			if fromWebPage(r) {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "the trace is not available to web pages (Origin or Sec-Fetch-Site)"})
+				return
+			}
 			s.trace.serveHTTP(w, r)
 			return
 		}

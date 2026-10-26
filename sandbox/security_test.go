@@ -194,3 +194,46 @@ func TestRolesBoundRequestBodies(t *testing.T) {
 		t.Errorf("a small body: %d", got)
 	}
 }
+
+func TestTraceRefusesWebPages(t *testing.T) {
+	h := newHarness(t, Config{})
+	get := func(method, host string, headers map[string]string) int {
+		req, err := http.NewRequest(method, "https://"+host+PathTrace, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		res, err := h.sb.Client("client").Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := res.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return res.StatusCode
+	}
+	ps := h.sb.Config().Hosts[RolePS]
+	for _, tc := range []struct {
+		name, method string
+		headers      map[string]string
+		want         int
+	}{
+		{"curl", http.MethodGet, nil, http.StatusOK},
+		{"opened in a browser", http.MethodGet, map[string]string{"Sec-Fetch-Site": "none"}, http.StatusOK},
+		{"cross-site fetch", http.MethodGet, map[string]string{"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"same-site fetch", http.MethodGet, map[string]string{"Sec-Fetch-Site": "same-site"}, http.StatusForbidden},
+		{"cross-site clear", http.MethodDelete, map[string]string{"Origin": "https://evil.example"}, http.StatusForbidden},
+	} {
+		if got := get(tc.method, ps, tc.headers); got != tc.want {
+			t.Errorf("%s: %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	// A name rebound to the listener is not a role host.
+	rec := httptest.NewRecorder()
+	h.sb.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://rebound.example"+PathTrace, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("trace at an unknown host: %d", rec.Code)
+	}
+}
