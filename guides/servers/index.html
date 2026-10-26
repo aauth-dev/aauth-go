@@ -329,6 +329,8 @@
       
         
       
+        
+      
     
     
     
@@ -624,6 +626,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../sandbox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sandbox
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../migrating-from-v0.1/" class="md-nav__link">
         
   
@@ -771,10 +801,6 @@
       
         
       
-        
-      
-        
-      
     
     
     
@@ -792,14 +818,14 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../releases/" class="md-nav__link ">
+            <a href="../../announcements/" class="md-nav__link ">
               
   
   
   <span class="md-ellipsis">
     
   
-    Release notes
+    Announcements
   
 
     
@@ -821,12 +847,150 @@
             <span class="md-nav__icon md-icon"></span>
             
   
+    Announcements
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../announcements/v0.3.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.3.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../releases/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release notes
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
     Release notes
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releases/v0.3.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.3.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -988,24 +1152,32 @@ own key, metadata document, and JWKS:</p>
 <a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="nx">Store</span><span class="p">:</span><span class="w">          </span><span class="nx">personserver</span><span class="p">.</span><span class="nx">NewMemoryStore</span><span class="p">(),</span>
 <a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">    </span><span class="nx">InteractionURL</span><span class="p">:</span><span class="w"> </span><span class="nx">issuer</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s">&quot;/consent&quot;</span><span class="p">,</span>
 <a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">    </span><span class="nx">Decider</span><span class="p">:</span><span class="w"> </span><span class="nx">personserver</span><span class="p">.</span><span class="nx">DeciderFunc</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">personserver</span><span class="p">.</span><span class="nx">TokenRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">personserver</span><span class="p">.</span><span class="nx">Decision</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Person</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">personserver</span><span class="p">.</span><span class="nx">DeferInteraction</span><span class="p">(),</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="c1">// a new agent: the person signs in at /consent</span>
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">        </span><span class="p">}</span>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">personserver</span><span class="p">.</span><span class="nx">Allow</span><span class="p">(</span><span class="nx">personserver</span><span class="p">.</span><span class="nx">Grant</span><span class="p">{}),</span><span class="w"> </span><span class="kc">nil</span>
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">    </span><span class="p">}),</span>
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w">    </span><span class="nx">Federator</span><span class="p">:</span><span class="w">    </span><span class="nx">as</span><span class="p">.</span><span class="nx">Local</span><span class="p">(</span><span class="nx">issuer</span><span class="p">),</span><span class="w"> </span><span class="c1">// in-process PS-AS federation</span>
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w">    </span><span class="nx">CollocatedAS</span><span class="p">:</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">resource</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">resource</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;https://ledger.example&quot;</span><span class="w"> </span><span class="p">},</span>
-<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">    </span><span class="nx">Limiter</span><span class="p">:</span><span class="w">      </span><span class="nx">ratelimit</span><span class="p">.</span><span class="nx">Per</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
-<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="p">})</span>
-<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a>
-<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="nx">mux</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">NewServeMux</span><span class="p">()</span>
-<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="nx">ap</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="nx">mux</span><span class="p">)</span>
-<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="nx">ps</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="nx">mux</span><span class="p">)</span>
-<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="nx">as</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="nx">mux</span><span class="p">)</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Person</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">:</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">personserver</span><span class="p">.</span><span class="nx">DeferInteraction</span><span class="p">(),</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="c1">// a new agent: the person signs in at /consent</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Chained</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Mission</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="p">:</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">personserver</span><span class="p">.</span><span class="nx">DeferApproval</span><span class="p">(),</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="c1">// call chaining: ask the person</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w">        </span><span class="p">}</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">personserver</span><span class="p">.</span><span class="nx">Allow</span><span class="p">(</span><span class="nx">personserver</span><span class="p">.</span><span class="nx">Grant</span><span class="p">{}),</span><span class="w"> </span><span class="kc">nil</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">    </span><span class="p">}),</span>
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="w">    </span><span class="nx">Federator</span><span class="p">:</span><span class="w">    </span><span class="nx">as</span><span class="p">.</span><span class="nx">Local</span><span class="p">(</span><span class="nx">issuer</span><span class="p">),</span><span class="w"> </span><span class="c1">// in-process PS-AS federation</span>
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="w">    </span><span class="nx">CollocatedAS</span><span class="p">:</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">resource</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">resource</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;https://ledger.example&quot;</span><span class="w"> </span><span class="p">},</span>
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="w">    </span><span class="nx">Limiter</span><span class="p">:</span><span class="w">      </span><span class="nx">ratelimit</span><span class="p">.</span><span class="nx">Per</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="p">})</span>
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a>
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="nx">mux</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">NewServeMux</span><span class="p">()</span>
+<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a><span class="nx">ap</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="nx">mux</span><span class="p">)</span>
+<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a><span class="nx">ps</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="nx">mux</span><span class="p">)</span>
+<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a><span class="nx">as</span><span class="p">.</span><span class="nx">Register</span><span class="p">(</span><span class="nx">mux</span><span class="p">)</span>
 </code></pre></div>
-<p>The consent page passes the <code>?code=</code> it receives to <code>ps.ConsumeCode</code>,
-authenticates the person, and calls <code>ps.Approve</code> with a <code>Grant</code> naming the
-person, which binds the agent. <code>ap.IssueAgentToken</code> issues tokens for agent
+<p>The consent page passes the <code>?code=</code> it receives to <code>ps.LookupCode</code> to show
+the request; looking a code up does not consume it, so a link preview cannot
+burn it. At the decision the page authenticates the person, consumes the
+code as that person with <code>ps.ConsumeCode</code>, and calls <code>ps.Approve</code> with a
+<code>Grant</code> naming the person, which binds the agent, and the <code>Revision</code> of the
+request it showed: if the agent replaced the request meanwhile, <code>Approve</code>
+fails with <code>ErrRequestChanged</code>. Code attempts are rate-limited per client
+key (the browser's session or address) when a <code>Limiter</code> is configured. <code>ap.IssueAgentToken</code> issues tokens for agent
 keys the application has authorized. The PS routes live under <code>/ps/</code> by
 default, so agents find them with <code>PSClient.Discover</code>. The full,
 compile-checked version is

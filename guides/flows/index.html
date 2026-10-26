@@ -329,6 +329,8 @@
       
         
       
+        
+      
     
     
     
@@ -821,6 +823,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../sandbox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sandbox
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../migrating-from-v0.1/" class="md-nav__link">
         
   
@@ -968,10 +998,6 @@
       
         
       
-        
-      
-        
-      
     
     
     
@@ -989,14 +1015,14 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../releases/" class="md-nav__link ">
+            <a href="../../announcements/" class="md-nav__link ">
               
   
   
   <span class="md-ellipsis">
     
   
-    Release notes
+    Announcements
   
 
     
@@ -1018,12 +1044,150 @@
             <span class="md-nav__icon md-icon"></span>
             
   
+    Announcements
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../announcements/v0.3.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.3.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../releases/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release notes
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
     Release notes
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releases/v0.3.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.3.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -1431,13 +1595,14 @@ answer <code>202</code> this way.</p>
     Note over A: Transport.OnRequirement shows the url and code
     A-)P: show the interaction URL and code
     P-&gt;&gt;PS: open consent page with the code
-    PS-&gt;&gt;PS: ConsumeCode
+    PS-&gt;&gt;PS: LookupCode (shows the request)
     P-&gt;&gt;PS: sign in and approve
-    PS-&gt;&gt;PS: Approve(person) binds the agent to the person
+    PS-&gt;&gt;PS: ConsumeCode(person), then Approve(person) binds the agent to the person
     A-&gt;&gt;PS: GET Location (poll, honoring Retry-After)
     PS--&gt;&gt;A: 200 person token</code></pre>
-<p>Each interaction code is single use. The hosting application authenticates the
-person and calls <code>Approve</code>, <code>Deny</code>, or <code>Fail</code>; the library never decides. A
+<p>Each interaction code is single use, consumed at the person's authenticated
+decision. The hosting application authenticates the person and calls
+<code>Approve</code>, <code>Deny</code>, or <code>Fail</code>; the library never decides. A
 PS may instead ask a clarifying question before deciding:</p>
 <pre class="mermaid"><code>sequenceDiagram
     participant A as Agent

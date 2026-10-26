@@ -14,7 +14,7 @@
         <link rel="prev" href="../">
       
       
-        <link rel="next" href="../../releases/">
+        <link rel="next" href="../../announcements/">
       
       
         
@@ -327,6 +327,8 @@
       
         
       
+        
+      
     
     
     
@@ -592,6 +594,34 @@
     
   
     Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/sandbox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sandbox
   
 
     
@@ -885,10 +915,6 @@
       
         
       
-        
-      
-        
-      
     
     
     
@@ -906,14 +932,14 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../releases/" class="md-nav__link ">
+            <a href="../../announcements/" class="md-nav__link ">
               
   
   
   <span class="md-ellipsis">
     
   
-    Release notes
+    Announcements
   
 
     
@@ -935,12 +961,150 @@
             <span class="md-nav__icon md-icon"></span>
             
   
+    Announcements
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../announcements/v0.3.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.3.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../releases/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release notes
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
     Release notes
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releases/v0.3.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.3.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -1224,8 +1388,8 @@
 </tr>
 <tr>
 <td>§6.6 Authorization endpoint</td>
-<td>🟡</td>
-<td>Metadata member and <code>IssueResourceToken</code> for the response; no agent-side client</td>
+<td>✅</td>
+<td><code>Transport.Authorize</code> (person token, deferred interaction, <code>AAuth-Access</code>, or a resource token redeemed at the PS) and <code>AuthorizationHandler</code>, <code>WriteAuthorized</code>; <code>invalid_scope</code> and <code>invalid_account</code></td>
 </tr>
 <tr>
 <td>§6.7 Resource token</td>
@@ -1318,8 +1482,8 @@
 </tr>
 <tr>
 <td>§8.6 Mission management</td>
-<td>🟡</td>
-<td>Active and terminated states with termination reasons, <code>personserver.Server.TerminateMission</code>; no mission control plane endpoint</td>
+<td>✅</td>
+<td>Active and terminated states with termination reasons, <code>personserver.Server.TerminateMission</code>; <code>MissionStatusError.Repropose</code> and <code>KnownTerminationReason</code>; <code>mission_control_endpoint</code> carried in metadata. The control plane itself awaits its companion specification</td>
 </tr>
 <tr>
 <td>§8.7, §8.8 Errors</td>
@@ -1341,7 +1505,7 @@
 <tr>
 <td>§9.1 AS token endpoint</td>
 <td>✅</td>
-<td><code>accessserver</code> over an <code>Authorizer</code>; PS side through a <code>Federator</code> with delivery checks (§9.1.3) and <code>as_unreachable</code></td>
+<td><code>accessserver</code> over an <code>Authorizer</code>; PS side through a <code>Federator</code> with delivery checks (§9.1.3) and <code>as_unreachable</code>; an AS 402 is settled through <code>accessserver.Client.Payment</code> and its <code>Location</code> polled (§9.1.2)</td>
 </tr>
 <tr>
 <td>§9.2 Claims required</td>
@@ -1429,13 +1593,13 @@
 </tr>
 <tr>
 <td>§11.7 <code>AAuth-Capabilities</code> header</td>
-<td>⬜</td>
-<td>Not sent by <code>Transport</code></td>
+<td>✅</td>
+<td><code>Transport.Capabilities</code> (unioned with <code>MissionCapabilities</code>) sent on requests to resources and as the PS <code>capabilities</code> parameter; <code>RequestCapabilities</code> and <code>CanRaise</code> for resources</td>
 </tr>
 <tr>
 <td>§11.8 Deferred responses</td>
 <td>✅</td>
-<td>202, <code>Location</code>, <code>Retry-After</code>, <code>Prefer: wait</code>, 429 backoff</td>
+<td>202, <code>Location</code>, <code>Retry-After</code>, <code>Prefer: wait</code>, 429 backoff; 402 settled through a <code>PaymentHandler</code>, then <code>Location</code> polled (§11.8.4)</td>
 </tr>
 <tr>
 <td>§11.9 Error responses</td>
@@ -1454,8 +1618,10 @@
 </tr>
 </tbody>
 </table>
-<p>Not implemented: the Signature-Key <code>x509</code> scheme, Rich Resource Requests, and
-402 payment settlement (an access server's 402 is reported as an error).</p>
+<p>Not implemented: the Signature-Key <code>x509</code> scheme and Rich Resource Requests.
+Payment (402) is carried as protocol shape only: a <code>PaymentHandler</code> settles
+it through whatever payment protocol the server names, and the SDK polls
+<code>Location</code> or retries; no payment protocol is built in.</p>
 
 
 

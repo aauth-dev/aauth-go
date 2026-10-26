@@ -329,6 +329,8 @@
       
         
       
+        
+      
     
     
     
@@ -683,6 +685,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../sandbox/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sandbox
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../migrating-from-v0.1/" class="md-nav__link">
         
   
@@ -830,10 +860,6 @@
       
         
       
-        
-      
-        
-      
     
     
     
@@ -851,14 +877,14 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../releases/" class="md-nav__link ">
+            <a href="../../announcements/" class="md-nav__link ">
               
   
   
   <span class="md-ellipsis">
     
   
-    Release notes
+    Announcements
   
 
     
@@ -880,12 +906,150 @@
             <span class="md-nav__icon md-icon"></span>
             
   
+    Announcements
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../announcements/v0.3.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.3.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../releases/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release notes
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
     Release notes
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../releases/v0.3.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    v0.3.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -1077,12 +1241,29 @@
   deliver revocations to endpoints that metadata names. With no client
   configured, these requests use <code>aauth.DiscoveryClient</code>. It allows https
   only, including redirects, and connects only to public unicast addresses,
-  checked after name resolution. It follows at most five redirects, ignores
+  checked after name resolution. It follows at most five redirects, all to the same host, ignores
   proxy settings from the environment, and times out after 10 seconds
   (signature-key §7.3). A client you pass to <code>NewJWKSResolver</code>,
   <code>RevocationClient</code>, or a server's <code>Config.HTTPClient</code> replaces it and
   should apply the same egress admission. In local development, pass a
   client that can reach your local servers.</li>
+<li><strong>Signatures are bound to the server that receives them.</strong> Servers and
+  <code>ResourceGuard</code> refuse a request whose signed <code>@authority</code> is not their own
+  host, so a server an agent calls cannot replay the request elsewhere. Set
+  <code>RequestVerifyOptions.Authority</code> (with <code>AuthorityOf</code>) when you verify
+  requests yourself. Verification reads at most
+  <code>DefaultMaxVerifyBodyBytes</code> of a body unless <code>MaxBodySize</code> says otherwise.</li>
+<li><strong>Agent identifiers belong to their provider.</strong> An agent token's <code>sub</code>
+  must be in the domain of its <code>iss</code>, so one agent provider cannot name
+  another's agents. <code>SelfSignedResolver</code> verifies only top-level agent
+  tokens; never use it to verify person, auth or resource tokens.</li>
+<li><strong>Four-party resources accept auth tokens only from their access server.</strong>
+  When <code>ResourceGuardConfig.Audience</code> names the access server, an auth
+  token must be issued by it; <code>TrustIssuer</code> covers person tokens and
+  three-party auth tokens.</li>
+<li><strong>Consent covers what the person saw.</strong> Approvals carry the <code>Revision</code> of
+  the request shown, and an agent cannot widen the scope of a request the
+  person already approved while an access server is deciding.</li>
 <li><strong>In-memory stores and the <code>ratelimit</code> token bucket are single-instance.</strong>
   Their state lives in one process. Run several instances only with shared
   <code>Store</code> and <code>Limiter</code> implementations.</li>
