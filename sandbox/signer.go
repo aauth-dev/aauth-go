@@ -570,7 +570,7 @@ func (sg *Signer) ListenAndServe(ctx context.Context, addr string) error {
 	if err != nil {
 		return fmt.Errorf("sandbox: signer address: %w", err)
 	}
-	if ip := net.ParseIP(host); !sg.AnyInterface && host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+	if !sg.AnyInterface && !IsLoopback(addr) {
 		return fmt.Errorf("sandbox: the signing helper listens on loopback only, not %q", addr)
 	}
 	if ip := net.ParseIP(host); host != "" && (ip == nil || !ip.IsUnspecified()) {

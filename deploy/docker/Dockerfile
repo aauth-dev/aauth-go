@@ -24,6 +24,8 @@ COPY --from=build --chown=65532:65532 /out/state /state
 VOLUME /state
 EXPOSE 443 8099
 ENTRYPOINT ["aauth-sandbox"]
-# Every role on :443 and the signing helper on :8099. Publish both ports on
-# the host's loopback address only: the helper signs anything it is sent.
-CMD ["serve", "--state", "/state", "--signer", "0.0.0.0:8099", "--signer-any-interface"]
+# Every role on :443 and the signing helper on :8099, on every interface of
+# the container. Publish both ports on the host's loopback address only
+# (-p 127.0.0.1:443:443 -p 127.0.0.1:8099:8099): the trace shows every
+# token, consent is automatic, and the helper signs as the test agent.
+CMD ["serve", "--state", "/state", "--listen", "0.0.0.0:443", "--listen-any-interface", "--signer", "0.0.0.0:8099", "--signer-any-interface"]

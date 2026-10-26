@@ -110,12 +110,15 @@ func newRoot() *cobra.Command {
 
 func newServe(c *common) *cobra.Command {
 	var listen, signerAddr, consent, person string
-	var noSigner, signerAnyInterface, signerAnyTarget bool
+	var noSigner, listenAnyInterface, signerAnyInterface, signerAnyTarget bool
 	var signerHosts []string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Serve the roles on one TLS listener, and the signing helper",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !listenAnyInterface && !sandbox.IsLoopback(listen) {
+				return fmt.Errorf("--listen %s is not a loopback address: the roles hand out tokens and approve consent automatically; pass --listen-any-interface to listen there anyway (inside a container)", listen)
+			}
 			cfg, err := c.config()
 			if err != nil {
 				return err
@@ -163,7 +166,8 @@ func newServe(c *common) *cobra.Command {
 			}
 		},
 	}
-	cmd.Flags().StringVar(&listen, "listen", ":443", "TLS listen address for the roles; identifiers have no port, so clients reach port 443")
+	cmd.Flags().StringVar(&listen, "listen", sandbox.DefaultListenAddr, "TLS listen address for the roles (loopback only); identifiers have no port, so clients reach port 443")
+	cmd.Flags().BoolVar(&listenAnyInterface, "listen-any-interface", false, "let the roles listen on a non-loopback address; only inside a container whose port is published to the host's loopback address")
 	cmd.Flags().StringVar(&signerAddr, "signer", sandbox.DefaultSignerAddr, "signing helper address (loopback only)")
 	cmd.Flags().BoolVar(&noSigner, "no-signer", false, "do not run the signing helper")
 	cmd.Flags().BoolVar(&signerAnyInterface, "signer-any-interface", false, "let the signing helper listen on a non-loopback address; only inside a container whose port is published to the host's loopback address")

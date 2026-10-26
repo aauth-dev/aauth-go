@@ -202,6 +202,25 @@ func (l *locationWriter) Flush() {
 	}
 }
 
+// DefaultListenAddr is the roles' default TLS listen address: loopback
+// only, since the roles hand out tokens and approve consent on their own.
+const DefaultListenAddr = "127.0.0.1:443"
+
+// IsLoopback reports whether the listen address addr (host:port) is a
+// loopback address or localhost. An empty host (":443") listens on every
+// interface and is not loopback.
+func IsLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // Config returns the configuration with defaults applied.
 func (s *Sandbox) Config() Config { return s.cfg }
 

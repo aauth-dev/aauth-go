@@ -126,3 +126,20 @@ func TestUpstreamFlag(t *testing.T) {
 		t.Fatal("an upstream without an origin was accepted")
 	}
 }
+
+func TestServeListensOnLoopbackOnly(t *testing.T) {
+	for _, addr := range []string{":443", "0.0.0.0:443", "[::]:443", "192.0.2.1:443", "example.com:443"} {
+		_, err := run(t, "serve", "--state", t.TempDir(), "--listen", addr)
+		if err == nil || !strings.Contains(err.Error(), "--listen-any-interface") {
+			t.Errorf("--listen %s: %v", addr, err)
+		}
+	}
+	for addr, want := range map[string]bool{
+		"127.0.0.1:443": true, "localhost:443": true, "[::1]:443": true, "127.0.0.2:8443": true,
+		":443": false, "0.0.0.0:443": false, "no-port": false,
+	} {
+		if got := sandbox.IsLoopback(addr); got != want {
+			t.Errorf("IsLoopback(%q) = %v", addr, got)
+		}
+	}
+}
